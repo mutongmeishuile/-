@@ -123,11 +123,21 @@ agent_created: true
 本次实测单步最慢的只有 DEM 下载（~8 min，一次性）和 `make_terrain`（~2 min），
 下游出 HTML <1 s、长图 7 s、高清地图 5 s —— **慢的不是计算，是返工轮次**。
 没有预检和一键编排时，45 min 里有大半耗在"手敲命令 + 环境踩坑 + 等底图重跑"上。
-详见 `references/efficiency.md`。
+
+**并行（`make_all` 已内置 DAG 分层，默认开）**：导出实测 17.2 s → 8.4 s
+（`--split long=desk,phone` 把长图两版也拆开）。但**别指望它救 45 min** ——
+DEM 那 8 min 在 wave1 是独苗，前后没活可搭，脚本并行总共只占 3%。
+分钟级的两个真提速点：① DEM `workers` 10→16–24；② **阶段 1 的「网络检索」与
+「本地轨迹拐点分析」并行派发**（多个搜索/子 agent 同轮并发，5–10 min 级）。
+详见 `references/efficiency.md` §3.7。
 
 ```bash
 # ⓪ 环境预检（30 s）：numpy/PIL、浏览器路径、out/ 路径约定、KML 格式探测
 python scripts/preflight.py
+
+# ⓪' 或者干脆一条命令跑全程（DAG 分层并行，--dry-run 先看认没认对脚本）
+python scripts/make_all.py --split long=desk,phone --dry-run
+python scripts/make_all.py --split long=desk,phone
 
 # ① 解析两步路 KML（或 GPX）→ track_full.json + kml_pois.json
 python scripts/parse_track_kml.py "D:/路径/线路.kml"
@@ -287,6 +297,7 @@ python scripts/shoot_long_png.py           # 两版一起出
 | 虚实线用错、步道配色撞色 | `references/pitfalls-map-svg.md` §6–7 |
 | 图例样本与出图配色不一致 | `references/pitfalls-map-svg.md` §4 |
 | **做得慢、返工多、一小时还没完** | **`references/efficiency.md`**（耗时实测 + 七条提速做法） |
+| **哪些步骤能并行、并行能省多少** | `references/efficiency.md` §3.7（DAG 分层 + 实测 17.2→8.4 s + 别抱幻想） |
 
 ### 最高频的 8 条（先记住这些）
 
