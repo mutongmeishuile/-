@@ -1,0 +1,12 @@
+# 本机专属安装跟踪文件，不应进仓库
+_user_meta.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 本地运行产生的中间产物
+demcache/
+out/
+*.log
