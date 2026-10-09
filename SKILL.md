@@ -495,7 +495,8 @@ C:/Users/<用户名>/.workbuddy/skills/hiking-route-guide-poster/     ← 改这
 #    且 ③ 区打印"[OK] 默认链 14 个脚本全部就位"、零 FAIL
 #    （清单分两档：默认链缺一 ⇒ FAIL；按需脚本缺 ⇒ [warn]，如 parse_kml_ls / tile_tint）
 # 3) python scripts/make_all.py --only prep → 应产出 out/ 四个 json（鸡生蛋已解）
-# 3b) python scripts/new_route.py --name 线路名 ★ 自动生成 route_def.py（数字已填好，只留 ★ TODO）
+# 3b) python scripts/new_route.py --name 线路名 --kml <线路.kml>
+#     ★ 自动生成 route_def.py（数字已填好，只留 ★ TODO）
 #     然后 python route_def.py 应打印「待办还剩 N 处」且 CFG 必填项缺失 = 无
 # 4) cp 完整 route_def.py 进去 → python scripts/make_all.py
 #    → 期望"全流程完成 ✓"；改过底图相关代码时务必看 make_terrain 的窗口行是否为
