@@ -157,13 +157,15 @@ def mk_pin(x, y, kind):
 # ---------------------------------------------------------------- 三件套
 def _legend_rows():
     rows = []
+    # 样本线宽：跟字号同量级即可（字 9.35 逻辑 px）。6.5 的粗横杠会盖过文字，
+    # 用户要求"线条也细一点儿" → 主线段 3.8、虚线步道 1.5。
     for d in _CFG.get("days", []):
         rows.append((d.get("color", D1_C), d.get("tag", "D"), d.get("legend", ""),
-                     d.get("dist_label", ""), 6.5, ""))
+                     d.get("dist_label", ""), 3.8, ""))
     if _CFG.get("extra_legend_desc"):
         rows.append((_CFG.get("extra_legend_color", "#8C8A86"),
                      _CFG.get("extra_legend_tag", "步道"),
-                     _CFG["extra_legend_desc"], "", 2.1, ' stroke-dasharray="8 5"'))
+                     _CFG["extra_legend_desc"], "", 1.5, ' stroke-dasharray="8 5"'))
     return rows
 
 
@@ -172,6 +174,33 @@ def _legend_rows():
 # → 不再只画分日线段，把起点/终点/营地/水源/垭口/高峰的图形样本也摆进去，
 #   但用两列网格 + 缩小系数控制面积。名称可用 CFG["legend_kind_names"] 覆盖。
 _KIND_ORDER = ["start", "end", "camp", "water", "warn", "peak_hi", "peak", "temple"]
+# ---- 图例排版常量（单位 = 1×FURN_LG，`_legend_size()` 与渲染代码共用）----
+LG_TITLE = 30         # 卡片顶 → 标题基线
+LG_ROW0 = 60          # 卡片顶 → 第一个分日行的基线
+LG_PITCH = 38         # 分日行行距
+LG_DIV_GAP = 14       # 最后一个分日行 → 分隔线
+LG_SYM0 = 26          # 分隔线 → 第一行符号中心
+LG_SYM_PITCH = 38     # 符号行行距
+LG_BOT = 46           # 最后一行内容 → 卡片底（脚注落在这段，太小会压到末行符号！实测踩坑）
+LG_FOOT = 14          # 卡片底 → 脚注基线
+LG_GLYPH = 0.42       # 符号样本缩放
+LG_MIN_TAIL = 12      # 脚注与末行内容的最小安全间距（自检用）
+
+
+def _legend_geom():
+    """算图例的纵向排版（单位 = 1×S）。渲染与尺寸共用，避免两套算法打架。"""
+    rows = len(_legend_rows())
+    syms = len(_legend_symbols())
+    last_row = LG_ROW0 + LG_PITCH * max(0, rows - 1)
+    end = last_row + 16                                   # 末行的下半行高
+    if syms:
+        div = last_row + LG_DIV_GAP
+        n_sym_rows = (syms + 1) // 2
+        last_sym = div + LG_SYM0 + LG_SYM_PITCH * max(0, n_sym_rows - 1)
+        end = last_sym + 16
+    h = end + LG_BOT
+    return {"rows": rows, "last_row": last_row, "end": end, "h": h,
+            "foot": h - LG_FOOT, "tail": h - LG_FOOT - end}
 _KIND_NAME = {"start": "起点", "end": "终点", "camp": "营地", "water": "水源 · 海子",
               "warn": "注意点", "peak_hi": "主峰 · 最高点", "peak": "山峰", "temple": "寺庙"}
 
@@ -190,10 +219,13 @@ def _legend_symbols():
 
 
 def _legend_size():
-    rows = _legend_rows()
-    syms = _legend_symbols()
-    n_sym_rows = (len(syms) + 1) // 2                    # 两列
-    return (round(566 * FURN_LG), round((96 + 52 * len(rows) + 44 * n_sym_rows) * FURN_LG))
+    """图例尺寸。⚠ 与渲染共用 `_legend_geom()` 的几何，避免"尺寸公式"和"实际排版"各走一套
+    （曾经出现脚注压住最后一行符号 —— 卡片太矮，而自检看不出来）。"""
+    g = _legend_geom()
+    if g["tail"] < LG_MIN_TAIL:                       # 开发期护栏：宁可吵，不要悄悄压字
+        print(f"   ⚠ 图例几何异常：脚注与末行间距仅 {g['tail'] * FURN_LG:.1f} px"
+              f"（应 ≥ {LG_MIN_TAIL * FURN_LG:.1f}）—— 调大 LG_BOT")
+    return (round(566 * FURN_LG), round(g["h"] * FURN_LG))
 
 
 def build_map_overlay(mobile=False):
@@ -366,15 +398,19 @@ def build_map_overlay(mobile=False):
         S = FURN_LG
         g = [f'<g class="il"><rect x="{lx}" y="{ly}" width="{LG_W}" height="{LG_H}" rx="{round(14*S)}" '
              f'fill="#FFFFFF" opacity="0.93" stroke="#D9D2C6" stroke-width="1.4"/>',
-             f'<text x="{lx+18*S:.0f}" y="{ly+30*S:.0f}" font-size="{round(22*S)}" '
+             f'<text x="{lx+18*S:.0f}" y="{ly+LG_TITLE*S:.0f}" font-size="{round(22*S)}" '
              f'font-weight="800" fill="{INK}">{_CFG.get("legend_title", "分日路段")}</text>']
         for i, (col, tag, desc, km, w, dash) in enumerate(lg_rows):
-            ry = ly + 60 * S + i * 44 * S
-            g.append(f'<line x1="{lx+18*S:.0f}" y1="{ry-7*S:.0f}" x2="{lx+78*S:.0f}" y2="{ry-7*S:.0f}" '
+            ry = ly + (LG_ROW0 + LG_PITCH * i) * S
+            # ⚠ 样本线要压在文字的**视觉中线**上，不能随手给个负偏移：
+            #   文字基线在 ry+11*S、字号 19*S，字形中线 ≈ 基线 − 0.35×字号 ≈ ry+4.4*S。
+            #   原先写 ry-7*S，比文字中心高 11*S（≈6 逻辑 px）—— 看上去就是"线条错位"。
+            line_y = ry + 4.4 * S
+            g.append(f'<line x1="{lx+18*S:.0f}" y1="{line_y:.0f}" x2="{lx+78*S:.0f}" y2="{line_y:.0f}" '
                      f'stroke="{col}" stroke-width="{w:.1f}" stroke-linecap="round"{dash}/>')
             g.append(f'<text x="{lx+90*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(19*S)}" '
                      f'font-weight="800" fill="{col}">{tag}</text>'
-                     f'<text x="{lx+152*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(17*S)}" '
+                     f'<text x="{lx+140*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(17*S)}" '
                      f'font-weight="600" fill="#4A5261">{desc}</text>')
             if km:
                 g.append(f'<text x="{lx+LG_W-18*S:.0f}" y="{ry+11*S:.0f}" text-anchor="end" '
@@ -383,14 +419,16 @@ def build_map_overlay(mobile=False):
         # ---- 符号说明（两列网格）：让图上出现的每种符号都在图例里有样本 ----
         syms = _legend_symbols()
         if syms:
-            sy = ly + 60 * S + len(lg_rows) * 44 * S + 4 * S
+            # 分隔线 / 符号行位置全部走 LG_* 常量，与 _legend_size() 严格同源
+            last_row_y = ly + (LG_ROW0 + LG_PITCH * max(0, len(lg_rows) - 1)) * S
+            sy = last_row_y + LG_DIV_GAP * S
             g.append(f'<line x1="{lx+18*S:.0f}" y1="{sy:.0f}" x2="{lx+LG_W-18*S:.0f}" y2="{sy:.0f}" '
                      f'stroke="#E2DACD" stroke-width="{1.4*S:.1f}"/>')
             col_w = (LG_W - 36 * S) / 2.0
-            glyph_scale = 0.42
+            glyph_scale = LG_GLYPH
             for i, (kind, nm) in enumerate(syms):
                 cx = lx + 34 * S + (i % 2) * col_w
-                cy = sy + 30 * S + (i // 2) * 44 * S
+                cy = sy + (LG_SYM0 + LG_SYM_PITCH * (i // 2)) * S
                 # 复用真实符号：整体 scale 缩小，保证"图例样本 = 图上符号"
                 g.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale({glyph_scale})">'
                          f'{mk_pin(0, 0, kind)}</g>')
