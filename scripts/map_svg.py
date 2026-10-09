@@ -28,10 +28,10 @@ PROJ = GC.projector_of(meta)
 M_PER_PX = GC.m_per_px(meta)
 
 INK = "#1F2430"
-# ---- 家具缩放系数（要求「缩小」）----
-FURN_LG = 0.78        # 图例：566×218 → 442×170（面积 ≈ 0.61）
-FURN_CP = 0.72        # 指北针：半径 42 → 30
-FURN_SB = 0.80        # 比例尺
+# ---- 家具缩放系数（要求「缩小」，2026-10-09 按用户反馈再收一档）----
+FURN_LG = 0.66        # 图例：566 基准宽 → 374（面积 ≈ 0.44）
+FURN_CP = 0.62        # 指北针：半径 42 → 26
+FURN_SB = 0.68        # 比例尺：整体缩小 + 细身化
 
 EMBED_MAX = 1600      # 网页内嵌底图上限；高清地图用 embed_max=0
 PS_BASE = 0.85        # 点位符号／标注基准缩放
@@ -167,9 +167,33 @@ def _legend_rows():
     return rows
 
 
+# 图例里的**符号**说明：只列本图真的用到的 kind，两列紧凑排布。
+# 用户要求「图中所涉及的图例最好在图例区域都展示出来，不要占地过大」
+# → 不再只画分日线段，把起点/终点/营地/水源/垭口/高峰的图形样本也摆进去，
+#   但用两列网格 + 缩小系数控制面积。名称可用 CFG["legend_kind_names"] 覆盖。
+_KIND_ORDER = ["start", "end", "camp", "water", "warn", "peak_hi", "peak", "temple"]
+_KIND_NAME = {"start": "起点", "end": "终点", "camp": "营地", "water": "水源 · 海子",
+              "warn": "注意点", "peak_hi": "主峰 · 最高点", "peak": "山峰", "temple": "寺庙"}
+
+
+def _legend_symbols():
+    names = dict(_KIND_NAME)
+    names.update(_CFG.get("legend_kind_names", {}) or {})
+    seen, used = set(), []
+    for d in GC.pois_of(RD):
+        k = d["kind"]
+        if k and k not in seen:
+            seen.add(k)
+            used.append(k)
+    used.sort(key=lambda k: _KIND_ORDER.index(k) if k in _KIND_ORDER else 99)
+    return [(k, names.get(k, k)) for k in used]
+
+
 def _legend_size():
     rows = _legend_rows()
-    return (round(566 * FURN_LG), round((96 + 52 * len(rows)) * FURN_LG))
+    syms = _legend_symbols()
+    n_sym_rows = (len(syms) + 1) // 2                    # 两列
+    return (round(566 * FURN_LG), round((96 + 52 * len(rows) + 44 * n_sym_rows) * FURN_LG))
 
 
 def build_map_overlay(mobile=False):
@@ -196,7 +220,9 @@ def build_map_overlay(mobile=False):
     POIS = GC.pois_of(RD)        # 元组 / 字典都收，统一成 dict（guide_common.poi）
 
     o = []
-    ROUTE_W, HALO_W = 5.4 * M, 8.6 * M
+    # ⚠ 线宽与符号要成比例：主线太粗会盖住底图等高线、也压掉点位符号。
+    #   2026-10-09 亚丁线用户实测反馈「线太粗」→ 5.4/8.6 降到 4.0/6.2。
+    ROUTE_W, HALO_W = 4.0 * M, 6.2 * M
     o.append(f'<path d="{d_of(XY)}" fill="none" stroke="#FFFFFF" stroke-width="{HALO_W}" '
              f'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
     # ---- 分日配色：支持 N 天。优先 CFG["days"] 的 color + CFG["day_bounds"]（km），
@@ -292,7 +318,8 @@ def build_map_overlay(mobile=False):
         name, ele, k = d["name"], d["ele"], d["kind"]
         dx, dy, anc = d["dx"], d["dy"], d["anchor"]
         x, y = pin_xy[i]
-        fs = (28 if k in ("start", "end") else 26) * PS
+        # 点位字号也一并收小（用户反馈「文字再小一点儿」），描边同步收窄
+        fs = (23 if k in ("start", "end") else 21) * PS
         col = D1_T if k == "peak_hi" else (D2_T if k in ("start", "end") else INK)
         if mobile:
             nm = getattr(RD, "SHORT", {}).get(name, name)
@@ -301,20 +328,20 @@ def build_map_overlay(mobile=False):
             txt = f"{name} {RD.fmt_ele(ele)} m"
             t = (f'{name}<tspan font-size="{fs*0.78:.1f}" font-weight="700" fill="#5F6875"> '
                  f'{RD.fmt_ele(ele)} m</tspan>')
-        w = GC.text_w(txt, fs) + 34 * M
-        tx, ty, ta, box = _layout(x, y, dx * M, dy * M, anc, w, fs)
+        w = GC.text_w(txt, fs) + 26 * M
+        tx, ty, ta, box = _layout(x, y, dx * M, dy * M, anc, w, fs * 0.86)
         LABEL_OF[name] = box
         gap = max(max(box[0] - x, 0, x - box[2]), max(box[1] - y, 0, y - box[3]))
         if gap > 34 * M:
             px = min(max(x, box[0]), box[2])
             py = min(max(y, box[1]), box[3])
             o.append(f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
-                     f'stroke="#FFFFFF" stroke-width="{5*M:.1f}" stroke-linecap="round"/>'
+                     f'stroke="#FFFFFF" stroke-width="{4*M:.1f}" stroke-linecap="round"/>'
                      f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
-                     f'stroke="{col}" stroke-width="{1.6*M:.1f}" stroke-linecap="round" '
+                     f'stroke="{col}" stroke-width="{1.4*M:.1f}" stroke-linecap="round" '
                      f'opacity="0.75"/>')
-        o.append(f'<text x="{tx}" y="{ty+9*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
-                 f'font-weight="800" fill="{col}" stroke="#FFFFFF" stroke-width="{7*PS:.1f}" '
+        o.append(f'<text x="{tx}" y="{ty+7.4*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
+                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{5.4*PS:.1f}" '
                  f'paint-order="stroke" stroke-linejoin="round">{t}</text>')
 
     # ---- 落位绘制 ----
@@ -336,6 +363,23 @@ def build_map_overlay(mobile=False):
             if km:
                 g.append(f'<text x="{lx+LG_W-18*S:.0f}" y="{ry+11*S:.0f}" text-anchor="end" '
                          f'font-size="{round(16.5*S)}" font-weight="800" fill="#3A4250">{km}</text>')
+
+        # ---- 符号说明（两列网格）：让图上出现的每种符号都在图例里有样本 ----
+        syms = _legend_symbols()
+        if syms:
+            sy = ly + 60 * S + len(lg_rows) * 44 * S + 4 * S
+            g.append(f'<line x1="{lx+18*S:.0f}" y1="{sy:.0f}" x2="{lx+LG_W-18*S:.0f}" y2="{sy:.0f}" '
+                     f'stroke="#E2DACD" stroke-width="{1.4*S:.1f}"/>')
+            col_w = (LG_W - 36 * S) / 2.0
+            glyph_scale = 0.42
+            for i, (kind, nm) in enumerate(syms):
+                cx = lx + 34 * S + (i % 2) * col_w
+                cy = sy + 30 * S + (i // 2) * 44 * S
+                # 复用真实符号：整体 scale 缩小，保证"图例样本 = 图上符号"
+                g.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale({glyph_scale})">'
+                         f'{mk_pin(0, 0, kind)}</g>')
+                g.append(f'<text x="{cx+22*S:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
+                         f'font-weight="700" fill="#4A5261">{nm}</text>')
         g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(15*S)}" '
                  f'font-weight="600" fill="#7A8290">{_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图")}</text>')
         g.append("</g>")
@@ -354,19 +398,25 @@ def build_map_overlay(mobile=False):
     if "sb" in placed:
         sx0, sy0, srect = placed["sb"]
         bw, bh = srect[2] - srect[0], srect[3] - srect[1]
-        bx, by = sx0 + 16 * M, sy0 + bh - 16 * M
+        bx, by = sx0 + 12 * M, sy0 + bh - 13 * M
+        # 比例尺：细身、圆角、半透明底 + 仅一条细描边，不再用"白方块 + 粗黑条"的硬框
+        th = 4.6 * M
         o.append(f'<g><rect x="{sx0}" y="{sy0}" width="{bw:.0f}" height="{bh:.0f}" '
-                 f'rx="{round(9*M)}" fill="#FFFFFF" opacity="0.9"/>'
-                 f'<rect x="{bx:.0f}" y="{by-20*M:.0f}" width="{sb_bar/2:.1f}" '
-                 f'height="{7*M:.0f}" fill="#3A4250"/>'
-                 f'<rect x="{bx+sb_bar/2:.1f}" y="{by-20*M:.0f}" width="{sb_bar/2:.1f}" '
-                 f'height="{7*M:.0f}" fill="#FFFFFF" stroke="#3A4250" stroke-width="{1.3*M:.1f}"/>'
-                 f'<text x="{bx:.0f}" y="{by-27*M:.0f}" font-size="{round(15*M)}" '
+                 f'rx="{round(7*M)}" fill="#FFFFFF" opacity="0.86" stroke="#DAD3C7" '
+                 f'stroke-width="{1.1*M:.1f}"/>'
+                 f'<rect x="{bx:.0f}" y="{by-th:.1f}" width="{sb_bar/2:.1f}" '
+                 f'height="{th:.1f}" fill="#3A4250"/>'
+                 f'<rect x="{bx+sb_bar/2:.1f}" y="{by-th:.1f}" width="{sb_bar/2:.1f}" '
+                 f'height="{th:.1f}" fill="#FFFFFF" stroke="#3A4250" stroke-width="{1.1*M:.1f}"/>'
+                 f'<line x1="{bx+sb_bar/2:.1f}" y1="{by-th-2*M:.1f}" '
+                 f'x2="{bx+sb_bar/2:.1f}" y2="{by+2*M:.1f}" stroke="#3A4250" '
+                 f'stroke-width="{1.1*M:.1f}"/>'
+                 f'<text x="{bx:.0f}" y="{by-th-5*M:.1f}" font-size="{round(12.5*M)}" '
                  f'font-weight="700" fill="#3A4250">0</text>'
-                 f'<text x="{bx+sb_bar/2:.1f}" y="{by-27*M:.0f}" text-anchor="middle" '
-                 f'font-size="{round(15*M)}" fill="#3A4250">1</text>'
-                 f'<text x="{bx+sb_bar:.1f}" y="{by-27*M:.0f}" text-anchor="end" '
-                 f'font-size="{round(15*M)}" font-weight="700" fill="#3A4250">2 km</text></g>')
+                 f'<text x="{bx+sb_bar/2:.1f}" y="{by-th-5*M:.1f}" text-anchor="middle" '
+                 f'font-size="{round(12.5*M)}" fill="#3A4250">1</text>'
+                 f'<text x="{bx+sb_bar:.1f}" y="{by-th-5*M:.1f}" text-anchor="end" '
+                 f'font-size="{round(12.5*M)}" font-weight="700" fill="#3A4250">2 km</text></g>')
     return "".join(o), placed
 
 

@@ -357,6 +357,11 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **`prep_track.py` 报 `FileNotFoundError: '线路.kml'`，但文件明明在当前目录** | 已修（`prep_track.py` 末尾 `kml.resolve()`）。子进程以 `cwd=scripts/` 跑，相对路径会指错地方；传绝对路径也能绕开 |
 | **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
+| **山顶出现"没有等高线的平板/米色斑"（色带被截平 / 真峰顶被当空洞填掉）** | `references/pitfalls-terrain.md` §8（**判据必须单边偏低**，`abs()` 会把峰顶填平）+ §8b（色带取 p99.7 并把雪色端延到最高点） |
+| **底图的地名/山峰名/湖泊名/水系名看不见、或几乎全丢** | `references/pitfalls-terrain.md` §11（字号按"缩图后"定 + Labeller 三级兜底 + 补湖名水系名 + 禁标网格别多乘 ss） |
+| **>2 天线路整条被画成一种颜色（图例却是彩色的）** | `references/pitfalls-map-svg.md` §10（按 `day_bounds` + `days` 颜色画 N 段） |
+| **图例里找不到图上的符号 / 图例占地过大** | `references/pitfalls-map-svg.md` §11（只列用到的 kind + 两列网格 + 复用 `mk_pin` 出样本） |
+| **比例尺/家具显得"贴了张白标签"** | `references/pitfalls-map-svg.md` §12（细身 + 半透明底 + 细描边） |
 | **底图"一片单色"、看不出高差（色带写死了）** | `references/pitfalls-terrain.md` §4 首条（**通用 ramp + p2–p98 拉伸**，无雪区不给雪色端） |
 | **Overpass 镜像全体 504/500/证书错** | `references/pitfalls-terrain.md` §9（先探活再定序，osm.ch 首选；`fetch_osm.py --soft` 可降级） |
 | **底图与攻略 POI 出现两条同地注记** | `references/pitfalls-terrain.md` §10（skip_names 要含「·」前核心地名） |
@@ -424,6 +429,19 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 10. **同一张卡片里的"桌面副标题 / 手机副标题"要各写各的，别把数值抄进副标题**：
    数据条卡片常用 `span.donly` / `span.monly` 按断点二选一。若图省事把 `monly` 填成数值本身，
    桌面版正常、**手机版会出现"46.8 km / 46.8 km"这种数值重复**（版式自检查不出来，只能看图发现）。
+
+11. **"图上一块平板 / 一条注记都没有"这类问题，先查"是不是被程序逻辑吃掉了"，而不是审美**：
+   - 山顶平板 = 判据用了 `abs()` 把真峰顶当空洞填了，或色带只拉到 p98 把峰顶 clip 了
+     （`references/pitfalls-terrain.md` §8 / §8b）；
+   - 底图地名消失 = `Labeller` 撞上等高线标注就静默 `return False`
+     （`references/pitfalls-terrain.md` §11）；
+   - 分日颜色不对 = 只按 `split1` 画了两段（`references/pitfalls-map-svg.md` §10）。
+   **三者都不会报错、自检也全绿**，唯一可靠的判据是"回看渲染结果 + 打印落位率/最高点"。
+
+12. **底图与攻略的注记是两套系统，会互相压**：底图注记（OSM）画在栅格上，
+   攻略 POI 标注画在 SVG 上且带白描边 —— 谁后在谁上就谁压谁。
+   所以要让底图注记**知道**攻略标注的位置（`make_terrain.poi_label_cells()` → 禁标网格），
+   而不是指望"两边各自避让"。
    → 手机副标题要么写短文案（"总里程 · 实测轨迹"），要么就不显示。
 
 ### 交付前自检清单
@@ -443,6 +461,12 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 - [ ] 手机版卡片副标题**没有把数值重复一遍**（`monly` 别填成值本身）
 - [ ] **底图高低海拔各裁一块 1:1 对比底色**：确认分层设色真的铺开了，
       而不是被 clip 卡在同一档（"一片单色"是静默失败，只看整图不容易发现）
+- [ ] **最高峰没有被"填平"**：`fill_voids` 后 `max(dem)` 与 `load_dem` 打印的原始最高点一致；
+      山顶是**有等高线、有渐变的雪帽**，不是一块没有线的平板
+- [ ] **底图注记落位率**：`draw_osm` 打印的「山峰名 x/N」≥ 60%（正常 ~80%）；
+      湖名/水系名也有（不只是峰名）
+- [ ] **图例覆盖图上所有符号**：图上出现的每种 kind 都能在图例里找到样本，
+      且图例没有溢出卡片（`_legend_size` 已含符号区行数）
 - [ ] `make_terrain.py` 打印的 `抑制重名 N` 不为 0（为 0 = 重名注记还在图上）
 - [ ] GPX 回读断言的 `trkpt` 数 == `track_full.json` 点数
 - [ ] 所有数值口径统一（海拔取整一致、里程累计口径说明）

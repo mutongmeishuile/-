@@ -77,7 +77,7 @@ A_MINOR, A_MAJOR = 0.55, 0.86
 # 缓坡"起云"：垂直夸张会把 30 m DEM 的微起伏一起放大，按真实坡度加权渐回平地基准
 FLAT_ANGLE = 2.5
 HS_SMOOTH = 3           # 明暗柔化半径（DEM 像素）——柔和明暗 + 锐利线划 = 纸质地形图质感
-VOID_MAD = 220.0        # 偏离局部参考面多少米算 SRTM 空洞
+VOID_MAD = 900.0        # 「远低于局部参考面」多少米才算空洞（见 fill_voids 的教训）
 
 # ---- 等高线高程标注 ----
 # 只有计曲线（每 100 m）标数字，首曲线标了就成"数字墙"。
@@ -230,49 +230,105 @@ def hillshade(dem, z, lat_c, az=AZ, alt=ALT, zf=Z_FACTOR):
     return np.clip(hs, 0.0, 1.0)
 
 
-def fill_voids(dem):
-    """填 SRTM 空洞：terrarium 在陡峭山区有零星 void（本线 1692 px ≈ 0.02%），
-    不填会在晕渲上留下黑坑、等高线上炸出一圈 -5362 m 的假闭合线。
+def _jacobi_fill(field, iters):
+    """NaN 区域按 4 邻域均值迭代填充（调和插值）。迭代次数够多时得到的是
+    平滑的"穹顶"而不是平板 —— 这正是冰川空洞该有的形态。"""
+    for _ in range(iters):
+        nan = np.isnan(field)
+        if not nan.any():
+            break
+        s = np.zeros_like(field)
+        c = np.zeros_like(field)
+        for sh in (np.roll(field, 1, 0), np.roll(field, -1, 0),
+                   np.roll(field, 1, 1), np.roll(field, -1, 1)):
+            v = ~np.isnan(sh)
+            s += np.where(v, sh, 0.0)
+            c += v.astype(np.float32)
+        field = np.where(nan, np.where(c > 0, s / np.maximum(c, 1.0), np.nan), field)
+    return field
 
-    判据用「中位数 ±2500 m」而不是硬编码海拔 —— 换高程带也不用改。
-    填充只在空洞外接框 +300 px 的子窗口里迭代，避免对全图做上百次卷积。
+
+def _fill_masked(field, valid, iters):
+    """只在 valid=False 的位置做 4 邻域均值迭代（保留已有效像元）。
+    用于把粗网格填出来的接缝抹平。"""
+    for _ in range(iters):
+        inv = ~valid
+        if not inv.any():
+            break
+        s = np.zeros_like(field)
+        c = np.zeros_like(field)
+        for sh in (np.roll(field, 1, 0), np.roll(field, -1, 0),
+                   np.roll(field, 1, 1), np.roll(field, -1, 1)):
+            s += sh
+            c += 1.0
+        field = np.where(inv, s / c, field)
+    return field
+
+
+def fill_voids(dem):
+    """填 DEM 空洞。
+
+    ⚠⚠ 血泪教训一（2026-10-09 亚丁大转山，差点交付）：**判据必须是"单边偏低"**。
+    原代码写的是 `abs(dem - ref) > VOID_MAD` —— 于是"比局部参考面高出 400 m 的
+    **真实峰顶**"也被当成异常值填掉。本线实测：被判为空洞的 58293 px 里有 57882 px
+    都在 4000 m 以上、最高 5934 m（正是仙乃日/央诺多吉/央迈勇的峰顶！），
+    填完之后全域最高点从 5935 m 掉到 5661 m，**三座 5000+ 山峰被削成平滑穹顶**，
+    在图上表现为"山顶一块没有等高线、边缘生硬的平板"（用户一眼看出来的就是这个）。
+    真实空洞（terrarium 缺数据）只会**偏低**、不会偏高 → 判据改成单边：
+        (ref - dem) > VOID_MAD  才有可能是空洞
+    另加一条绝对下限兜底（远低于全图中位数），防住那种整片为 0 / 负值的坏瓦片。
+
+    ⚠ 血泪教训二：**大空洞别在全分辨率上迭代**。冰川区空洞可达 2–5 万 px，
+    4 邻域 Jacobi 每轮只扩散 1 px，600 轮 ≈ 25 px 半径，空洞内部喂不到，
+    最后落到兜底中位数上 → 又是一块平板。改用分尺度（1/4 分辨率迭代 + 全分辨率抹缝）。
+
+    实测提醒：terrarium（SRTM+Copernicus 融合，AWS）在本线**其实没有空洞**
+    （单边偏低异常 = 0 px），所以正确行为是"一个都不填"。别的底图源才可能需要。
     """
-    # 判据用「局部参考面」而不是全局中位数 ±固定值：
-    # 空洞值跨度很大（-5362 … 3180 m），任何固定阈值都会漏掉贴着真实高程那一批
-    # （实测 ±2500 m 漏了 600 余个 1736–2500 m 的空洞，晕渲上留下一片黑坑）。
-    # 做法：先按分位数裁剪掉极端值，再做盒式模糊当"局部地形参考面"，
-    # 偏离参考面 > VOID_MAD 的就是空洞 —— 与高程带无关，换地区也不用改。
     p1, p99 = np.nanpercentile(dem, [1.0, 99.0])
     med = float(np.nanmedian(dem))
     im = Image.fromarray(np.clip(dem, p1, p99).astype(np.float32), "F")
     k = 6
     ref = np.asarray(im.resize((max(1, im.width // k), max(1, im.height // k)), Image.BOX)
                      .resize(im.size, Image.BICUBIC), np.float32)
-    bad = np.abs(dem - ref) > VOID_MAD
+    bad = (ref - dem) > VOID_MAD                  # 单边：只认"远低于参考面"
+    bad |= ~np.isfinite(dem) | (dem < med - 2500)  # 坏瓦片兜底
     if not bad.any():
+        print(f"   空洞判据：仅认「低于局部参考面 > {VOID_MAD:.0f} m」"
+              f"（p1={p1:.0f} p99={p99:.0f}）→ 无空洞，跳过填充")
         return dem
-    print(f"   空洞判据：偏离局部参考面 > {VOID_MAD:.0f} m（p1={p1:.0f} p99={p99:.0f}）")
+    print(f"   空洞判据：仅认「低于局部参考面 > {VOID_MAD:.0f} m」"
+          f"（p1={p1:.0f} p99={p99:.0f}）")
     ys, xs = np.nonzero(bad)
     m = 300
     y0, y1 = max(0, ys.min() - m), min(dem.shape[0], ys.max() + m + 1)
     x0, x1 = max(0, xs.min() - m), min(dem.shape[1], xs.max() + m + 1)
     sub = dem[y0:y1, x0:x1].astype(np.float32)
-    sub[bad[y0:y1, x0:x1]] = np.nan
-    for _ in range(600):
-        nan = np.isnan(sub)
-        if not nan.any():
-            break
-        s = np.zeros_like(sub)
-        c = np.zeros_like(sub)
-        for sh in (np.roll(sub, 1, 0), np.roll(sub, -1, 0),
-                   np.roll(sub, 1, 1), np.roll(sub, -1, 1)):
-            v = ~np.isnan(sh)
-            s += np.where(v, sh, 0.0)
-            c += v.astype(np.float32)
-        sub = np.where(nan, np.where(c > 0, s / np.maximum(c, 1.0), med), sub)
+    valid = ~bad[y0:y1, x0:x1] & np.isfinite(sub)
+
+    # ① 1/4 分辨率上的调和插值（小图迭代 900 轮 ≈ 全分辨率 3600 px 扩散半径）
+    f = 4
+    H, W = sub.shape
+    h2, w2 = max(1, H // f), max(1, W // f)
+    sv = valid[:h2 * f, :w2 * f].reshape(h2, f, w2, f)
+    sa = np.where(valid[:h2 * f, :w2 * f], sub[:h2 * f, :w2 * f], 0.0).reshape(h2, f, w2, f)
+    cnt = sv.sum(axis=(1, 3))
+    coarse = np.where(cnt > 0, sa.sum(axis=(1, 3)) / np.maximum(cnt, 1), np.nan).astype(np.float32)
+    coarse = _jacobi_fill(coarse, iters=900)
+    coarse = np.where(np.isnan(coarse), med, coarse)
+
+    # ② 上采样回全分辨率（BICUBIC → 平滑，无块状阶梯）
+    big = np.asarray(Image.fromarray(coarse.astype(np.float32), "F")
+                     .resize((W, H), Image.BICUBIC), np.float32)
+    filled = np.where(valid, sub, big)
+
+    # ③ 全分辨率少数轮迭代：抹掉粗网格接缝，让边界与真实地形连续
+    filled = _fill_masked(filled, valid, iters=120)
+
     out = dem.copy()
-    out[y0:y1, x0:x1] = sub
-    print(f"   填补 SRTM 空洞 {int(bad.sum())} px（中位 {med:.0f} m 基准）")
+    out[y0:y1, x0:x1] = filled
+    print(f"   填补 SRTM 空洞 {int(bad.sum())} px（占 {100*bad.mean():.2f}%；"
+          f"1/{f} 分辨率调和插值 + 全分辨率抹缝，中位 {med:.0f} m 基准）")
     return out
 
 
@@ -308,16 +364,41 @@ SNOWLINE = 4300.0       # 本区最高点达到此高程，色带才启用雪色
 RAMP_MIN_SPAN = 150.0   # 全域高差小于此值（平地/丘陵线路）就按中心值 ±75 m 展开，避免拉出假色阶
 
 
-def ramp_stops(dem):
-    """按本区 DEM 的 p2–p98 把通用色带拉伸成实际色阶表。"""
-    lo, hi = (float(v) for v in np.nanpercentile(dem, (2, 98)))
+# 雪色端从色带的这个位置起算，之后的色阶单独拉伸到「全域最高点」。
+TOP_F = 0.93
+# 色带拉伸的顶部分位。⚠ 不能取 p98：本线 p98=5263 m 而最高峰 5935 m，
+#   p98 以上 2% 的像元（三座 5000+ 雪山的峰顶）全被 np.clip 压成一个纯白色块，
+#   表现就是"山顶一块没有等高线、边缘生硬的平板"（2026-10-09 实测踩坑）。
+#   取 p99.7：被截的只剩 0.3%，再配合 TOP_F 之上的"拉伸到最高点"，
+#   峰顶就是连续渐变的雪帽，而不是一块平白。
+RAMP_TOP_PCT = 99.7
+
+
+def ramp_stops(dem, verbose=True):
+    """按本区 DEM 的 p2–p99.7 把通用色带拉伸成实际色阶表；
+    雪色端（TOP_F 以上）再单独拉伸到全域最高点，避免峰顶被截成平顶。"""
+    lo, hi = (float(v) for v in np.nanpercentile(dem, (2, RAMP_TOP_PCT)))
+    hi = max(hi, float(np.nanpercentile(dem, 98)))     # 兜底：至少不低于 p98
+    dmax = float(np.nanmax(dem))
     if hi - lo < RAMP_MIN_SPAN:
         c = (lo + hi) / 2.0
         lo, hi = c - RAMP_MIN_SPAN / 2.0, c + RAMP_MIN_SPAN / 2.0
     ramp = _RAMP_SNOW if hi >= SNOWLINE else _RAMP_ALPINE
     kind = "含雪色端" if ramp is _RAMP_SNOW else "无雪·顶端=裸岩陶土"
-    print(f"   分层设色 色带区间 {lo:.0f}–{hi:.0f} m（通用 ramp × 本区 p2–p98，{kind}）")
-    return [(lo + f * (hi - lo), col) for f, col in ramp]
+    stops = []
+    for f, col in ramp:
+        if f <= TOP_F or dmax <= hi:
+            stops.append((lo + f * (hi - lo), col))
+        else:                                          # 雪色端拉伸到最高点
+            stops.append((hi + (f - TOP_F) / (1.0 - TOP_F) * (dmax - hi), col))
+    if verbose:
+        n_clip = int((np.nan_to_num(dem, nan=-1e9) > stops[-1][0]).sum())
+        tail = (f"；雪色端 {hi:.0f}→{dmax:.0f} m 单独拉伸"
+                if dmax > hi else "")
+        print(f"   分层设色 色带区间 {lo:.0f}–{hi:.0f} m"
+              f"（通用 ramp × 本区 p2–p{RAMP_TOP_PCT:g}，{kind}{tail}）"
+              f"{f'，仍有 {n_clip} px 顶格' if n_clip else ''}")
+    return stops
 
 
 def hypso(dem):
@@ -632,6 +713,46 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True):
     return Image.alpha_composite(pil.convert("RGBA"), layer).convert("RGB"), grid
 
 
+def poi_label_cells(meta, scale_raster, ss, cell):
+    """把**攻略自己的 POI 标注框**换算成底图的"禁标网格"。
+
+    ⚠ 2026-10-09 亚丁线实测：底图注记（OSM 峰名/湖名）画在底图上，
+    而攻略的 POI 标注是随后叠在 SVG 里、还带白描边 —— 两者一撞，
+    底图那条注记会被白描边啃掉半行（现场是「仙乃日」被「珍珠海」压住）。
+    所以这里按 route_def 的 dx/dy/anchor 与同款字号，粗算出每个标注框，
+    交给 draw_osm 的 Labeller 一起避让。
+    """
+    try:
+        import route_def as _RD
+    except Exception:                                              # noqa
+        return set()
+    ox = meta["tx0"] * TILE + meta["box"][0]
+    oy = meta["ty0"] * TILE + meta["box"][1]
+
+    def proj(lon, lat):
+        x, y = lonlat_to_px(lon, lat, meta["z"])
+        return (x - ox) * scale_raster, (y - oy) * scale_raster
+
+    cells = set()
+    fs = 21 * 0.85                       # 与 map_svg 的 POI 字号口径一致
+    for d in GC.pois_of(_RD):
+        x, y = proj(d["lon"], d["lat"])
+        txt = f'{d["name"]} {_RD.fmt_ele(d["ele"])} m'
+        w = (GC.text_w(txt, fs) + 26)
+        h = fs * 1.6
+        tx, ty = x + d["dx"], y + d["dy"]
+        anc = d["anchor"]
+        x0, x1 = ((tx, tx + w) if anc == "start" else
+                  (tx - w, tx) if anc == "end" else (tx - w / 2, tx + w / 2))
+        # ⚠ x0/x1 已经是**栅格像素**（proj 乘过 scale_raster），网格单元也是栅格像素，
+        #  不要再乘 ss（曾多乘一次 → 禁标区被放大到整张图，山峰名从 12/15 掉到 2/15）。
+        for cx in range(int(x0 // cell), int(x1 // cell) + 1):
+            for cy in range(int((ty - h / 2) // cell),
+                            int((ty + h / 2) // cell) + 1):
+                cells.add((cx, cy))
+    return cells
+
+
 def avoid_points(meta, scale_raster, ss):
     """需要避让的栅格像素点：实测轨迹 + 攻略 POI。
 
@@ -747,7 +868,9 @@ def build_terrain():
         except Exception:                                          # noqa
             skip = set()
         pil = draw_overlay(pil, m, OUT / "osm.json", skip_names=skip,
-                           px_scale=SS, proj_scale=scale_raster, seed_cells=seed_cells)
+                           px_scale=SS, proj_scale=scale_raster,
+                           seed_cells=(seed_cells
+                                       | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
     except FileNotFoundError:
         pass
     pil.save(OUT / "base_map.jpg", **JPG)

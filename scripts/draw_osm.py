@@ -164,18 +164,55 @@ class Labeller:
                     return True
         return False
 
+    def _hits(self, box):
+        """这个矩形压到了几个已占用的网格单元。"""
+        x0, y0, x1, y1 = box
+        n = 0
+        for cx in range(int(x0 // self.cell), int(x1 // self.cell) + 1):
+            for cy in range(int(y0 // self.cell), int(y1 // self.cell) + 1):
+                if (cx, cy) in self.grid:
+                    n += 1
+        return n
+
     def place(self, d, text, xy, font, fill, stroke=(255, 255, 255),
-              anchor_center=True, force=False, pad=2, stroke_w=2):
+              anchor_center=True, force=False, pad=2, stroke_w=2, fallback=True):
+        """放注记。优先完全不压已有注记；**实在放不下也要放**（fallback）。
+
+        ⚠ 2026-10-09 亚丁线实测：等高线高程标注会先占用网格（104 个标注 ≈ 10% 单元，
+        且**恰好密集在山脊/峰顶**），而峰名/湖名本来就在同一片区域 —— 旧实现
+        "找不到空位就 return False"（静默丢弃），结果是 **15 个山峰名只画出来 2 个**，
+        用户看到的就是"底图没有地名"。地名被压在等高线数字上顶多是拥挤，
+        整条名字消失是信息缺失 —— 两害相权，宁可轻微重叠也要显示。
+        """
         W, H = self.size
         bb = d.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
-        x, y = xy
-        if anchor_center:
-            x -= tw / 2
-        box = (x - pad, y - pad, x + tw + pad, y + th + pad)
-        if not force and (box[0] < 0 or box[2] > W or box[1] < 0 or box[3] > H
-                          or self.taken(box)):
+        x0c, y0c = xy
+        offsets = [(0, 0)]
+        for r in (10, 18, 28):                 # 偏移量别太大：峰名离峰顶太远会误读
+            offsets += [(0, -r), (0, r), (-r, 0), (r, 0),
+                        (-r, -r), (r, -r), (-r, r), (r, r)]
+        best = None
+        for odx, ody in offsets:
+            x, y = x0c + odx, y0c + ody
+            if anchor_center:
+                x -= tw / 2
+            box = (x - pad, y - pad, x + tw + pad, y + th + pad)
+            if box[0] < 0 or box[2] > W or box[1] < 0 or box[3] > H:
+                continue
+            hits = self._hits(box)
+            if hits == 0:                                  # 完美位置
+                d.text((x, y), text, font=font, fill=fill,
+                       stroke_width=stroke_w, stroke_fill=stroke)
+                self._mark(box)
+                return True
+            if best is None or hits < best[0]:             # 记下最不挤的那个
+                best = (hits, x, y, box)
+        if not force and not fallback:
             return False
+        if best is None:
+            return False
+        _, x, y, box = best
         d.text((x, y), text, font=font, fill=fill,
                stroke_width=stroke_w, stroke_fill=stroke)
         self._mark(box)
@@ -287,13 +324,17 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     lab = Labeller(size, cell=14 * S)
     if seed_cells:
         lab.grid |= set(seed_cells)
-    f_town = _font(F(14), True)
-    f_vil = _font(F(13), True)
-    f_ham = _font(F(11.5))
-    f_peak = _font(F(11.5), True)
-    f_poi = _font(F(10.5))
+    # ⚠ 字号要"按最坏情况"定：底图会同时被 ①长图/网页按 ~0.4 倍缩小嵌入、②高清图 1:1 看。
+    #   2026-10-09 亚丁线实测反馈：11.5 px 的峰名缩进长图后完全看不见
+    #   → 整体放大约 1.35 倍、颜色加深，做到与等高线高程标注同一量级，缩图后仍可读。
+    f_town = _font(F(18), True)
+    f_vil = _font(F(16.5), True)
+    f_ham = _font(F(14.5))
+    f_peak = _font(F(15), True)
+    f_poi = _font(F(13))
+    f_water = _font(F(13.5), True)
 
-    peaks, places, pois = [], [], []
+    peaks, places, pois, waters = [], [], [], []
     for e in els:
         if e["type"] != "node":
             continue
@@ -308,10 +349,31 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             peaks.append((x, y, t.get("name", ""), t.get("ele", "")))
         elif "place" in t:
             places.append((t["place"], x, y, t.get("name", "")))
+        elif t.get("natural") == "water":
+            waters.append((x, y, t.get("name", "")))
         elif t.get("tourism") in ("attraction", "viewpoint", "alpine_hut"):
             pois.append((x, y, t.get("name", ""), t["tourism"]))
         elif t.get("amenity") == "place_of_worship":
             pois.append((x, y, t.get("name", ""), "temple"))
+
+    # 湖泊（面）与河流（线）的名字：锚点取要素顶点的重心，再交给 Labeller 动态避让
+    for e in els:
+        t = e.get("tags", {})
+        nm = t.get("name")
+        if e["type"] != "way" or not nm:
+            continue
+        is_lake = t.get("natural") == "water" or t.get("landuse") == "reservoir"
+        is_river = bool(t.get("waterway"))
+        if not (is_lake or is_river):
+            continue
+        pts = _pts_of(e, proj, size)
+        if not pts:
+            continue
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        if not (-40 * S < cx < size[0] + 40 * S and -40 * S < cy < size[1] + 40 * S):
+            continue
+        waters.append((cx, cy, nm))
 
     # 山峰：▲ + 名 + 高程
     n_peak = n_skip = 0
@@ -319,11 +381,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not name or name in skip_names:
             n_skip += 1 if name else 0
             continue
-        tri = [(x, y - 5 * S), (x - 4.5 * S, y + 3 * S), (x + 4.5 * S, y + 3 * S)]
-        d.polygon(tri, fill=(96, 72, 52), outline=(255, 255, 255))
+        tri = [(x, y - 6 * S), (x - 5.4 * S, y + 3.6 * S), (x + 5.4 * S, y + 3.6 * S)]
+        d.polygon(tri, fill=(84, 60, 40), outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
-        if lab.place(d, txt, (x, y + 6 * S), f_peak, (72, 52, 36), anchor_center=False,
-                     stroke_w=2 * S, pad=2 * S):
+        if lab.place(d, txt, (x, y + 7 * S), f_peak, (58, 40, 26), anchor_center=False,
+                     stroke_w=2.8 * S, pad=2 * S):
             n_peak += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
@@ -351,14 +413,26 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             r = 2.6 * S
             d.ellipse([x - r, y - r, x + r, y + r], fill=(96, 132, 96),
                       outline=(255, 255, 255))
+        # 兴趣点名（观景点/民宿/寺庙）优先级最低：**不放 fallback** ——
+        # 它们的价值远低于"被压住"的代价，而峰名/湖名/地名宁可轻微重叠也要显示。
         if lab.place(d, name, (x, y + 4 * S), f_poi, (58, 66, 56), anchor_center=False,
-                     stroke_w=2 * S, pad=2 * S):
+                     stroke_w=2 * S, pad=2 * S, fallback=False):
             n_poi += 1
+
+    # ---- 海子 / 水系名：蓝色斜体感（用深青蓝 + 白描边），动态避让已有注记 ----
+    n_water = 0
+    for x, y, name in waters:
+        if not name or name in skip_names:
+            continue
+        if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_center=True,
+                     stroke_w=2.8 * S, pad=2 * S):
+            n_water += 1
 
     if verbose:
         extra = f" · 抑制重名 {n_skip}" if n_skip else ""
         print(f"   OSM 叠加：面 {n_poly} · 线 {n_line} · "
               f"山峰名 {n_peak}/{len(peaks)} · 地名 {n_place}/{len(places)} · "
+              f"水系名 {n_water}/{len(waters)} · "
               f"兴趣点 {n_poi}/{len(pois)}{extra}")
 
     return Image.alpha_composite(pil.convert("RGBA"), ov).convert("RGB")
