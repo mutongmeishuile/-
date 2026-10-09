@@ -283,10 +283,18 @@ def build_map_overlay(mobile=False):
     # ⚠ 比例尺：色条长度**绝不能被 FURN_* 缩放**（否则"1 km"就不等于 1 km 了）。
     #   而且底衬框必须比色条宽（含内衬），否则色条会戳出框外 ——
     #   2026-10-09 实测就是"白底方框比色条窄、色条压在底图花纹上"，用户一眼看出不协调。
-    sb_bar = 1000 / M_PER_PX                 # 1 km 的像素长度（更短更雅致，也更好摆位）
-    sb_pad = round(11 * M * FURN_SB)
-    SB_W = round(sb_bar + 2 * sb_pad)
-    SB_H = round(30 * M * FURN_SB)
+    # 色条取 2 km：本图 1 km ≈ 80 逻辑 px（地图逻辑宽 1504 px 覆盖约 18.8 km），
+    # 取 1 km 时"0.5"与"1 km"两个数字会正好贴在一起（实测撞字）→ 取 2 km。
+    # ⚠ 卡高必须**按字高算**：数字不参与 FURN_SB 缩放，卡高就不能只按 FURN_SB 缩 ——
+    #   否则数字会溢出卡片上沿被切掉（实测踩坑）。
+    sb_bar = 2000 / M_PER_PX
+    sb_fs = 12 * M                                 # 数字字号（信息，不缩放）
+    sb_th = 4.4 * M                                # 色条高度
+    sb_padx = round(11 * M * FURN_SB)              # 左右内衬（装饰，可缩）
+    SB_W = round(sb_bar + 2 * sb_padx)
+    sb_top = round(4 * M)
+    sb_gap = round(4.5 * M)
+    SB_H = round(sb_top + sb_fs + sb_gap + sb_th + 6 * M)
     CP_R = round(42 * M * FURN_CP)          # 42 → 24
     CP_W = CP_H = CP_R * 2 + 16 * M
 
@@ -358,7 +366,7 @@ def build_map_overlay(mobile=False):
         S = FURN_LG
         g = [f'<g class="il"><rect x="{lx}" y="{ly}" width="{LG_W}" height="{LG_H}" rx="{round(14*S)}" '
              f'fill="#FFFFFF" opacity="0.93" stroke="#D9D2C6" stroke-width="1.4"/>',
-             f'<text x="{lx+18*S:.0f}" y="{ly+30*S:.0f}" font-size="{round(21*S)}" '
+             f'<text x="{lx+18*S:.0f}" y="{ly+30*S:.0f}" font-size="{round(22*S)}" '
              f'font-weight="800" fill="{INK}">{_CFG.get("legend_title", "分日路段")}</text>']
         for i, (col, tag, desc, km, w, dash) in enumerate(lg_rows):
             ry = ly + 60 * S + i * 44 * S
@@ -366,11 +374,11 @@ def build_map_overlay(mobile=False):
                      f'stroke="{col}" stroke-width="{w:.1f}" stroke-linecap="round"{dash}/>')
             g.append(f'<text x="{lx+90*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(19*S)}" '
                      f'font-weight="800" fill="{col}">{tag}</text>'
-                     f'<text x="{lx+152*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(16.5*S)}" '
+                     f'<text x="{lx+152*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(17*S)}" '
                      f'font-weight="600" fill="#4A5261">{desc}</text>')
             if km:
                 g.append(f'<text x="{lx+LG_W-18*S:.0f}" y="{ry+11*S:.0f}" text-anchor="end" '
-                         f'font-size="{round(16.5*S)}" font-weight="800" fill="#3A4250">{km}</text>')
+                         f'font-size="{round(17*S)}" font-weight="800" fill="#3A4250">{km}</text>')
 
         # ---- 符号说明（两列网格）：让图上出现的每种符号都在图例里有样本 ----
         syms = _legend_symbols()
@@ -388,7 +396,7 @@ def build_map_overlay(mobile=False):
                          f'{mk_pin(0, 0, kind)}</g>')
                 g.append(f'<text x="{cx+22*S:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
                          f'font-weight="700" fill="#4A5261">{nm}</text>')
-        g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(15*S)}" '
+        g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(16.5*S)}" '
                  f'font-weight="600" fill="#7A8290">{_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图")}</text>')
         g.append("</g>")
         o.append("".join(g))
@@ -406,12 +414,12 @@ def build_map_overlay(mobile=False):
     if "sb" in placed:
         sx0, sy0, srect = placed["sb"]
         bw, bh = srect[2] - srect[0], srect[3] - srect[1]
-        fs = 12.5 * M * FURN_SB                     # 数字字号随 FURN_SB 缩，色条不缩
-        th = 4.4 * M                                # 色条高度
-        bx = sx0 + (bw - sb_bar) / 2.0              # 色条在底衬框内居中
-        bar_bottom = sy0 + bh - round(9 * M * FURN_SB)
-        bar_top = bar_bottom - th
-        num_y = bar_top - 4.5 * M                   # 数字紧贴色条上方，不留空
+        fs = sb_fs                                   # 与卡高同一口径（见上面的说明）
+        th = sb_th
+        bx = sx0 + (bw - sb_bar) / 2.0               # 色条在底衬框内居中
+        num_y = sy0 + sb_top + fs * 0.95             # 数字基线：留出字高，不溢出卡顶
+        bar_top = num_y + sb_gap
+        bar_bottom = bar_top + th
         o.append(f'<g><rect x="{sx0}" y="{sy0}" width="{bw:.0f}" height="{bh:.0f}" '
                  f'rx="{round(6*M)}" fill="#FBFAF7" opacity="0.94" stroke="#CFC7B9" '
                  f'stroke-width="{1.1*M:.1f}"/>'
@@ -425,9 +433,9 @@ def build_map_overlay(mobile=False):
                  f'<text x="{bx:.1f}" y="{num_y:.1f}" font-size="{fs:.1f}" '
                  f'font-weight="700" fill="#3A4250">0</text>'
                  f'<text x="{bx+sb_bar/2:.1f}" y="{num_y:.1f}" text-anchor="middle" '
-                 f'font-size="{fs:.1f}" fill="#3A4250">0.5</text>'
+                 f'font-size="{fs:.1f}" fill="#3A4250">1</text>'
                  f'<text x="{bx+sb_bar:.1f}" y="{num_y:.1f}" text-anchor="end" '
-                 f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">1 km</text></g>')
+                 f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">2 km</text></g>')
     return "".join(o), placed
 
 
