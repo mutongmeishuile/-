@@ -381,7 +381,9 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **同一座山在页面上有两个海拔数字** | `references/track-prep.md` §6（轨迹 GPS 偏低 20–50 m → **曲线用 GPS、印出来的数用 DEM**） |
 | **沙箱完全无外网（DEM/OSM 全超时）** | `references/self-hosted-terrain.md` §10（用 WebFetch 打 Open-Elevation 文本接口取真实 SRTM 样本，本地插值重建 DEM） |
 | 放大看不清、字糊 | `references/pitfalls-terrain.md` §2 |
-| 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3 |
+| 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3（**间隔按实测线覆盖率自适应**；顺带看那里的**配色**：别用暖橙棕） |
+| **"比例尺越大等高线越密、地图难看"**（长线/大窗口） | `references/pitfalls-terrain.md` §3（`pick_contour_interval`：覆盖率 ≤30%，狼塔自动 20→50 m） |
+| **"如何更真实地反映地貌"**（背光侧一片黑、地形发平） | `references/pitfalls-terrain.md` §4（**MDOW 多向晕渲** + 阴阳分色）、`references/self-hosted-terrain.md` §3 |
 | **瓦片等高线太密/太淡，或用户要适配等高距** | `references/tile-basemap.md` §7（抹除+DEM 自绘管线）、§11（100/500 m 攻略适配） |
 | **等高线与地形对不上（位置错）** | `references/tile-basemap.md` §12（DEM→栅格映射核查清单） |
 | **等高线/设色后地图"一个颜色"无地形感** | `references/tile-basemap.md` §11（线画分离设色法） |
@@ -477,6 +479,10 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
       而不是被 clip 卡在同一档（"一片单色"是静默失败，只看整图不容易发现）
 - [ ] **最高峰没有被"填平"**：`fill_voids` 后 `max(dem)` 与 `load_dem` 打印的原始最高点一致；
       山顶是**有等高线、有渐变的雪帽**，不是一块没有线的平板
+- [ ] **等高距是自适应的**：`make_terrain.py` 打印的「等高距自适应 → 首曲线 X / 计曲线 Y，
+      线覆盖 Z% ≤ 目标 30%」，Z 必须 ≤ 30%；长线窗口不许还是 20 m（会糊成一片棕）
+- [ ] **地形"有立体感、背光侧仍有结构"**：不是半边发白半边死黑（那是单向晕渲的锅，
+      应为 MDOW 多向）；如果整张图读起来"发黄发闷"，检查等高线是不是还在用暖橙棕
 - [ ] **底图注记落位率**：`draw_osm` 打印的「山峰名 x/N」≥ 60%（正常 ~80%）；
       湖名/水系名也有（不只是峰名）
 - [ ] **图例覆盖图上所有符号**：图上出现的每种 kind 都能在图例里找到样本，

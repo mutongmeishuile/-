@@ -87,20 +87,40 @@ LOGICAL_W = 1504
 SS = 2
 RASTER_W = LOGICAL_W * SS
 
-CONTOUR_MAJOR = 100.0   # 计曲线间隔（加粗）
-CONTOUR_MINOR = 20.0    # 首曲线间隔
-AZ, ALT = 315.0, 45.0   # 晕渲光源：西北方向、高度角 45°（制图惯例）
+# ---- 等高距：**按窗口自适应**，不写死 ----
+# ⚠ 血泪教训（2026-10-10 狼塔 C+V）：等高距写死 20 m，在小窗口（亚丁 0.19°×0.15°）
+#   线覆盖率 21%、像纸质地形图；换到长线窗口（狼塔 0.81°×0.62°）**同一 20 m 间隔**
+#   覆盖率飙到 66% —— 整张图糊成一片棕色，用户原话"比例尺越大，等高线越密，地图很难看"。
+#   物理原因：等高线的疏密 = 每像素真实高差 / 等高距。窗口一大，同样的地表起伏被压进
+#   同样 3008 px，每像素跨过的等高线就成倍增加 → 必然糊。
+#   → 判据落到**实测线覆盖率**：从最细的候选间隔往上试，第一个覆盖率 ≤ 目标值的就是它。
+#     小窗口仍得 20 m（保持细节），长窗口自动退到 50/100 m（保持可读）。
+CONTOUR_NICE = (10, 20, 25, 50, 100, 200, 250, 500)   # 候选等高距（米，都是好记的整数）
+CONTOUR_TARGET_COV = 0.30   # 线覆盖率上限。亚丁实测 20 m=21%（保留）；狼塔 50 m=29.8%（比 20 m 的 66% 好太多）
+# 下面两个只作**兜底缺省值**（调用方没传间隔时用），实际间隔由 pick_contour_interval() 定。
+CONTOUR_MINOR = 20.0    # 首曲线缺省间隔
+CONTOUR_MAJOR = 100.0   # 计曲线缺省间隔（= 首曲线 × 5）
+AZ, ALT = 315.0, 45.0   # 主光方向：西北、高度角 45°（制图惯例）
+# 多向晕渲（MDOW，Multi-Directional Oblique Weighting）：单向光会把地貌压成"半边亮半边黑"，
+# 背光侧的冲沟/山脊全部消失。改成四向**加权**叠加 —— 主光仍取西北（符合制图惯例、保住立体感），
+# 另外补上正北/正西/西南让背光面的地形结构显出来。权重和为 1。
+MDOW = ((225.0, 0.20), (270.0, 0.20), (315.0, 0.40), (360.0, 0.20))
 Z_FACTOR = 1.4          # 垂直夸张，让低山也有立体感
 UNSHARP = (3, 45, 3)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补偿 30 m DEM 的天然柔化
 # JPEG 参数：地图全是**彩色细线 + 小字**，必须关掉默认的 4:2:0 色度抽样（subsampling=0 → 4:4:4）。
 # 4:2:0 会把色度通道砍到 1/4 分辨率，彩色线条一律发虚发彩边 —— 这是"放大看不清"的隐形主因之一。
 JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 # 等高线线宽（按栅格像素）：3008 分辨率下的 (首,计)。计曲线是首曲线的 2 倍宽 + 更深色。
-# 注意：这里刻意画细 —— 20 m 间距在陡坡会密集成排，线一粗就糊成"棕色泥"，那才是"看不清"的主因。
+# 注意：这里刻意画细 —— 等高距再自适应，陡坡处仍会成排，线一粗就糊成"棕色泥"。
 CONTOUR_DILATE = (0, 1)
-# 等高线配色 + alpha 融合：硬像素覆盖会留下高反差硬边，alpha 写回才像"印在纸上"
-C_MINOR, C_MAJOR = (172, 155, 136), (139, 111, 84)
-A_MINOR, A_MAJOR = 0.55, 0.86
+# 等高线配色 + alpha 融合：硬像素覆盖会留下高反差硬边，alpha 写回才像"印在纸上"。
+# ⚠ 血泪教训（2026-10-10 用户反馈"等高线的颜色也不好看"）：原配色是暖橙棕
+#   (172,155,136)/(139,111,84)，而底图分层设色本身就是"绿→土黄→陶土"的暖色带 ——
+#   暖线画在暖底上，色相差几乎为零，只剩明度差，于是整张图读起来是"发黄的旧报纸"。
+#   → 换成**中性灰棕**：亮度仍分两档（首线浅、计线深）保住层次，
+#     但把橙味抽掉，让等高线读起来是"灰笔线"，把彩度完全让给海拔色带和轨迹。
+C_MINOR, C_MAJOR = (152, 144, 132), (100, 90, 80)
+A_MINOR, A_MAJOR = 0.36, 0.70
 # 缓坡"起云"：垂直夸张会把 30 m DEM 的微起伏一起放大，按真实坡度加权渐回平地基准
 FLAT_ANGLE = 2.5
 HS_SMOOTH = 3           # 明暗柔化半径（DEM 像素）——柔和明暗 + 锐利线划 = 纸质地形图质感
@@ -109,13 +129,13 @@ VOID_MAD = 900.0        # 「远低于局部参考面」多少米才算空洞（
 # ---- 等高线高程标注 ----
 # 只有计曲线（每 100 m）标数字，首曲线标了就成"数字墙"。
 # 所有尺寸都是**逻辑像素**，内部乘 SS 变栅格像素（超采样下同样锐利）。
-LABEL_EVERY = 100.0      # 标注哪一级等高线（= 计曲线间隔）
+LABEL_EVERY = 100.0      # 缺省标注级（实际 = 本次选定的计曲线间隔，由 build_terrain 覆写）
 LABEL_GAP = 560          # 同一条等高线上相邻标注的最小弧长间隔
 LABEL_SEP = 130          # 任意两个标注之间的最小间距（防聚成堆）
 LABEL_MAX_ANGLE = 62     # 局部倾角超过此值就不标（斜着读不出来的不如不标）
 LABEL_WINDOW = 26        # 估计局部走向的采样窗口（±窗口长度）
 LABEL_FONT = 11          # 字号（逻辑像素）
-LABEL_FILL = (105, 79, 55)
+LABEL_FILL = (96, 84, 72)
 LABEL_HALO = (252, 250, 245)
 MS_STEP = 1              # marching squares 用的 DEM 抽稀步长（1 = 全分辨率，与栅格线严格同位）
 
@@ -225,8 +245,14 @@ def load_dem(z, lon0, lat0, lon1, lat1, workers=24):
 
 
 # ------------------------------------------------------------------ 晕渲
-def hillshade(dem, z, lat_c, az=AZ, alt=ALT, zf=Z_FACTOR):
+def hillshade(dem, z, lat_c, az=None, alt=ALT, zf=Z_FACTOR):
     """GDAL Horn 算法。返回 0–1 的明暗值。
+
+    az=None（默认）走**多向晕渲 MDOW**：按 MDOW 权重把 4 个方位的明暗加权叠加。
+    单向光虽然"立体感"强，但会把地貌压成半边亮、半边死的剪影 —— 背光侧的冲沟、
+    山脊、崖壁全部糊成一团黑，这正是"不够真实"的主因。四向加权后：主光仍是西北 315°
+    （制图惯例 + 保住立体感），同时补出正北/正西/西南，让背光面的地形结构显形。
+    传入具体 az 则退化为原来的单向晕渲（保留旧行为，便于对比/调试）。
 
     两道后处理（缺一个整张图就会"发脏 / 起云"）：
       * 按**真实坡度**加权：坡度 <FLAT_ANGLE 的缓坡把明暗渐回平地基准，
@@ -244,9 +270,21 @@ def hillshade(dem, z, lat_c, az=AZ, alt=ALT, zf=Z_FACTOR):
     tan_slope = np.hypot(dzdx, dzdy)
     slope = np.arctan(tan_slope * zf)
     aspect = np.arctan2(dzdy, -dzdx)
-    azr, altr = math.radians(az), math.radians(alt)
-    hs = np.sin(altr) * np.cos(slope) + np.cos(altr) * np.sin(slope) * np.cos(azr - aspect)
-    hs = np.clip(hs, 0.0, 1.0)
+
+    def _one(az_deg):
+        azr, altr = math.radians(az_deg), math.radians(alt)
+        v = (math.sin(altr) * np.cos(slope)
+             + math.cos(altr) * np.sin(slope) * np.cos(azr - aspect))
+        return np.clip(v, 0.0, 1.0)
+
+    if az is None:
+        hs = np.zeros(dem.shape, np.float32)
+        for a_deg, w in MDOW:
+            hs += w * _one(a_deg)
+    else:
+        hs = _one(az)
+
+    # 坡度加权只依赖坡度（与方位无关），权重和为 1 时"逐向加权"与"先合并再加权"等价
     w = np.clip(np.arctan(tan_slope) / math.radians(FLAT_ANGLE), 0.0, 1.0)
     hs = hs * w + math.sin(math.radians(ALT)) * (1.0 - w)
     if HS_SMOOTH > 1:
@@ -449,8 +487,31 @@ def hypso(dem):
 
 # 晕渲调制：环境光比例越高整体越亮、对比越弱。
 # 太高（>0.75）地形会"平"到看不见，太低（<0.4）背光面发黑、压掉等高线。
-AMBIENT, DIRECTIONAL = 0.70, 0.38
+AMBIENT, DIRECTIONAL = 0.68, 0.40
 HL_CLIP, HL_KEEP = 240.0, 0.35   # 高光软限幅：超 240 只保留 35%，亮而不死白
+# 阴阳分色（瑞士晕渲的看家手法）：受光面微微偏暖、背光面微微偏冷。
+# 纯灰阶晕渲会让人误以为"纸是灰的"，加一点点色温差，山体立刻像有阳光与阴影 —— 
+# 幅度必须很小（≤0.25），大了就成了"蓝紫色的假雪"。0 = 关闭。
+TINT_COOL = 0.20     # 背光偏冷强度
+TINT_WARM = 0.10     # 受光偏暖强度
+TINT_COOL_RGB = (0.90, 0.95, 1.04)
+TINT_WARM_RGB = (1.05, 1.00, 0.95)
+
+
+def shade_rgb(rgb, hs):
+    """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。纯 numpy，输入输出都是 float 数组。"""
+    img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
+    if TINT_COOL > 0:
+        t = np.clip((0.5 - hs) * 2.0, 0, 1)[..., None]        # 越暗 → 越冷
+        c = np.asarray(TINT_COOL_RGB, np.float32)
+        img = img * (1 - TINT_COOL * t) + img * c * (TINT_COOL * t)
+    if TINT_WARM > 0:
+        t = np.clip((hs - 0.5) * 2.0, 0, 1)[..., None]        # 越亮 → 越暖
+        c = np.asarray(TINT_WARM_RGB, np.float32)
+        img = img * (1 - TINT_WARM * t) + img * c * (TINT_WARM * t)
+    over = img > HL_CLIP
+    img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
+    return img
 
 
 # ------------------------------------------------------------------ 等高线
@@ -477,6 +538,40 @@ def _dilate_n(m, n):
     for _ in range(int(n)):
         m = _dilate(m)
     return m
+
+
+def contour_coverage(dem_out, interval):
+    """给定等高距，返回线像元占比（0–1）。就是 paint_contours 里那套 band 边缘。"""
+    b = np.floor(dem_out / interval).astype(np.int32)
+    e = np.zeros(b.shape, bool)
+    e[1:, :] |= b[1:, :] != b[:-1, :]
+    e[:, 1:] |= b[:, 1:] != b[:, :-1]
+    return float(e.mean())
+
+
+def pick_contour_interval(dem_out, verbose=True):
+    """按窗口自适应选等高距（首曲线, 计曲线, 覆盖率）。
+
+    ⚠ 这是"比例尺越大、等高线越密、地图越难看"的正解（2026-10-10 狼塔 C+V 踩坑）：
+    等高距**不能写死**。等高线疏密 ≈ 每像素真实高差 / 等高距 —— 窗口一大，
+    同样的地表起伏被压进同样多的输出像素，每像素跨过的等高线成倍增加，20 m 间隔
+    必然糊成一片棕。判据直接落到可测的「线覆盖率」上：从最细候选往上试，
+    第一个 ≤ CONTOUR_TARGET_COV 的胜出。
+    * 小窗口（亚丁 0.19°）：20 m → 21%，保留细节；
+    * 长线（狼塔 0.81°）：20 m → 66%（糊），自动退到 50 m → 30%。
+    计曲线恒取首曲线的 5 倍并加粗 —— 这是地形图的通用约定，换任何线路都成立。
+    """
+    fallback = (CONTOUR_NICE[-1], CONTOUR_NICE[-1] * 5, 1.0)
+    for iv in CONTOUR_NICE:
+        cov = contour_coverage(dem_out, iv)
+        if cov <= CONTOUR_TARGET_COV:
+            if verbose:
+                tag = "（缺省）" if iv == CONTOUR_MINOR else f"（{CONTOUR_MINOR:.0f} m 会糊到 " \
+                    f"{contour_coverage(dem_out, CONTOUR_MINOR) * 100:.0f}%，自动加粗）"
+                print(f"   等高距自适应 → 首曲线 {iv:g} m / 计曲线 {iv * 5:g} m，"
+                      f"线覆盖 {cov * 100:.1f}% ≤ 目标 {CONTOUR_TARGET_COV * 100:.0f}% {tag}")
+            return iv, iv * 5, cov
+    return fallback
 
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
@@ -632,17 +727,20 @@ def _text_size(font, txt, stroke):
     return bb[2] - bb[0], bb[3] - bb[1], bb
 
 
-def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True):
+def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every=None):
     """在计曲线上断线标注高程数字。
 
-    * 只在**计曲线**（每 LABEL_EVERY m）上标；
+    * 只在**计曲线**（每 `every` m，缺省 LABEL_EVERY）上标；
     * 沿折线按弧长取候选位，但要求局部接近水平（LABEL_MAX_ANGLE），不然斜着读不出；
     * 与实测轨迹/攻略 POI 冲突的位置直接跳过（`avoid`），免得数字被粗线路切断；
     * 数字用"纸色描边"压掉底下的线 —— 这是纸质地形图的标准断线画法，比加白底方块干净。
 
     scale: (sx, sy) = DEM 像素 → 栅格像素；avoid: [(x, y, r)] 栅格像素。
+    every: 计曲线间隔（= 本次自适应选定的值），必须与 paint_contours 用的 major 一致，
+           否则数字会落在没有加粗线的位置上（"数字浮在图上"）。
     返回：已占位的网格单元集合（cell = 14*SS），供 OSM 注记继续避让。
     """
+    every = float(every if every else LABEL_EVERY)
     sx, sy = scale
     S = SS
     f = _label_font(max(9, int(round(LABEL_FONT * S))))
@@ -673,9 +771,9 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True):
     n_lab = n_line = 0
     errs = []
 
-    lv0 = math.ceil(lo / LABEL_EVERY) * LABEL_EVERY
-    lv1 = math.floor(hi / LABEL_EVERY) * LABEL_EVERY
-    for lv in np.arange(lv0, lv1 + 1e-6, LABEL_EVERY):
+    lv0 = math.ceil(lo / every) * every
+    lv1 = math.floor(hi / every) * every
+    for lv in np.arange(lv0, lv1 + 1e-6, every):
         lv = float(lv)
         txt = f"{int(round(lv))}"
         tw, th, _ = _text_size(f, txt, stroke)
@@ -745,7 +843,7 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True):
         if errs:
             chk = (f"，自检：数字处实测高程偏差 中位 {np.median(errs):.1f} m / "
                    f"最大 {max(errs):.1f} m")
-        print(f"   标注 {n_lab} 个（{n_line} 条计曲线，间隔 {LABEL_EVERY:.0f} m）{chk}")
+        print(f"   标注 {n_lab} 个（{n_line} 条计曲线，间隔 {every:g} m）{chk}")
     return Image.alpha_composite(pil.convert("RGBA"), layer).convert("RGB"), grid
 
 
@@ -848,15 +946,13 @@ def build_terrain():
     LOGICAL_H = round(dh * scale_logical)
     RASTER_H = round(dh * scale_raster)
 
-    print(f"[2/6] 晕渲（GDAL Horn，光源 西北 315°/45°，z_factor {Z_FACTOR}）…")
+    print(f"[2/6] 晕渲（GDAL Horn，多向 MDOW 主光 西北 315°/45°，z_factor {Z_FACTOR}）…")
     hs = hillshade(dem, meta["z"], lat_c)
 
     print("[3/6] 分层设色 + 合成 …")
     rgb = hypso(dem)
-    # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）
-    img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
-    over = img > HL_CLIP
-    img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
+    # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色
+    img = shade_rgb(rgb, hs)
     img = np.clip(img, 0, 255).astype(np.uint8)
     # BICUBIC 而非 LANCZOS：LANCZOS 在陡崖等高反差处会产生振铃，被随后的 USM 放大成"颗粒噪点"。
     pil = Image.fromarray(img, "RGB").resize((RASTER_W, RASTER_H), Image.BICUBIC)
@@ -864,19 +960,20 @@ def build_terrain():
     pil = pil.filter(ImageFilter.UnsharpMask(radius=UNSHARP[0], percent=UNSHARP[1],
                                              threshold=UNSHARP[2]))
 
-    print(f"[4/7] 等高线（{CONTOUR_MINOR:.0f} m / 计曲线 {CONTOUR_MAJOR:.0f} m，"
-          f"线宽 {CONTOUR_DILATE}@{RASTER_W}px）…")
     dem_out = np.asarray(Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS),
                          dtype=np.float32)
+    c_minor, c_major, c_cov = pick_contour_interval(dem_out)
+    print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+          f"线宽 {CONTOUR_DILATE}@{RASTER_W}px）…")
     arr = np.asarray(pil).copy()
-    paint_contours(arr, dem_out, *CONTOUR_DILATE)
+    paint_contours(arr, dem_out, *CONTOUR_DILATE, minor=c_minor, major=c_major)
     pil = Image.fromarray(arr, "RGB")
 
-    print(f"[5/7] 等高线高程标注（计曲线每 {LABEL_EVERY:.0f} m）…")
+    print(f"[5/7] 等高线高程标注（计曲线每 {c_major:g} m）…")
     scale_raster_y = RASTER_H / dh
     pil, seed_cells = draw_contour_labels(
         pil, dem, (scale_raster, scale_raster_y), lo, hi,
-        avoid=avoid_points(meta, scale_raster, SS))
+        avoid=avoid_points(meta, scale_raster, SS), every=c_major)
 
     print(f"[6/7] OSM 矢量叠加 + 落盘（超采样 {SS}× → 栅格 {RASTER_W}px / 逻辑 {LOGICAL_W}px）…")
     pil.save(OUT / "base_terrain.jpg", **JPG)
@@ -884,6 +981,7 @@ def build_terrain():
          "raster": [RASTER_W, RASTER_H], "ss": SS,
          "box": meta["box"], "bbox": [LON0, LAT0, LON1, LAT1], "z": meta["z"],
          "tx0": meta["tx0"], "ty0": meta["ty0"],
+         "contour": {"minor": c_minor, "major": c_major},   # 本次自适应选定的等高距
          "source": f"本地自渲染：地形 DEM z{z_use} + OSM 矢量（非瓦片服务）",
          "attribution": "Elevation: SRTM/Copernicus DEM (AWS Open Data, 免费开放) · "
                         "Map data: © OpenStreetMap contributors (ODbL) · "

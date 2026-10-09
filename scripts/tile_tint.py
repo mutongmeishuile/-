@@ -220,17 +220,19 @@ def build(tile_path=None, erase=True, verbose=True):
     dem_out = np.asarray(Image.fromarray(dem, "F").resize((MT.RASTER_W, RASTER_H),
                                                           Image.LANCZOS), dtype=np.float32)
     arr = img.copy()
-    MT.paint_contours(arr, dem_out, *MT.CONTOUR_DILATE)
+    c_minor, c_major, _ = MT.pick_contour_interval(dem_out)
+    MT.paint_contours(arr, dem_out, *MT.CONTOUR_DILATE, minor=c_minor, major=c_major)
     pil = Image.fromarray(arr, "RGB")
     scale_raster_y = RASTER_H / dh
     pil, seed_cells = MT.draw_contour_labels(
         pil, dem, (scale_raster, scale_raster_y), lo, hi,
-        avoid=MT.avoid_points(meta, scale_raster, MT.SS))
+        avoid=MT.avoid_points(meta, scale_raster, MT.SS), every=c_major)
 
     m = {"size": [MT.LOGICAL_W, LOGICAL_H], "scale": scale_logical,
          "raster": [MT.RASTER_W, RASTER_H], "ss": MT.SS,
          "box": meta["box"], "bbox": [LON0, LAT0, LON1, LAT1], "z": meta["z"],
          "tx0": meta["tx0"], "ty0": meta["ty0"],
+         "contour": {"minor": c_minor, "major": c_major},
          "source": ("在线瓦片（仅保留线画）+ 本地 DEM 分层设色与等高线"
                     if tile_path else f"本地自渲染：地形 DEM z{MT.DEM_Z} + OSM 矢量"),
          "attribution": "Elevation: SRTM/Copernicus DEM (AWS Open Data) · "
