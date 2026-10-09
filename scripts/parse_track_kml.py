@@ -99,11 +99,12 @@ def parse_kml(path: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("kml", help="两步路导出的 .kml 路径")
-    ap.add_argument("--out", default=None, help="输出目录（默认 KML 同目录）")
+    ap.add_argument("--out", default=None,
+                    help="输出目录（默认 scripts/out/，与后续步骤的约定一致）")
     args = ap.parse_args()
 
     src = Path(args.kml)
-    out = Path(args.out) if args.out else src.parent
+    out = Path(args.out) if args.out else (Path(__file__).resolve().parent / "out")
     out.mkdir(parents=True, exist_ok=True)
 
     pts, cum, pois = parse_kml(src)
@@ -121,7 +122,7 @@ def main():
         print(f"原始高程 {min(ele):.0f}–{max(ele):.0f} m")
     print(f"标注点 {len(pois)}")
     print(f"→ {out/'track_full.json'}  /  {out/'kml_pois.json'}")
-    print("下一步：把 track_full.json 放到 prep_kml_track.py 同目录后运行它，得到 track_real.json / profile_real.json")
+    print("下一步：python prep_kml_track.py  （它直接从 out/ 读，不必手工搬文件）")
 
 
 if __name__ == "__main__":

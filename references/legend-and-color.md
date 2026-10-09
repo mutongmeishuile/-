@@ -113,7 +113,7 @@ def _lsw(stroke, width=3.6, dash=None, casing=None, casing_w=None, w=32, h=16):
 三条要点：
 
 1. **颜色常量只在一处定义**，图例与出图脚本共用。本次的对应关系：
-   `make_terrain.py`（底图常量）↔ `draw_osm.py`（矢量常量）↔ `build_jiuhua.py`（图例常量）——
+   `make_terrain.py`（底图常量）↔ `draw_osm.py`（矢量常量）↔ `build_guide.py`（图例常量）——
    **改一处要同步三处**，这是这套架构必须付出的代价，所以在三处都写了同样的注释。
 2. **点位样本直接复用出图用的符号工厂**：`_psw(kind)` 内部调 `map_svg.mk_pin(0,0,kind)`，
    包一个 `viewBox="-21 -21 42 42"` 就完事（半跨度 21 才装得下最高峰带白圈的那个符号）。
@@ -181,7 +181,7 @@ def _lsw(stroke, width=3.6, dash=None, casing=None, casing_w=None, w=32, h=16):
 |---|---|
 | `draw_osm.py` | `TRAIL_STYLE` 换深紫 `(116,52,128)`；新增 `C_TRAIL_CASING`；`_dashed()` 拆出 `_dash_pass()` 并支持 `casing/casing_w` |
 | `map_svg.py` | `ROUTE_W 7.5→5.0`、`HALO_W 14→8`；里程点 `r 9.5→7.4`、字号 `11→10`；新增 `PS=0.85` 统一下调全部点位符号与标签字号 |
-| `build_jiuhua.py` | 新增 `_lsw/_lsw2/_kmsw/_asw/_psw/_lg/_grp` 七个样本生成器；`LEGEND`（19 条 / 3 组）替换原 5 行色块图例；`SEG_LEGEND` 供「分日方案」；来源说明从右栏搬到地图区之下通栏三列；删掉已无用的 `.rlg` |
+| `build_guide.py` | 新增 `_lsw/_lsw2/_kmsw/_asw/_psw/_lg/_grp` 七个样本生成器；`LEGEND`（19 条 / 3 组）替换原 5 行色块图例；`SEG_LEGEND` 供「分日方案」；来源说明从右栏搬到地图区之下通栏三列；删掉已无用的 `.rlg` |
 
 **自检**：改完必须回看图例里每个样本与图上对应元素是否**看起来一样**（颜色、粗细、虚线节拍、符号形状）。
 
@@ -315,10 +315,10 @@ hs = np.asarray(im.resize((im.width // 3, im.height // 3), Image.BOX)
 |---|---|
 | `make_terrain.py` | 新 `_HYPSO`（按 13–1324 m 定制）；`AMBIENT/DIRECTIONAL 0.62/0.45 → 0.70/0.38`；新增高光软限幅、`FLAT_ANGLE=2.5`、`HS_SMOOTH=3`；`UNSHARP (3,55,4)→(3,45,3)`；`CONTOUR_DILATE (0,2)→(0,1)`；新增 `C_MINOR/C_MAJOR` + alpha 融合；`LABEL_FILL (84,60,40)→(105,79,55)` |
 | `draw_osm.py` | `ROAD_STYLE` 全线换**白芯 + 暖灰棕描边**；`C_WOOD/C_MEADOW` 色罩 → 掩膜乘法染色（新增 `_tint_faces()`、`WOOD_*/MEADOW_*` 常量、`ImageFilter`+`numpy` 依赖）；水体蓝略加深 |
-| `build_jiuhua.py` | 图例常量与上表同步；`C_ROAD_SW/C_ROAD_CAS_SW` 换白芯暖边；新增 `_woodsw()` 两段式林地样本；三条图例说明改写 |
+| `build_guide.py` | 图例常量与上表同步；`C_ROAD_SW/C_ROAD_CAS_SW` 换白芯暖边；新增 `_woodsw()` 两段式林地样本；三条图例说明改写 |
 
-**顺序很重要**：`make_terrain.py`（底图）→ `build_jiuhua.py`（HTML，图例色在此）→
-`render_jiuhua.py`（长图）→ `render_map_hi.py`（高清图）。底图重出后**必须**重跑后三步，
+**顺序很重要**：`make_terrain.py`（底图）→ `build_guide.py`（HTML，图例色在此）→
+`shoot_guide.py`（长图）→ `render_map_hi.py`（高清图）。底图重出后**必须**重跑后三步，
 否则图例还指着旧色。
 
 ---
@@ -331,11 +331,16 @@ hs = np.asarray(im.resize((im.width // 3, im.height // 3), Image.BOX)
 - [ ] 图例里每个样本，和图上对应元素**看起来一样**吗（颜色 / 粗细 / 虚节拍 / 符号形状）？
 - [ ] 6 个"面"（地形 / 等高线 / 步道 / 公路 / 水系 / 林地）在**你打算给人看的那一档缩放**下，
       两两之间都分得开吗？（在 1:1 看得清不算数 —— 交付物大多是缩着的）
-- [ ] 改完底图色，图例的十六进制是否跟着改了？（`make_terrain.py` / `draw_osm.py` / `build_jiuhua.py` 三处同源）
+- [ ] 改完底图色，图例的十六进制是否跟着改了？（`make_terrain.py` / `draw_osm.py` / `build_guide.py` 三处同源）
 
 ---
 
-## 8. 交付前的第二次自检：可读性、字号、手机版
+## 8. 交付前的第二次自检：可读性、字号、手机端
+
+> ⚠ **§8.2 的"出第二版手机长图"已废弃**（本技能不再生成手机版长图）。
+> 但 §8.1 的对比度自检、以及 §8.2 里"无头浏览器最小窗宽"那条**探针经验仍然有效** ——
+> 现在它只用于 `qa_guide.py` 的 phone 断点探针（`--window-size=600,…`，绕开最小宽钳制）。
+> 宽屏长图的裁剪现在由 `shoot_guide.py` 用「先量版式、再截一次」完成。
 
 第一轮把"颜色对不对"解决了，第二轮要解决的是"**在读者真正看这张图的那一档尺寸下，读不读得出来**"。
 下面五条都是量出来的，不是审美判断。

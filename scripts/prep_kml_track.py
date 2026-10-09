@@ -1,13 +1,30 @@
 # -*- coding: utf-8 -*-
-"""把两步路 KML 轨迹预处理成绘图数据：
-   track_real.json  —— 简化后的轨迹（经纬度 + 累计里程 + 里程分段归属）
-   profile_real.json —— 等距采样的海拔剖面
+"""把两步路 KML 轨迹预处理成绘图数据（读 out/track_full.json）：
+
+   out/track_real.json    —— 简化后的轨迹（经纬度 + 累计里程 + 平滑海拔 + 时刻）
+   out/profile_real.json  —— 等距采样的海拔剖面（每 100 m 一点）
+
+⚠ 路径统一在 scripts/out/ 下 —— 旧版这里读的是 scripts/track_full.json，
+  而上一步 parse_track_kml.py 写的是 out/，中间要人工搬一次文件；
+  那条"手工搬运"就是"依赖已生成文件"的根源，已去掉。
 """
 import json, math
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE / "track_full.json"
+OUT = HERE / "out"
+
+
+def _find(name):
+    """按 out/ → scripts/ → scripts/kml/ 顺序找输入（兼容历史目录布局）。"""
+    for p in (OUT / name, HERE / name, HERE / "kml" / name):
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"找不到 {name}。先跑：python parse_track_kml.py <你的.kml>")
+
+
+SRC = _find("track_full.json")
 
 R = 6371008.8
 
@@ -105,13 +122,16 @@ def main():
         prof.append([round(tgt / 1000, 3), round(sm[j], 1)])
         tgt += 100.0
 
-    (HERE / "track_real.json").write_text(
+    OUT.mkdir(exist_ok=True)
+    (OUT / "track_real.json").write_text(
         json.dumps({"pts": simp, "total_km": round(cum[-1] / 1000, 3),
                     "asc": round(up), "desc": round(dn),
                     "ele_min": round(min(sm)), "ele_max": round(max(sm))},
                    ensure_ascii=False), encoding="utf-8")
-    (HERE / "profile_real.json").write_text(json.dumps(prof, ensure_ascii=False), encoding="utf-8")
-    print("written track_real.json / profile_real.json  剖面点", len(prof))
+    (OUT / "profile_real.json").write_text(json.dumps(prof, ensure_ascii=False), encoding="utf-8")
+    print(f"written out/track_real.json + out/profile_real.json  剖面点 {len(prof)}")
+    print(f"  原始里程 {cum[-1]/1000:.2f} km | 滤波后爬升 {up:.0f} m 下降 {dn:.0f} m")
+    print("下一步：按上面的数字改 route_def.py，然后 python make_terrain.py")
 
 
 if __name__ == "__main__":

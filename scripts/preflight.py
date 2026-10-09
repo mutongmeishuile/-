@@ -62,25 +62,88 @@ def main():
     else:
         fail += bad("没找到 Chrome/Edge —— 长图渲染无从谈起")
 
-    print("③ 路径约定")
+    print("③ 路径约定（全部中间产物统一在 scripts/out/）")
     out = HERE / "out"
     if out.is_dir():
         ok(f"scripts/out/ 存在（{len(list(out.glob('*.json')))} 个 json）")
     else:
-        print("  [..]   scripts/out/ 不存在（首次运行正常，make_terrain 会建）")
-    for f in ("make_terrain.py", "fetch_osm.py"):
-        if not (HERE / f).is_dir() and (HERE / f).exists():
+        print("  [..]   scripts/out/ 不存在（首次运行正常，各脚本会建）")
+    for f in ("guide_common.py", "route_def.py", "prep_track.py", "fetch_osm.py",
+              "make_terrain.py", "build_guide.py", "shoot_guide.py",
+              "render_map_hi.py", "make_gpx.py", "qa_guide.py"):
+        if (HERE / f).exists():
             ok(f"{f} 就位")
         else:
-            fail += bad(f"缺 {f}")
-    # ⚠ 两套 out/ 是本次真实返工项：有的脚本写 HERE/"out"，有的写上一级
+            fail += bad(f"缺 {f}（通用脚本缺一不可，别从旧项目拷贝残缺副本）")
+    # ⚠ 两套 out/ 是真实返工项：有的脚本写 HERE/"out"，有的写上一级
     if (HERE.parent / "out").is_dir():
         print("  [warn] 上一级也有 out/ —— 确认所有脚本统一用 HERE/'out'，别两套并存")
 
-    print("④ KML 格式（决定用哪个解析脚本，选错会得到 0 个点）")
+    print("④ route_def.py（唯一需要按线路改的文件）")
+    track_ready = any((p / "track_real.json").exists()
+                      for p in (out, HERE, HERE / "kml"))
+    # ⚠ 首次运行（还没 prep）时，数字区与线路文案**本来就填不了** ——
+    #   里程/爬升要等 prep_kml_track.py 算完才有。把它们判成 FAIL 会把人带错方向
+    #   （让人先去补数字，而正确顺序是先 prep）。所以按 track_ready 分流。
+    try:
+        sys.path.insert(0, str(HERE))
+        import route_def as RD
+        c = getattr(RD, "CFG", {})
+        need = ("file_stem", "title", "sub", "days", "day_cards", "notes", "src")
+        miss = [k for k in need if not c.get(k)]
+        if not track_ready:
+            print("  [..]   route_def 尚未填（首次运行正常）—— 正确顺序："
+                  "先 prep_track.py 拿到里程/爬升，再回来填数字区与文案")
+            if miss:
+                print(f"         待填 CFG：{miss}")
+            print(f"         待填 POIS {len(getattr(RD, 'POIS', []))} 个 · "
+                  f"分日 {len(c.get('days', []))} 天")
+        else:
+            if miss:
+                fail += bad(f"CFG 缺必填项：{miss}")
+            else:
+                ok("CFG 必填项齐全")
+            nv = len(getattr(RD, "POIS", []))
+            print(f"        POIS {nv} · MARKS {len(getattr(RD, 'MARKS', []))} · "
+                  f"SCHEDULE {len(getattr(RD, 'SCHEDULE', []))} · 分日 {len(c.get('days', []))}")
+            if nv < 4:
+                print("  [warn] POI 少于 4 个 —— 地图上几乎没有标注，确认不是漏改")
+            for k in ("TOTAL_KM", "ASC", "DESC"):
+                v = getattr(RD, k, None)
+                if v in (None, 0):
+                    fail += bad(f"{k} 未填（数据区要从 prep_kml_track.py 的输出抄）")
+            print(f"        里程 {getattr(RD,'TOTAL_KM',None)} km · "
+                  f"爬升 {getattr(RD,'ASC',None)} / 下降 {getattr(RD,'DESC',None)} m")
+        if not c.get("kml"):
+            print("  [..]   CFG['kml'] 未填 —— prep_track.py 需手工传 KML 路径")
+        else:
+            ok(f"KML 已登记：{c['kml']}")
+    except FileNotFoundError as e:
+        # 全新项目、还没跑过轨迹准备时，这是**正常状态**，不是错误
+        print(f"  [..]   route_def 还读不到轨迹数据（{e}）")
+        print("         → 首次运行请先：python prep_track.py <你的.kml>")
+    except Exception as e:                                          # noqa
+        fail += bad(f"route_def.py 导入失败：{e!r}")
+    if track_ready:
+        ok("out/track_real.json 已就位")
+
+    print("⑤ KML 格式（决定用哪个解析脚本，选错会得到 0 个点）")
     kml = sys.argv[1] if len(sys.argv) > 1 else None
     if not kml:
-        print("  [..]   没传 KML，跳过（用法：python preflight.py 路径.kml）")
+        # 没传就退回 route_def.CFG["kml"]（与 prep_track.py 同一套解析）
+        try:
+            sys.path.insert(0, str(HERE))
+            from route_def import CFG as _C
+            k = (_C or {}).get("kml")
+            if k:
+                kml = next((str(p) for p in (Path(k), HERE.parent / k, HERE / k) if p.exists()),
+                           str(Path(k)))
+                print(f"        （用 route_def.CFG['kml']：{kml}）")
+        except Exception:                                           # noqa
+            pass
+    if not kml:
+        print("  [..]   没传 KML，跳过（用法：python preflight.py 路径.kml，"
+              "或在 route_def.CFG 里登记 'kml'）")
     else:
         p = Path(kml)
         if not p.exists():

@@ -16,7 +16,8 @@
   下载 DEM 瓦片 → 拼接 → 裁剪到 bbox → (a) Horn 晕渲  (b) marching-squares 等高线
   → 分层设色(hypsometric tint) × 晕渲 → 叠等高线 → 输出底图 JPEG + base_meta.json
 
-输出与 build_map.py 完全兼容（同名 base_map.jpg / base_meta.json），可直接被 map_svg.py 投影叠加轨迹。
+输出 `out/base_map.jpg` + `out/base_meta.json`，投影与窗口信息全部落在 meta 里，
+下游（map_svg / render_map_hi）一律从 meta 读，不各自硬编码 z 或 bbox。
 """
 import io, json, math, queue, sys, threading, time, urllib.request
 from pathlib import Path
@@ -30,12 +31,18 @@ OUT.mkdir(exist_ok=True)
 CACHE = HERE / "demcache"
 CACHE.mkdir(exist_ok=True)
 
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import guide_common as GC                                           # noqa: E402
+
 TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 UA = "hiking-route-guide/1.0 (local offline terrain render)"
 
-# ---- 目标窗口 / 出图参数（与 build_map.py 保持同一 bbox）----
-LON0, LAT0, LON1, LAT1 = 117.7765, 30.4120, 117.8625, 30.5980
-# DEM 瓦片级别必须与 build_map.Z 一致（map_svg.py 的 projector 用 build_map.Z 做投影），
+# ---- 目标窗口 / 出图参数 ----
+# 窗口**不再写死**：由 guide_common.resolve_bbox() 从轨迹包围盒自动推（+ 留白），
+# 或由 route_def.CFG['bbox'] 显式覆盖。fetch_osm.py 用同一个函数取同一个窗口，
+# 两处从此不可能不一致 —— 旧版各写一份常量，改了这头忘了那头就会整体错位。
+# DEM 瓦片级别必须与底图投影一致（map_svg.py 的 projector 用 meta["z"]），
 # 否则轨迹与底图会整体错位。terrarium 的最高级别就是 z15（≈4.1 m/px @30.5°）。
 DEM_Z = 15
 # ---- 超采样（放大不糊的关键）----
@@ -52,13 +59,20 @@ CONTOUR_MAJOR = 100.0   # 计曲线间隔（加粗）
 CONTOUR_MINOR = 20.0    # 首曲线间隔
 AZ, ALT = 315.0, 45.0   # 晕渲光源：西北方向、高度角 45°（制图惯例）
 Z_FACTOR = 1.4          # 垂直夸张，让低山也有立体感
-UNSHARP = (3, 55, 4)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补偿 30 m DEM 的天然柔化
+UNSHARP = (3, 45, 3)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补偿 30 m DEM 的天然柔化
 # JPEG 参数：地图全是**彩色细线 + 小字**，必须关掉默认的 4:2:0 色度抽样（subsampling=0 → 4:4:4）。
 # 4:2:0 会把色度通道砍到 1/4 分辨率，彩色线条一律发虚发彩边 —— 这是"放大看不清"的隐形主因之一。
 JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 # 等高线线宽（按栅格像素）：3008 分辨率下的 (首,计)。计曲线是首曲线的 2 倍宽 + 更深色。
 # 注意：这里刻意画细 —— 20 m 间距在陡坡会密集成排，线一粗就糊成"棕色泥"，那才是"看不清"的主因。
-CONTOUR_DILATE = (0, 2)
+CONTOUR_DILATE = (0, 1)
+# 等高线配色 + alpha 融合：硬像素覆盖会留下高反差硬边，alpha 写回才像"印在纸上"
+C_MINOR, C_MAJOR = (172, 155, 136), (139, 111, 84)
+A_MINOR, A_MAJOR = 0.55, 0.86
+# 缓坡"起云"：垂直夸张会把 30 m DEM 的微起伏一起放大，按真实坡度加权渐回平地基准
+FLAT_ANGLE = 2.5
+HS_SMOOTH = 3           # 明暗柔化半径（DEM 像素）——柔和明暗 + 锐利线划 = 纸质地形图质感
+VOID_MAD = 220.0        # 偏离局部参考面多少米算 SRTM 空洞
 
 # ---- 等高线高程标注 ----
 # 只有计曲线（每 100 m）标数字，首曲线标了就成"数字墙"。
@@ -69,7 +83,7 @@ LABEL_SEP = 130          # 任意两个标注之间的最小间距（防聚成�
 LABEL_MAX_ANGLE = 62     # 局部倾角超过此值就不标（斜着读不出来的不如不标）
 LABEL_WINDOW = 26        # 估计局部走向的采样窗口（±窗口长度）
 LABEL_FONT = 11          # 字号（逻辑像素）
-LABEL_FILL = (84, 60, 40)
+LABEL_FILL = (105, 79, 55)
 LABEL_HALO = (252, 250, 245)
 MS_STEP = 1              # marching squares 用的 DEM 抽稀步长（1 = 全分辨率，与栅格线严格同位）
 
@@ -124,7 +138,7 @@ def _get(url, fp, timeout=40, retries=3):
     return None
 
 
-def load_dem(z, lon0, lat0, lon1, lat1, workers=10):
+def load_dem(z, lon0, lat0, lon1, lat1, workers=24):
     """下载 Terrarium 瓦片 → 拼接 → 裁剪到 bbox。返回 (dem[H,W] 米, meta 片段)。"""
     x0f, y0f = lonlat_to_px(lon0, lat1, z)
     x1f, y1f = lonlat_to_px(lon1, lat0, z)
@@ -180,7 +194,14 @@ def load_dem(z, lon0, lat0, lon1, lat1, workers=10):
 
 # ------------------------------------------------------------------ 晕渲
 def hillshade(dem, z, lat_c, az=AZ, alt=ALT, zf=Z_FACTOR):
-    """GDAL Horn 算法。返回 0–1 的明暗值。"""
+    """GDAL Horn 算法。返回 0–1 的明暗值。
+
+    两道后处理（缺一个整张图就会"发脏 / 起云"）：
+      * 按**真实坡度**加权：坡度 <FLAT_ANGLE 的缓坡把明暗渐回平地基准，
+        否则垂直夸张放大的微起伏会在缓坡上结成灰绿"云斑"与横向细条纹；
+      * 明暗柔化 HS_SMOOTH 个 DEM 像素：柔和明暗 + 锐利线划才是纸质地形图的质感。
+        PIL 的 GaussianBlur 不支持 "F" 模式，用「降采样 BOX → 升采样 BICUBIC」等效实现。
+    """
     res = 156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)   # m/px（Web Mercator）
     p = np.pad(dem, 1, mode="edge")
     a, b, c = p[:-2, :-2], p[:-2, 1:-1], p[:-2, 2:]
@@ -188,23 +209,117 @@ def hillshade(dem, z, lat_c, az=AZ, alt=ALT, zf=Z_FACTOR):
     g, h, i = p[2:, :-2], p[2:, 1:-1], p[2:, 2:]
     dzdx = ((c + 2 * f + i) - (a + 2 * d + g)) / (8 * res)
     dzdy = ((g + 2 * h + i) - (a + 2 * b + c)) / (8 * res)
-    slope = np.arctan(np.hypot(dzdx, dzdy) * zf)
+    tan_slope = np.hypot(dzdx, dzdy)
+    slope = np.arctan(tan_slope * zf)
     aspect = np.arctan2(dzdy, -dzdx)
     azr, altr = math.radians(az), math.radians(alt)
     hs = np.sin(altr) * np.cos(slope) + np.cos(altr) * np.sin(slope) * np.cos(azr - aspect)
+    hs = np.clip(hs, 0.0, 1.0)
+    w = np.clip(np.arctan(tan_slope) / math.radians(FLAT_ANGLE), 0.0, 1.0)
+    hs = hs * w + math.sin(math.radians(ALT)) * (1.0 - w)
+    if HS_SMOOTH > 1:
+        im = Image.fromarray(hs.astype(np.float32), "F")
+        k = max(1, HS_SMOOTH)
+        hs = np.asarray(im.resize((max(1, im.width // k), max(1, im.height // k)), Image.BOX)
+                        .resize(im.size, Image.BICUBIC), np.float32)
     return np.clip(hs, 0.0, 1.0)
 
 
+def fill_voids(dem):
+    """填 SRTM 空洞：terrarium 在陡峭山区有零星 void（本线 1692 px ≈ 0.02%），
+    不填会在晕渲上留下黑坑、等高线上炸出一圈 -5362 m 的假闭合线。
+
+    判据用「中位数 ±2500 m」而不是硬编码海拔 —— 换高程带也不用改。
+    填充只在空洞外接框 +300 px 的子窗口里迭代，避免对全图做上百次卷积。
+    """
+    # 判据用「局部参考面」而不是全局中位数 ±固定值：
+    # 空洞值跨度很大（-5362 … 3180 m），任何固定阈值都会漏掉贴着真实高程那一批
+    # （实测 ±2500 m 漏了 600 余个 1736–2500 m 的空洞，晕渲上留下一片黑坑）。
+    # 做法：先按分位数裁剪掉极端值，再做盒式模糊当"局部地形参考面"，
+    # 偏离参考面 > VOID_MAD 的就是空洞 —— 与高程带无关，换地区也不用改。
+    p1, p99 = np.nanpercentile(dem, [1.0, 99.0])
+    med = float(np.nanmedian(dem))
+    im = Image.fromarray(np.clip(dem, p1, p99).astype(np.float32), "F")
+    k = 6
+    ref = np.asarray(im.resize((max(1, im.width // k), max(1, im.height // k)), Image.BOX)
+                     .resize(im.size, Image.BICUBIC), np.float32)
+    bad = np.abs(dem - ref) > VOID_MAD
+    if not bad.any():
+        return dem
+    print(f"   空洞判据：偏离局部参考面 > {VOID_MAD:.0f} m（p1={p1:.0f} p99={p99:.0f}）")
+    ys, xs = np.nonzero(bad)
+    m = 300
+    y0, y1 = max(0, ys.min() - m), min(dem.shape[0], ys.max() + m + 1)
+    x0, x1 = max(0, xs.min() - m), min(dem.shape[1], xs.max() + m + 1)
+    sub = dem[y0:y1, x0:x1].astype(np.float32)
+    sub[bad[y0:y1, x0:x1]] = np.nan
+    for _ in range(600):
+        nan = np.isnan(sub)
+        if not nan.any():
+            break
+        s = np.zeros_like(sub)
+        c = np.zeros_like(sub)
+        for sh in (np.roll(sub, 1, 0), np.roll(sub, -1, 0),
+                   np.roll(sub, 1, 1), np.roll(sub, -1, 1)):
+            v = ~np.isnan(sh)
+            s += np.where(v, sh, 0.0)
+            c += v.astype(np.float32)
+        sub = np.where(nan, np.where(c > 0, s / np.maximum(c, 1.0), med), sub)
+    out = dem.copy()
+    out[y0:y1, x0:x1] = sub
+    print(f"   填补 SRTM 空洞 {int(bad.sum())} px（中位 {med:.0f} m 基准）")
+    return out
+
+
 # ------------------------------------------------------------------ 分层设色
-_HYPSO = [(0, (154, 196, 156)), (200, (196, 219, 168)), (500, (231, 230, 180)),
-          (900, (226, 205, 152)), (1200, (215, 175, 128)), (1600, (198, 150, 108)),
-          (2200, (176, 138, 110)), (3000, (150, 120, 105))]
+# ⚠ 血泪教训：这里的色带**不能写死高程档位**（曾照搬党岭 3200–5400 m 的档位到
+#   峨眉山 470–3085 m，hypso() 把整个 DEM np.clip 到最低一档 —— 全图变成一片单色，
+#   只剩晕渲在撑立体感，"分层设色"名存实亡。而且**不报错、不告警**，极难察觉。
+# → 改成通用色带，按**本区实际高程分位**拉伸铺满，换地区自动适配。
+#   全程压低饱和度，把"跳出来"的资格留给轨迹与注记。
+#   另：色带顶端是否给"雪色"要看本区有没有雪线 —— 亚热带山体（峨眉山 470–3085 m）
+#   并没有常年积雪，涂成冷白是误导，故分两套。
+_RAMP_SNOW = [(0.00, (148, 170, 138)),   # 谷底灰绿
+              (0.16, (176, 192, 148)),   # 低山林
+              (0.34, (203, 205, 163)),   # 中山草甸
+              (0.52, (222, 208, 172)),   # 亚高山草甸
+              (0.70, (226, 196, 166)),   # 流石滩
+              (0.84, (212, 178, 160)),   # 裸岩陶土
+              (0.93, (214, 204, 202)),   # 近雪线
+              (1.00, (232, 236, 244))]   # 雪线冷白
+# 无雪线路（峨眉山 470–3085 m 实测）：色带顶端停在裸岩陶土，且**绿段刻意拉长**。
+# 依据：本线 46.8 km 里 40 km 都在 700–2100 m 的森林带，若按线性色带铺，
+#   海拔刚过 1500 m 就转土黄 —— 全图主色会变成棕黄，既不符合"这座山是绿的"，
+#   也会重犯本项目早期"底图发土黄"的老问题。→ 让 0–0.55 都留在绿系，
+#   只有接近山顶（约 2300 m 以上）的裸岩带才转陶土。
+_RAMP_ALPINE = [(0.00, (150, 172, 140)),   # 谷底灰绿
+                (0.22, (170, 188, 145)),   # 低山林
+                (0.45, (186, 196, 152)),   # 中山林（仍偏绿）
+                (0.62, (203, 202, 160)),   # 中山草甸·微黄
+                (0.78, (218, 199, 164)),   # 亚高山草甸
+                (0.90, (216, 186, 162)),   # 流石滩
+                (1.00, (210, 176, 158))]   # 山顶裸岩陶土
+SNOWLINE = 4300.0       # 本区最高点达到此高程，色带才启用雪色端
+RAMP_MIN_SPAN = 150.0   # 全域高差小于此值（平地/丘陵线路）就按中心值 ±75 m 展开，避免拉出假色阶
+
+
+def ramp_stops(dem):
+    """按本区 DEM 的 p2–p98 把通用色带拉伸成实际色阶表。"""
+    lo, hi = (float(v) for v in np.nanpercentile(dem, (2, 98)))
+    if hi - lo < RAMP_MIN_SPAN:
+        c = (lo + hi) / 2.0
+        lo, hi = c - RAMP_MIN_SPAN / 2.0, c + RAMP_MIN_SPAN / 2.0
+    ramp = _RAMP_SNOW if hi >= SNOWLINE else _RAMP_ALPINE
+    kind = "含雪色端" if ramp is _RAMP_SNOW else "无雪·顶端=裸岩陶土"
+    print(f"   分层设色 色带区间 {lo:.0f}–{hi:.0f} m（通用 ramp × 本区 p2–p98，{kind}）")
+    return [(lo + f * (hi - lo), col) for f, col in ramp]
 
 
 def hypso(dem):
-    """高程 → RGB 分层设色。"""
-    stops = np.array([s[0] for s in _HYPSO], float)
-    cols = np.array([s[1] for s in _HYPSO], float)
+    """高程 → RGB 分层设色（色阶按本区高程自适应，见 _RAMP 的说明）。"""
+    stops_tbl = ramp_stops(dem)
+    stops = np.array([s[0] for s in stops_tbl], float)
+    cols = np.array([s[1] for s in stops_tbl], float)
     d = np.clip(dem, stops[0], stops[-1])
     out = np.zeros(dem.shape + (3,), np.float32)
     for ch in range(3):
@@ -214,7 +329,8 @@ def hypso(dem):
 
 # 晕渲调制：环境光比例越高整体越亮、对比越弱。
 # 太高（>0.75）地形会"平"到看不见，太低（<0.4）背光面发黑、压掉等高线。
-AMBIENT, DIRECTIONAL = 0.62, 0.45
+AMBIENT, DIRECTIONAL = 0.70, 0.38
+HL_CLIP, HL_KEEP = 240.0, 0.35   # 高光软限幅：超 240 只保留 35%，亮而不死白
 
 
 # ------------------------------------------------------------------ 等高线
@@ -255,8 +371,11 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     b_major = np.floor(dem_out / major).astype(np.int32)
     m_minor = _dilate_n(_band_edges(b_minor), w_minor)
     m_major = _dilate_n(_band_edges(b_major), w_major)
-    rgb[m_minor] = (176, 152, 128)         # 首曲线：浅棕，压低存在感
-    rgb[m_major] = (126, 100, 72)          # 计曲线：深棕、加粗
+    # alpha 融合写回（rgb 是 uint8，必须过 float，否则整数回绕会把线画成黑块）
+    f = rgb.astype(np.float32)
+    for mask, col, a in ((m_minor, C_MINOR, A_MINOR), (m_major, C_MAJOR, A_MAJOR)):
+        f[mask] = f[mask] * (1 - a) + np.asarray(col, np.float32) * a
+    np.copyto(rgb, np.clip(f, 0, 255).astype(np.uint8))
     n_lv = int((dem_out.max() - dem_out.min()) // minor)
     print(f"   等高线 每 {minor:.0f} m（计曲线每 {major:.0f} m），约 {n_lv} 级，"
           f"线覆盖 {m_minor.mean()*100:.1f}% 像素")
@@ -522,13 +641,18 @@ def avoid_points(meta, scale_raster, ss):
         return (x - ox) * scale_raster, (y - oy) * scale_raster
 
     pts = []
-    try:
-        tr = json.loads((HERE / "kml" / "track_real.json").read_text(encoding="utf-8"))
-        for p in tr["pts"]:
-            x, y = proj(p["lon"], p["lat"])
-            pts.append((x, y, 7.0 * ss))
-    except Exception as e:                                         # noqa
-        print(f"   （无轨迹避让：{e}）")
+    for cand in (OUT / "track_real.json", HERE / "track_real.json",
+                 HERE / "kml" / "track_real.json"):
+        if not cand.exists():
+            continue
+        try:
+            tr = json.loads(cand.read_text(encoding="utf-8"))
+            for p in tr["pts"]:
+                x, y = proj(p["lon"], p["lat"])
+                pts.append((x, y, 7.0 * ss))
+            break
+        except Exception as e:                                     # noqa
+            print(f"   （轨迹避让读取失败：{e}）")
     try:
         sys.path.insert(0, str(HERE))
         from route_def import POIS
@@ -542,8 +666,12 @@ def avoid_points(meta, scale_raster, ss):
 
 # ------------------------------------------------------------------ 主流程
 def build_terrain():
+    LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
+    GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "make_terrain")
+    print(f"[1/6] 地图窗口（{src}）: {LON0}, {LAT0} → {LON1}, {LAT1}", flush=True)
     print(f"[1/6] 下载 DEM（terrarium z{DEM_Z}）…")
     dem, meta = load_dem(DEM_Z, LON0, LAT0, LON1, LAT1)
+    dem = fill_voids(dem)
     lat_c = (LAT0 + LAT1) / 2
     lo, hi = float(np.nanmin(dem)), float(np.nanmax(dem))
 
@@ -559,7 +687,10 @@ def build_terrain():
     print("[3/6] 分层设色 + 合成 …")
     rgb = hypso(dem)
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）
-    img = np.clip(rgb * (AMBIENT + DIRECTIONAL * hs)[..., None], 0, 255).astype(np.uint8)
+    img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
+    over = img > HL_CLIP
+    img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
+    img = np.clip(img, 0, 255).astype(np.uint8)
     # BICUBIC 而非 LANCZOS：LANCZOS 在陡崖等高反差处会产生振铃，被随后的 USM 放大成"颗粒噪点"。
     pil = Image.fromarray(img, "RGB").resize((RASTER_W, RASTER_H), Image.BICUBIC)
     # USM 提锐：30 m DEM 在 z15 已被过采样 7×，天生柔；提锐才能让山脊/冲沟"立"起来
@@ -598,9 +729,16 @@ def build_terrain():
         from draw_osm import draw_overlay
         # 攻略自己的 POI 名要抑制底图重复注记：重名时海拔口径会打架
         # （OSM 十王峰 1344.4 vs 实测轨迹 1345.5），一律以实测轨迹为准。
+        # ⚠ 只按全名匹配会漏 —— route_def 的 POI 常带后缀（如「万佛顶 · 全程最高」
+        #   「雷洞坪 · 观光车终点」），而 OSM 的注记是「万佛顶」「雷洞坪」，
+        #   全名比对不成立，底图上会并排出现两条同地注记。
+        #   → 除全名外，再把「·」前的核心地名也加进跳过表。
         try:
             from route_def import POIS
-            skip = {p[0] for p in POIS}
+            skip = set()
+            for _p in POIS:
+                skip.add(_p[0])
+                skip.add(_p[0].split("·")[0].strip())
         except Exception:                                          # noqa
             skip = set()
         pil = draw_overlay(pil, m, OUT / "osm.json", skip_names=skip,

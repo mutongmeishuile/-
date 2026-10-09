@@ -7,8 +7,13 @@
   自己渲染还能完全控制配色、线宽、注记密度。
 
 用法：
-    python fetch_osm.py                 # 用默认 bbox 抓取并缓存
+    python fetch_osm.py                 # 用轨迹自动推的窗口抓取并缓存
     python fetch_osm.py --force         # 忽略缓存重新抓
+    python fetch_osm.py --soft          # 全镜像失败也算成功（流水线不中断，只丢矢量层）
+
+**这一步是可选的**：抓不到只意味着底图上少一层道路/水系/地名，
+地形晕渲与等高线照常出图。所以流水线默认以 `--soft` 调用它，
+Overpass 集体抽风不该让整条流水线挂掉。
 """
 import argparse, json, sys, time, urllib.parse, urllib.request
 from pathlib import Path
@@ -18,8 +23,13 @@ OUT = HERE / "out"
 OUT.mkdir(exist_ok=True)
 CACHE = OUT / "osm.json"
 
-# 与 make_terrain.py / build_map.py 同一窗口
-LON0, LAT0, LON1, LAT1 = 117.7765, 30.4120, 117.8625, 30.5980
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import guide_common as GC                                           # noqa: E402
+
+# 窗口与 make_terrain.py 完全同源（同一个 resolve_bbox()）——
+# 旧版这里写死了一份常量，改线路时极易只改一处，导致矢量与地形整体错位。
+LON0, LAT0, LON1, LAT1, _src = GC.resolve_bbox()
 BBOX = f"{LAT0},{LON0},{LAT1},{LON1}"
 
 UA = "hiking-route-guide/1.0 (offline guide map; contact: local user)"
@@ -43,25 +53,35 @@ QUERY = f"""
 out geom;
 """
 
-# 备用镜像（Overpass 主站偶尔 429/504）
+# Overpass 镜像顺序 —— **先探活再定序**。
+# 实测教训：某一轮 overpass-api.de 持续 504、kumi.systems 500、
+# osm.jp 直接 SSL 证书域名不匹配（是硬失败，连重试都没意义），三个全灭。
+# 换成 overpass.osm.ch 一次就通。→ 把稳定性好的瑞士站放首位，
+# 并把 osm.jp 从列表里去掉（证书不匹配，不值得占一个轮次）。
 MIRRORS = [
-    "https://overpass-api.de/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",         # 实测最稳
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass-api.de/api/interpreter",         # 主站，繁忙时 429/504
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.osm.jp/api/interpreter",
 ]
 
 
-def fetch(force=False):
+def fetch(force=False, soft=False, rounds=2):
+    """抓取并缓存。soft=True 时，全镜像失败返回空要素集而不是抛错。
+
+    失败不是异常而是**可降级状态**：底图没矢量层也能看，噪点比断链好。
+    """
     if CACHE.exists() and not force:
         d = json.loads(CACHE.read_text(encoding="utf-8"))
         print(f"命中缓存 {CACHE.name}：{len(d['elements'])} 个要素")
         return d
 
+    print(f"窗口 {LON0}, {LAT0} → {LON1}, {LAT1}")
     last = None
-    for host in MIRRORS:
-        for attempt in range(2):
+    for rnd in range(rounds):                      # 多轮：每轮把镜像列表走一遍
+        for host in MIRRORS:
             try:
-                print(f"→ {host} (第 {attempt + 1} 次)", flush=True)
+                print(f"→ {host}（第 {rnd + 1} 轮）", flush=True)
                 req = urllib.request.Request(
                     host,
                     data=urllib.parse.urlencode({"data": QUERY}).encode(),
@@ -78,9 +98,17 @@ def fetch(force=False):
                 return d
             except Exception as e:                                   # noqa
                 last = e
-                print("  失败:", repr(e)[:120])
-                time.sleep(3 + 4 * attempt)
-    raise SystemExit(f"全部镜像失败：{last}")
+                print("  失败:", repr(e)[:120], flush=True)
+                time.sleep(2 + 3 * rnd)
+
+    # 全挂：写一份空缓存，让下游"有文件可读"，只是没有矢量。
+    empty = {"elements": [], "_failed": repr(last)[:200]}
+    CACHE.write_text(json.dumps(empty, ensure_ascii=False), encoding="utf-8")
+    msg = f"全部镜像失败（{len(MIRRORS)} 个 × {rounds} 轮）：{last}"
+    if soft:
+        print("!! " + msg + "\n   —— 已按 --soft 降级：本轮不叠加 OSM 矢量，底图照常出。")
+        return empty
+    raise SystemExit(msg)
 
 
 def summarize(d):
@@ -119,8 +147,13 @@ def summarize(d):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="忽略缓存重新抓取")
+    ap.add_argument("--soft", action="store_true",
+                    help="全镜像失败也算成功（流水线不中断，只是底图少一层矢量）")
     a = ap.parse_args()
-    data = fetch(a.force)
+    data = fetch(a.force, a.soft)
+    if not data.get("elements"):
+        print("\n（无矢量要素，跳过汇总）")
+        sys.exit(0)
     _, names = summarize(data)
     print("\n具名要素（前 40）：")
     seen = set()

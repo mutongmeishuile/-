@@ -88,7 +88,7 @@ python scripts/tiles.py          # 探测 z13–z17 是否可用
 站点会**整段不可用**：所有 zoom、带不带 UA、带不带扩展名**一律 567**。此时不是你的请求姿势问题，是站点侧拦截策略收紧了。
 
 - 处置：**不要死磕**。若工作区里已有一版生成过的 HTML，它的 `<img src="data:image/jpeg;base64,...">` 里就嵌着上次的完整底图，直接 base64 解码还原 `out/base_map.jpg`，并把 `build_base_map.py` 的窗口 bbox 改回**上次成功那一版的 bbox**（`out/base_meta.json` 里也留着 `box`/`bbox`/`z`/`tx0`/`ty0`），即可继续出图；
-- 探活脚本：`python scripts/preview_tiles.py`（比 `tiles.py` 更轻，只打几个固定瓦片）。
+- 探活脚本：`python scripts/tiles.py`（逐源探活 z12–z16，并做"解码后缩到 32×32 看均值"的与源无关判据）。
 
 ---
 

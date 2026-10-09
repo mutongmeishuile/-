@@ -50,10 +50,11 @@ elev_m = a[..., 0] * 256.0 + a[..., 1] + a[..., 2] / 256.0 - 32768.0
 
 ## 2. 坑一：DEM 瓦片的 z 必须等于底图投影的 z
 
-这是最容易翻车的地方。`scripts/build_base_map.py` 的 `projector()` 用**模块级 `Z`** 把经纬度投到输出像素，
-`scripts/map_svg.py` 也 `from build_map import Z` 算比例尺。所以：
+这是最容易翻车的地方。底图投影用的 z 存在 `out/base_meta.json` 的 `z` 字段里，
+下游**一律从 meta 读**（`guide_common.projector_of(meta)` / `m_per_px(meta)`）——
+B 路线遗留脚本 `build_base_map.py` 曾用模块级 `Z` 硬编码，那是错的做法，别照抄。所以：
 
-> **`make_terrain.py` 的 `DEM_Z` 必须 == `build_map.py` 的 `Z`。**
+> **`make_terrain.py` 的 `DEM_Z` 必须 == 下游所有投影用的 z**，而唯一真相源是 `base_meta.json`。
 
 否则 `base_meta.json` 里的 `tx0/ty0` 属于 z14 网格，而 projector 按 z15 算 —— 轨迹会整体飘走
 （差一个 2 倍尺度，肉眼就是"线完全不在山上"）。
@@ -228,7 +229,7 @@ out geom;
 - `out/osm.json` — OSM 原始要素缓存
 - `out/base_meta.json` — `{size, scale, raster, ss, box, bbox, z, tx0, ty0, source, attribution}`
 
-于是 `map_svg.py` / `build_jiuhua.py` 直接就能用新底图，轨迹、POI、剖面全部照旧。
+于是 `map_svg.py` / `build_guide.py` 直接就能用新底图，轨迹、POI、剖面全部照旧。
 
 ---
 

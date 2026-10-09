@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
-"""九华山南北穿越 · 底图构建
+"""B 路线 · 底图构建（在线瓦片）——**默认不用**，只在用户点名某个瓦片服务时走。
 下载 XYZ 瓦片 → 拼接 → 裁剪到目标经纬度窗口 → 输出底图 + 投影函数
+
+⚠ 本技能默认走 C 路线（`make_terrain.py` 自渲染），无速率限制、无版权风险。
+  在线瓦片站随时可能整站 567 / 被 WAF 拦 / 要求 API key，只有在用户明确指定时才用本脚本；
+  用之前**先 `python tiles.py` 探活**。
 
 换底图源：改下面的 TILE_SOURCE（见 tiles.py 的 SOURCES 表）。
   * "318318"        原专线地形渲染（等高线 20 m）—— 2026-09-29 起整站 567，暂不可用
@@ -10,7 +14,7 @@
   * "osmde"/"osmfr" 标准 OSM 风格（非地形）
 注意：tile.openstreetmap.org 官方站的 Tile Usage Policy **禁止批量下载**，本项目不采用。
 """
-import base64, io, json, math
+import base64, io, json, math, sys
 from pathlib import Path
 from PIL import Image
 
@@ -20,10 +24,14 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 OUT.mkdir(exist_ok=True)
 
-# 目标经纬度窗口（含线路全线 + 必要的地形上下文）
-# 注：2026-09-29 瓦片服务（hiking.318318.xyz）开始对整站返回 567，无法重下；
-#     此窗口即先前已成功下载的底图窗口，实测 KML 轨迹（南起 30.4149）落在其内。
-LON0, LAT0, LON1, LAT1 = 117.7765, 30.4120, 117.8625, 30.5980
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import guide_common as GC                                           # noqa: E402
+
+# 目标经纬度窗口：**不写死**，与 make_terrain.py / fetch_osm.py 同源，
+# 由 guide_common.resolve_bbox() 从轨迹包围盒推（+8% 留白），可在 route_def.CFG["bbox"] 覆盖。
+LON0, LAT0, LON1, LAT1, _src = GC.resolve_bbox()
+GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "build_base_map")
 
 TILE_SOURCE = "318318"
 Z = 15

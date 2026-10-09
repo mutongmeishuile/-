@@ -8,24 +8,27 @@ agent_created: true
 
 ## 用途
 
-把一条徒步线路的资料（别人发的路线海报、KML/GPX 轨迹、口述数据、或用户指定的瓦片底图）做成两类交付物：
+把一条徒步线路的资料（别人发的路线海报、KML/GPX 轨迹、口述数据、或用户指定的瓦片底图）做成三类交付物：
 
 1. **自包含 HTML 攻略页**：顶部数据条 → 全线地图（SVG，真实轨迹 / 按天分色）→ 海拔剖面图（SVG）→ 逐日攻略卡 → 关键提示 →（可选）数据说明 + 底图与轨迹来源。
-2. **分享用长图 PNG**：把上述页面渲染成 2300px 左右宽的竖版长图，可直接发微信群/朋友圈。
+2. **分享用长图 PNG**：把上述页面渲染成 ~2340px 宽的竖版长图，可直接发微信群/朋友圈。
 3. **可导航 GPX**（有真实轨迹时）：`<trkpt>` 全量轨迹点 + 具名 `<wpt>`，供导入手表/两步路。
 
 交付物落盘到工作区一个子目录，例如 `<workspace>/<线路名>攻略/`，含
 
 | 文件 | 规格 | 用途 |
 |---|---|---|
-| `XX-攻略.html` | 单文件、离线可开、**同时适配桌面与手机** | 电脑上读 |
-| `XX-攻略长图.png` | ~2340 宽 | 电脑看 / 存档 |
-| `XX-攻略长图-手机版.png` | ~860 宽（430 CSS × 2） | **微信直发**（满宽即可读） |
+| `XX-攻略.html` | 单文件、离线可开、**同时适配桌面与手机** | 电脑上读；手机直接看它 |
+| `XX-攻略长图.png` | ~2340 宽 | 电脑看 / 存档 / 微信分享 |
 | `XX-全线地图.jpg` | 底图原生宽（如 3008），真 1:1 | 放大看细节 |
 | `XX.gpx` | 全量轨迹点 + 具名 wpt | 导航 |
 
-**画完之后还有六件事最容易翻车**（都别等用户来提）：步道**色相**要和等高线错开、主线路线宽与点位符号要成比例、**图例样本必须由出图参数生成**、**文字灰阶要过 4.5:1**、**必须另出一版手机长图且必须按像素量版心边界裁**（无头 Chrome 有最小窗宽，按窗宽算必切字）、**窄版要另做一套排版**（孤字 / 悬空分隔符 / 卡片不等高）。
-见 `references/legend-and-color.md`。
+> **只出一种长图（宽屏 ~2340）**。手机阅读直接看 HTML —— 它本身就是响应式的（<900px 切单栏）。
+> 本技能**不再生成手机版长图**（用户明确要求），旧版那条 `860 宽` 的产物与 `--split long=desk,phone`
+> 用法都已废弃，别再照抄。
+
+**画完之后还有五件事最容易翻车**（都别等用户来提）：步道**色相**要和等高线错开、主线路线宽与点位符号要成比例、**图例样本必须由出图参数生成**、**文字灰阶要过 4.5:1**、**地图「三件套」（图例 / 指北针 / 比例尺）必须缩小并动态避让，不许压住轨迹**。
+见 `references/legend-and-color.md` 与 `references/pitfalls-map-svg.md` §9。
 
 ## 三条地图路线，先选对
 
@@ -117,54 +120,84 @@ agent_created: true
 
 ### 0. 真实轨迹流水线（拿到 KML/GPX 时走这条 · 推荐）
 
-四步脚本串起来，全程真实经纬度，产出**无虚线**的全线轨迹图。
+**整套流水线只有 8 个通用脚本 + 1 个线路文件**，全在 `scripts/` 里，拷进工作区即可用，
+**不依赖任何"已生成的文件"**（不需要先跑过一版，也不需要手工搬中间产物）：
 
-⚠ **开工前先跑 `preflight`、并把整条链写成 `make_all.py`（带 `--skip-dem`）**：
-本次实测单步最慢的只有 DEM 下载（~8 min，一次性）和 `make_terrain`（~2 min），
-下游出 HTML <1 s、长图 7 s、高清地图 5 s —— **慢的不是计算，是返工轮次**。
-没有预检和一键编排时，45 min 里有大半耗在"手敲命令 + 环境踩坑 + 等底图重跑"上。
+| 步骤 | 脚本 | 产出（一律落 `scripts/out/`） |
+|---|---|---|
+| prep | `prep_track.py` | `track_full.json`（全量原始点）· `track_real.json`（简化点）· `profile_real.json`（等距剖面）· `kml_pois.json` |
+| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级） |
+| dem | `make_terrain.py` | `base_terrain.jpg` · `base_map.jpg` · `base_meta.json`（窗口 / 投影） |
+| html | `build_guide.py` | `<file_stem>-攻略.html` |
+| long | `shoot_guide.py` | `<file_stem>-攻略长图.png` |
+| map | `render_map_hi.py` | `<file_stem>-全线地图.jpg` |
+| gpx | `make_gpx.py` | `<file_stem>.gpx` |
+| qa | `qa_guide.py` | 数值化自检（不产文件，只判成败） |
 
-**并行（`make_all` 已内置 DAG 分层，默认开）**：导出实测 17.2 s → 8.4 s
-（`--split long=desk,phone` 把长图两版也拆开）。但**别指望它救 45 min** ——
-DEM 那 8 min 在 wave1 是独苗，前后没活可搭，脚本并行总共只占 3%。
-分钟级的两个真提速点：① DEM `workers` 10→16–24；② **阶段 1 的「网络检索」与
-「本地轨迹拐点分析」并行派发**（多个搜索/子 agent 同轮并发，5–10 min 级）。
-详见 `references/efficiency.md` §3.7。
+**线路相关的只有一个文件：`scripts/route_def.py`。** 其余 8 个脚本一句线路名都不认，
+全部从 `route_def` 读（`CFG` 文案 / `POIS` 点位 / 里程爬升 / `CFG["kml"]`）。
+换一条线路 = 改 `route_def.py` 一个文件，然后重跑一条命令。
+
+`make_all.py` 的 DAG 分层（依赖表就在脚本里，改窗口 / 加步骤看这里）：
+
+```
+wave0:  prep                        （唯一的根：后面所有步的**地图窗口**都从它的轨迹推）
+wave1:  osm ∥ gpx                   （窗口 = 轨迹包围盒；gpx 只读全量点与 route_def）
+wave2:  dem                         （依赖 prep + osm）
+wave3:  html                        （依赖 dem + prep）
+wave4:  long ∥ map                  （都只吃 HTML，可并存两个浏览器进程）
+wave5:  qa                          （依赖前两步产物）
+```
+
+**地图窗口（bbox）自动推导 —— 这是"画错山"的唯一防线。**
+窗口由 `guide_common.resolve_bbox()` 从**轨迹包围盒 + 8% 留白**自动算（也可在
+`route_def.CFG["bbox"]` 里显式覆盖）。`make_terrain.py` 与 `fetch_osm.py` 调**同一个函数**
+取同一个窗口，因此不可能再出现"矢量与地形错位"。开工前 `assert_bbox_covers()` 会校验
+轨迹是否落在窗口内。**窗口写死是历史最惨的一次翻车**：曾把上一座山的窗口留给新线路，
+terrarium 老老实实把千里之外的另一座山渲了出来 —— 页面看起来"有山有水"，只是那不是你要走的山，
+而且**全程不报错**。所以：**永远不要手写 bbox 常量**，让它从轨迹推。
+
+**提速要点**（实测数据见 `references/efficiency.md`）：DEM 下载是唯一的分钟级瓶颈
+（首次 ~2 min，之后走 `demcache/` 秒级），已把 `load_dem(workers=24)` 拉满并发；
+长图导出改成「先注入 JS 只量版式（≈0.5 s）→ 恰好开窗截一次 → 像素复量断言」，
+不再"给足 7600 px 窗高盲截"；`make_all` 的分层并行只省 ~6–10 s，
+**真正的省时来自"一条命令、不用人守着"**，别指望并行救那 2 min 的 DEM。
+
 
 ```bash
-# ⓪ 环境预检（30 s）：numpy/PIL、浏览器路径、out/ 路径约定、KML 格式探测
+# ⓪ 环境预检（~10 s）：numpy/PIL、浏览器路径、out/ 路径约定、KML 格式 + route_def 校验
 python scripts/preflight.py
 
-# ⓪' 或者干脆一条命令跑全程（DAG 分层并行，--dry-run 先看认没认对脚本）
-python scripts/make_all.py --split long=desk,phone --dry-run
-python scripts/make_all.py --split long=desk,phone
+# ⓪' 一条命令跑全程（DAG 分层并行；--dry-run 先看认没认对脚本）
+python scripts/make_all.py --dry-run
+python scripts/make_all.py
 
-# ① 解析两步路 KML（或 GPX）→ track_full.json + kml_pois.json
-python scripts/parse_track_kml.py "D:/路径/线路.kml"
+# 单独重跑某几步 / 跳过地形（改配色、改标注时用）
+python scripts/make_all.py --only html,long,map
+python scripts/make_all.py --skip-dem
+```
 
-# ② 简化 + 生成等距剖面 → track_real.json + profile_real.json
-#    （把上一步的 track_full.json 放到脚本同目录再运行）
-python scripts/prep_kml_track.py
+手动分步（**排错时才用**，正常走 `make_all`；命令一律在 `scripts/` 目录下执行）：
 
-# ③ 按 ② 的数据改 route_def.py（TRACK/TRACK_KM/TOTAL_KM/ASC/DESC + POIS/MARKS/SCHEDULE）
-#    改 map_svg.py 只用一条实线画 TRACK，不再有 D1/D2 虚实之分
-
-# ④ 自渲染底图（推荐，三条命令，全部可重复执行）
-python scripts/fetch_osm.py --force     # Overpass 抓 OSM 矢量 → out/osm.json（改了 bbox 才需 --force）
-python scripts/make_terrain.py          # DEM 晕渲+等高线 → out/base_terrain.jpg → 叠 OSM → out/base_map.jpg
-python scripts/build_base_map.py        # 仅当要走在线瓦片（B 路线）时才用，会覆盖 base_map.jpg
-
-# ⑤ 出 HTML（改 build_jiuhua.py 顶部数据区）→ <线路>攻略/<线路>-攻略.html
-python build_jiuhua.py
-
-# ⑥ 渲染分享长图 → <线路>攻略/<线路>-攻略长图.png
-python render_jiuhua.py
+```bash
+python scripts/prep_track.py                 # KML 取 route_def.CFG["kml"]，也可命令行直接传
+python scripts/fetch_osm.py --soft           # 抓不到只丢一层矢量，不中断
+python scripts/make_terrain.py               # DEM 晕渲 + 等高线 → 叠 OSM → base_map.jpg
+python scripts/build_guide.py                # → <file_stem>-攻略.html
+python scripts/shoot_guide.py                # → <file_stem>-攻略长图.png（只宽屏一版）
+python scripts/render_map_hi.py              # → <file_stem>-全线地图.jpg
+python scripts/make_gpx.py                   # → <file_stem>.gpx
+python scripts/qa_guide.py                   # 数值化自检
 ```
 
 关键口径（见 `references/track-prep.md` 详述）：
 
 - **里程基线用「原始累计」而非「平滑后」**：平滑只用于**画海拔线**，累计里程一定要用原始点串的 haversine 累计（本例原始 30.20 km 与作者所述 30 km 吻合，平滑后只剩 28.10 km，会把所有 POI 的 km 值带偏）。POI、分段点、时间表一律挂原始累计。
 - **海拔用 11 点滑动平均**去 GPS 抖动，但**累计升降用 3 m 阈值**过滤噪声后统计（本例 +3081 / −3371 m）。
+- **海拔分两个口径，别混用**（详见 `references/track-prep.md` §6）：剖面**曲线**用轨迹 GPS 高程
+  （系统性偏低 20–50 m，价值在相对起伏）；**印出来的数字**（标注 / 关键点表 / 地名卡）用 DEM 高程，
+  因为它才对齐景区公认海拔。页面的「数据说明」里要把这个口径写明。
+  同理**累计爬升 ≠ 净升高**（净升 2598 m vs 阈值累计 3797 m，差在"上—下—上"的多级台阶），两个数都写清。
 - **逐点时间从 `<when>` 取**（UTC→北京时间 +8h），用于生成"关键点时间表"，比按里程估算更快；**KML 里没有 `<when>` 就老实标「约 N h」并注明是估算**，别编钟点。
 - **原始坐标保留 6 位小数、里程 4 位**，不要提前取整，取整会在地图上产生明显折角。
 - 额外产出 **GPX**（`trkpt` + 具名 `wpt`）方便用户直接导入手表/两步路导航，图脚注要写"导航以 GPX 为准"。
@@ -182,9 +215,12 @@ python render_jiuhua.py
 选错了解析结果是 0 点，很容易误判成"文件坏了"。分段式 KML 还有个附带问题：
 **段与段之间可能有几百米的无记录断点**（本线 483 m），如实保留、不插值，GPX 里表现为多个 `<trkseg>`。
 
-### 1. 生成 HTML（手绘方案，仅在完全拿不到轨迹时用）
+### 1. 手绘方案（**兜底**：完全拿不到轨迹时用）
 
-以 `scripts/build_route_guide.py` 为模板（已跑通党岭拉东线一版的完整脚本，内含地图 SVG、剖面 SVG、CSS、逐日卡渲染）。按线路替换文件顶部的数据区：
+⚠ 只有在"只有海报 / 口述数据、连经纬度都拿不到"时才走这条。**能拿到轨迹就走第 0 节**。
+
+以 `scripts/build_route_guide.py` 为模板（党岭拉东线一版的完整脚本，内含地图 SVG、剖面 SVG、CSS、逐日卡渲染；
+它**不在** `make_all` 的默认链里，属于 A 路线遗留模板）。按线路替换文件顶部的数据区：
 
 - `S_PT / C1_PT … / E_PT`：地图画布（1000×552）上的关键点坐标，按"实走方向在图上怎么走"手摆，不必是真实经纬度。
 - `D1_ROUTE … D4_ROUTE`：每天路段折线点，插入起伏让线自然（原图有大量之字弯，照抄走向）。
@@ -199,35 +235,35 @@ python scripts/build_route_guide.py     # 输出 <输出目录>/XX-攻略.html
 ```
 
 脚本只依赖标准库，输出单文件 HTML，字体走系统字体栈，**不引用任何 CDN**，离线可渲染。
+**A 路线图上必须出现虚线**（走向示意），且图例要注明"走向示意 · 非导航用图" —— 这是它与第 0 节的分水岭。
 
-### 2. 导出长图 PNG（两条流水线共用）
+### 2. 导出长图 PNG（只出宽屏一版）
 
-用本机 Chrome 无头模式渲染，再**按像素量出版心边界**裁切。**同一份 HTML 出两个尺寸**：
+用本机无头浏览器渲染，再**按像素量出版心边界**裁切。**本技能只出一种尺寸**：
 
-| 用途 | 窗宽 | 成品 | 触发 |
+| 用途 | 设计宽 | 缩放 | 成品 |
 |---|---|---|---|
-| 宽屏（电脑看 / 存档） | `1172,H` | 2344×H px | 桌面 CSS，保留版心外的纸面外框 |
-| **手机（微信直发）** | `600,H` | 860×H px | `@media(max-width:900px)` 单栏 CSS，裁到版心、全出血 |
+| 电脑看 / 存档 / 微信分享 | 1120 CSS | ×2 | 2344×H px |
 
 ```bash
-python scripts/shoot_long_png.py           # 两版一起出
+python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 Chrome → Edge → PATH
 ```
 
-需要改的只有三处：`ROOT`（输出目录）、`HTML`（目标 html）、`CHROME`（本机 Chrome 路径）。要点：
+脚本零线路硬编码：设计宽 / 缩放 / 白名单之外全自动。要点：
 
 - `--headless=new --force-device-scale-factor=2` → 2 倍图，微信里放大看文字仍清晰；
-- **别用窗宽反推裁剪区间**：Windows 无头 Chrome 对窗口宽有**最小钳制** ——
-  `--window-size=430` 实测拿到的是 `clientWidth = 500`，`.page`（max-width 430，居中）
+- **先量版式、再截一次**：注入 JS 量出 `.page` 的四边与文档总高（只排版不光栅，≈0.5 s），
+  据此**恰好**开窗截一次，然后用像素复量断言量到的宽度 == 设计宽 × 倍率。
+  旧做法"按窗宽反推裁剪区间"是错的 —— Windows 无头 Chrome 对窗口宽有**最小钳制**：
+  `--window-size=430` 实测拿到 `clientWidth = 500`，`.page`（max-width 430 居中）
   因此落在 x = 35…465，而画布只有 430 → **右侧 35 px 整条被切，每行文字末尾都缺字**，
   且 `body` 与 `.page` 同底色时肉眼看不出是裁，极易误判成"换行不对"。
-  脚本的做法是：临时给 `<body>` 注入一个与版心不同的底色 → 量出版心的左右/上下边再裁，
-  并断言量到的宽度 == 设计宽 × 倍率。原理与完整代码见 `references/legend-and-color.md` §8.2；
-- 窗高先给足（宽屏 4800、手机 7600）；**若量到的下边界顶到窗口底，就是窗高给小了**，
-  必须调大重截，别静默截断；
+- **若量到的下边界顶到窗口底，就是窗高给小了**，必须调大重截，别静默截断；
 - Chrome 不存在时改用 `msedge.exe`（同样支持 `--headless=new`）；都没有则只交付 HTML 并说明。
 
-**为什么宽屏长图必须再配一版手机长图**：2344 px 宽的长图在 390 px 手机上缩放比只有 0.166，
-12.8 px 的正文落到屏幕上 2 px，整块右栏等于灰噪。详见 `references/legend-and-color.md` §8.2。
+> **手机阅读怎么办**：直接看 HTML —— 它本身是响应式的（<900px 切单栏），
+> 手机上打开满宽即可读，不需要再出一版窄长图。这也是为什么本技能把手机版长图**从流水线里彻底移除**
+> （旧版那套"窄版另做一套排版 + 无头 Chrome 最小窗宽"的坑随之作废）。
 
 ### 3. 自检（必做）
 
@@ -254,6 +290,10 @@ python scripts/shoot_long_png.py           # 两版一起出
 - 版心 1120px，白卡片 + 暖灰底（`#FBF8F4` / `#EAE3D9`），浅色主题；深色文字，避免深底。
 - 每天一个主题色，全篇统一：D1 橙红 `#E4572E`、D2 绿 `#1E9E76`、D3 紫 `#6C4FD8`、D4 蓝 `#2D7FF9`（多于 4 天按同族色延伸）。
 - 地图必须带：指北针、比例尺（写明 km）、分日图例（含每日距离）、来源声明。声明口径随轨迹来源变：**真实轨迹写"路线为实测轨迹 · 非导航用图"**；拟合方案才写"路线走向示意 · 非导航用图"。
+  **这三件套（图例 / 指北针 / 比例尺）必须缩小、并动态避让轨迹**：尺寸按 `map_svg.FURN_LG≈0.78`
+  / `FURN_CP≈0.72` / `FURN_SB≈0.80` 缩小，落点交给 `guide_common.Placer` 求解
+  （硬约束：不压轨迹、互不重叠；软避让：让开标注框与 POI 符号）。固定四角坐标硬摆是错的 ——
+  轨迹一变就会压住，而"家具压轨迹"是读图错误，不是审美问题。
 - 剖面图必须带：纵横轴标题（海拔 m / 累计里程 km）、分日竖虚线、命名垭口与营地/端点标注、最高点高亮。
 - 底部**默认**写「数据说明」+「底图与轨迹来源」两块：来源（轨迹/海报/自测）、DEM 与 OSM 出处、口径（WGS84 / 累计里程 / 平滑与阈值）、地图不可导航、数值以现场为准。
   **但这两块属于"溯源交代"，是可选内容** —— 用户说「剔除来源/数据说明」「不要写来源」时，要整块删干净（含页头 `meta`、地图 panel 副标题、图例里的 `OSM 路网 / 轨迹实测` 等零散字样），
@@ -266,7 +306,13 @@ python scripts/shoot_long_png.py           # 两版一起出
 
 | 症状 / 场景 | 去哪查 |
 |---|---|
+| **地图画出来是"别的山"、轨迹跑到画布外（bbox 写死）** | `guide_common.resolve_bbox()` + `assert_bbox_covers()`；本文档「生成流程 §0」的窗口段 |
+| **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
+| **底图"一片单色"、看不出高差（色带写死了）** | `references/pitfalls-terrain.md` §4 首条（**通用 ramp + p2–p98 拉伸**，无雪区不给雪色端） |
+| **Overpass 镜像全体 504/500/证书错** | `references/pitfalls-terrain.md` §9（先探活再定序，osm.ch 首选；`fetch_osm.py --soft` 可降级） |
+| **底图与攻略 POI 出现两条同地注记** | `references/pitfalls-terrain.md` §10（skip_names 要含「·」前核心地名） |
+| **同一座山在页面上有两个海拔数字** | `references/track-prep.md` §6（轨迹 GPS 偏低 20–50 m → **曲线用 GPS、印出来的数用 DEM**） |
 | **沙箱完全无外网（DEM/OSM 全超时）** | `references/self-hosted-terrain.md` §10（用 WebFetch 打 Open-Elevation 文本接口取真实 SRTM 样本，本地插值重建 DEM） |
 | 放大看不清、字糊 | `references/pitfalls-terrain.md` §2 |
 | 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3 |
@@ -277,65 +323,93 @@ python scripts/shoot_long_png.py           # 两版一起出
 | **高清图/底图细线被抹掉、发糊** | `references/tile-basemap.md` §8（两次重采样坑） |
 | **换 zoom 后轨迹漂移/缩到一角** | `references/tile-basemap.md` §9（投影一致性）+ §11.6（比例尺 z 取 meta） |
 | **地图画幅浪费、路线被挤小** | `references/tile-basemap.md` §10（bbox 贴线 + 边缘标签翻转） |
-| **单轮迭代耗时过长** | `references/tile-basemap.md` §13（性能复盘：冒烟测试先行 / 向量化 / 探针复用） |
+| **单轮迭代耗时过长** | `references/tile-basemap.md` §13、`references/efficiency.md`（本技能实测：DEM ~2 min，其余全部秒级） |
 | **图像脚本突然崩（PIL/argv/IndexError）** | `references/efficiency.md` §6（本机环境三坑） |
 | **Edge 截图不出文件** | `references/pitfalls-layout.md` 末节（--screenshot 需绝对路径） |
 | 整张图发闷发脏、平原起云、林地硬边 | `references/pitfalls-terrain.md` §4 |
 | **雪线怎么着色、用户要求"配色偏白"** | `references/pitfalls-terrain.md` §5 |
 | **用户问"多少米有雪线"** | `references/pitfalls-terrain.md` §6 |
-| 改色 / 改 bbox 后哪里要跟着改 | `references/pitfalls-terrain.md` §7 |
+| 改色 / 改窗口后哪里要跟着改 | `references/pitfalls-terrain.md` §7 |
 | 地图与右栏不等高、右栏被切一半 | `references/pitfalls-layout.md` §1 |
 | 文案折行出孤字、表格溢出 | `references/pitfalls-layout.md` §2 |
 | 文字灰阶对比度不够 | `references/pitfalls-layout.md` §3 |
 | **某段文字只占左边一小条** | `references/pitfalls-layout.md` §5（类名撞车）|
 | **行宽太长/太短** | `references/pitfalls-layout.md` §6 |
-| 手机长图、窄版排版、无头 Chrome 裁剪 | `references/pitfalls-layout.md` §7 |
+| 无头浏览器裁剪、版心量边 | `references/pitfalls-layout.md` §7 |
 | 符号与线层级失衡、标注悬空 | `references/pitfalls-layout.md` §8 |
 | 图例放哪、图例只有文字没图形 | `references/pitfalls-map-svg.md` §1–2 |
-| 图例手机版看不清 | `references/pitfalls-map-svg.md` §3 |
+| **三件套（图例/指北针/比例尺）动态避让** | `references/pitfalls-map-svg.md` §9 |
 | 剖面标签互压 | `references/pitfalls-map-svg.md` §5 |
 | 虚实线用错、步道配色撞色 | `references/pitfalls-map-svg.md` §6–7 |
 | 图例样本与出图配色不一致 | `references/pitfalls-map-svg.md` §4 |
-| **做得慢、返工多、一小时还没完** | **`references/efficiency.md`**（耗时实测 + 七条提速做法） |
-| **哪些步骤能并行、并行能省多少** | `references/efficiency.md` §3.7（DAG 分层 + 实测 17.2→8.4 s + 别抱幻想） |
+| **做得慢、返工多、一小时还没完** | **`references/efficiency.md`**（耗时实测 + 提速做法） |
+| **哪些步骤能并行、并行能省多少** | `references/efficiency.md` §3.7（DAG 分层 + 实测 + 别抱幻想） |
 
-### 最高频的 8 条（先记住这些）
+### 最高频的 10 条（先记住这些）
 
 1. **默认自渲染底图**（`fetch_osm.py` + `make_terrain.py`），不要等别人给瓦片：
    无速率限制、无版权风险、可无限重出。用户点名瓦片服务才走 B 路线。
 2. **真实轨迹 > 拟合**：能拿到 KML/GPX 就用它，图上不该再出现任何虚线图例。
-3. **改任何一处配色/字号/bbox，都要问"下游还有谁用这个值"**：
-   底图类改动（配色/bbox）→ 重跑 `make_terrain` → `build_*` → `shoot_*` → `render_map_hi`；
+3. **地图窗口绝不写死**，一律 `resolve_bbox()` 从轨迹推；跑底图前先让
+   `assert_bbox_covers()` 过一遍（窗口错了会静默画出另一座山）。
+4. **只改 `route_def.py` 一个文件**；其余 8 个脚本通用。改完用 `make_all.py --only ...` 定点重跑。
+5. **改任何一处配色/字号/窗口，都要问"下游还有谁用这个值"**：
+   底图类改动（配色/窗口）→ 重跑 `make_terrain` → `build_guide` → `shoot_guide` → `render_map_hi`；
    仅 SVG 类改动（地图内字号/图例）→ 后三步。
-4. **地图画布宽高比由 bbox 决定**，所以「地图该多高」要在**底图阶段**算好，
+6. **地图画布宽高比由窗口（bbox）决定**，所以「地图该多高」要在**底图阶段**算好，
    不要用 CSS `stretch` 事后补救（会产生死白，用户会说"上下区域很丑"）。
-5. **CSS 类名先 grep 再用**：单文件长页面里 `.src` / `.hl` / `.nm` / `.el` / `.sub` / `.foot`
+7. **CSS 类名先 grep 再用**：单文件长页面里 `.src` / `.hl` / `.nm` / `.el` / `.sub` / `.foot`
    极易撞车，症状是"某段文字只占左边一小条"。
-6. **行宽用 px 不用 `ch`**（中文一字 ≈ 2ch）；带底色的段落要 `max-width:none`。
-7. **手机版是另一套排版**：必须另出 860 宽长图，且
-   **无头 Chrome 有最小窗宽 500、绝不能按窗宽反推裁剪区间**，要按像素量版心边界。
-8. **图例放进地图空白区**（先量轨迹分布找 0 点矩形），并做「桌面 `g.il` / 手机 `.rbox-lgm`」
+8. **地图「三件套」要缩小 + 动态避让**：图例 / 指北针 / 比例尺由 `guide_common.Placer` 求解落点，
+   **硬约束是不压轨迹、互不重叠**；尺寸按 `FURN_*` 系数缩小（图例 ≈0.78、指北针 ≈0.72）。
+   别用固定四角坐标硬摆，轨迹一变就会压住。
+9. **图例放进地图空白区**（先量轨迹分布找 0 点矩形），并做「桌面 `g.il` / 手机 `.rbox-lgm`」
    双份切换 —— 地图内图例在手机上必然不可读。
+10. **同一张卡片里的"桌面副标题 / 手机副标题"要各写各的，别把数值抄进副标题**：
+   数据条卡片常用 `span.donly` / `span.monly` 按断点二选一。若图省事把 `monly` 填成数值本身，
+   桌面版正常、**手机版会出现"46.8 km / 46.8 km"这种数值重复**（版式自检查不出来，只能看图发现）。
+   → 手机副标题要么写短文案（"总里程 · 实测轨迹"），要么就不显示。
 
 ### 交付前自检清单
 
-- [ ] 三张图（桌面长图 / 手机长图 / 高清地图）**边缘深色像素 = 0**（无裁切）
+- [ ] **地图窗口盖住轨迹**：`make_terrain.py` 打印的窗口来自 `轨迹包围盒 + 8% 留白（自动）`，
+      且 `assert_bbox_covers` 没抛错
+- [ ] 长图**边缘深色像素 = 0**（无裁切；`qa_guide.py` 的 `edge_scan` 自动判）
+- [ ] 高清地图四边无内容被截（满幅图片的边缘深色占比天然偏高，**要 1:1 目视裁切确认，别只看数字**）
 - [ ] 地图与右栏**底边齐平**、右栏所有元素 `right ≤ 内容右界`（探针量，别目测）
-- [ ] 地图内标注**两两冲突 = 0**、无标注压图例
+- [ ] 地图内标注**两两冲突 = 0**、无标注压图例（`map_svg.self_check` 的「压轨迹点」应为 0）
+- [ ] **三件套不压轨迹、彼此不重叠**（`self_check` 的「家具互相重叠」应为 0）
 - [ ] 图例**每一行样本图形都显示**（不只文字）
 - [ ] 手机版无横向滚动、`g.il` 已隐藏、文字版图例正常
+- [ ] 手机版卡片副标题**没有把数值重复一遍**（`monly` 别填成值本身）
+- [ ] **底图高低海拔各裁一块 1:1 对比底色**：确认分层设色真的铺开了，
+      而不是被 clip 卡在同一档（"一片单色"是静默失败，只看整图不容易发现）
+- [ ] `make_terrain.py` 打印的 `抑制重名 N` 不为 0（为 0 = 重名注记还在图上）
+- [ ] GPX 回读断言的 `trkpt` 数 == `track_full.json` 点数
 - [ ] 所有数值口径统一（海拔取整一致、里程累计口径说明）
-- [ ] 改过底图的话：确认 `build_map.py` 与 `make_terrain.py` 的 bbox **一致**
 
 ### 交付后：把经验回写进本技能
 
-本技能纳入版本库集中管理（见 `README.md` 的同步说明）：
+技能**本身就是一个 Git 仓库**，权威副本就在当前生效的目录：
 
 ```
-仓库：~/WorkBuddy/workbuddy-skills         ← 改这里，不是改 ~/.workbuddy/skills/
-├── skills/hiking-route-guide-poster/      ← 本技能在仓库里的副本
-└── install.sh / sync.sh
+C:/Users/<用户名>/.workbuddy/skills/hiking-route-guide-poster/     ← 改这里
+├── .git/                    ← remote: github.com/.../hiking-route-guide-poster
+├── SKILL.md
+├── references/*.md
+└── scripts/*.py
 ```
+
+- **改完即刻生效**，下一次会话读到的就是新版，不需要额外的"安装/同步"步骤。
+- 想留痕就**原地提交**（`.gitignore` 已排除 `out/`、`demcache/`、`__pycache__/`）：
+
+  ```bash
+  cd ~/.workbuddy/skills/hiking-route-guide-poster
+  git status --short
+  git add -A && git commit -m "hiking: <这次改了什么、为什么>"
+  ```
+
+- **`push` 属于对外动作，先问过用户再推**（别自动 push）。
 
 **新增一条踩坑经验时**：先判断它属于哪类，写进对应文件，而不是都堆到 SKILL.md——
 
@@ -351,10 +425,30 @@ python scripts/shoot_long_png.py           # 两版一起出
 
 同时**在「常见坑」的分诊表里加一行症状 → 指向新章节**，否则下次找不到。
 
-写完同步：
+### 自测：怎么验证技能改完还能跑（`_selftest_*` 目录的做法）
+
+改完脚本一定要做一次**全新目录自测**，别在已有产物上"看起来能跑"就收工：
 
 ```bash
-cd ~/WorkBuddy/workbuddy-skills
-bash sync.sh push "hiking: <这次学到了什么>"
+# 1) 造一个干净目录：只放脚本 + KML + 一个只有 "kml" 字段的最简 route_def
+#    （这一步专门验证"不依赖已生成文件"——route_def 的宽容加载就靠它兜）
+# 2) python scripts/preflight.py            → 应为"[..] route_def 尚未填（首次运行正常）"，零 FAIL
+# 3) python scripts/make_all.py --only prep → 应产出 out/ 四个 json（鸡生蛋已解）
+# 4) cp 完整 route_def.py 进去 → python scripts/make_all.py
+#    → 期望"全流程完成 ✓"；改过底图相关代码时务必看 make_terrain 的窗口行是否为
+#      "轨迹包围盒 + 8% 留白（自动）"，而不是某个写死的经纬度
 ```
+
+判据（本次实测全部满足）：
+
+| 检查 | 期望 |
+|---|---|
+| 全新目录首跑总耗时 | ~150 s（demcache 命中）/ ~280 s（冷缓存） |
+| `make_terrain` 打印的窗口来源 | `轨迹包围盒 + 8% 留白（自动）` |
+| `map_svg.self_check` | 越界 / 两两重叠 / **压轨迹点** / **家具互相重叠** / 标注压家具 全 0 |
+| `render_map_hi` | 打印「最白行 / 最白列」且都 < 60%（无被裁白带） |
+| `qa_guide.py` | 结论：全部通过 ✓ |
+| 交付物 | HTML + 长图 + 高清地图 + GPX 四件，字节数与改前一致（可复现） |
+
+自测留下的临时目录（`_selftest_*`、`_chk/`、`demcache/`）确认完就删掉，别留在工作区里。
 

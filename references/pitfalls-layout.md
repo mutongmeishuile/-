@@ -2,7 +2,7 @@
 
 > 从 `SKILL.md`「常见坑」拆出。触发词：右栏高度 / 文字对比度 / 文案折行 / 卡片不等高 /
 > 手机长图 / 窄版排版 / 表格溢出 / 类名撞车 / 行宽 / 地图与右栏不协调。
-> 配套：`references/legend-and-color.md`（配色四档灰阶）、`scripts/shoot_long_png.py`（长图导出）。
+> 配套：`references/legend-and-color.md`（配色四档灰阶）、`scripts/shoot_guide.py`（长图导出，只出宽屏一版）。
 
 ---
 
@@ -33,9 +33,10 @@
    ```
    例：`0.460 × 1.325 × cos(42.5231°) = 0.4492°`；围绕**轨迹纬度中心**等距展开
    → `LAT0/LAT1 = 42.2985 / 42.7477`（原 42.3350/42.7150，**只扩纬度、不动经度**）。
-5. ⚠ **必须同时改 `build_map.py` 与 `make_terrain.py` 的 bbox**（两处共用同一组常量，
-   只改一处会导致轨迹与底图整体错位）。改完**重跑 `make_terrain.py`**
-   （DEM 瓦片按块缓存，扩范围只多下几块，本例 2m47s）。
+5. ⚠ **窗口不要手改坐标**：`make_terrain.py` / `fetch_osm.py` / `build_base_map.py`
+   统一调 `guide_common.resolve_bbox()`（轨迹包围盒 + 8% 留白）。要放宽视野就在 `route_def.CFG["bbox"]` 里显式覆盖，**不要各脚本各写一组常量** ——
+   只改一处会导致轨迹与底图整体错位；新线路忘了改则会静默画出上一座山。
+   改完**重跑 `make_terrain.py`**（DEM 瓦片按块缓存，扩范围只多下几块）。
 6. 验算：`轨迹 bbox 是否完整落在新 bbox 内` + `新画布比例 ≈ r`。
 
 好处：① 地图**铺满**整框，零死白；② 不裁掉任何轨迹；③ 顺带多看到南北方向地形。
@@ -164,15 +165,20 @@
 
 手机断点里再 `max-width:none` 解除（窄屏本来就窄，不该再限）。
 
-## 7. 手机版是另一套排版
+## 7. 手机端：HTML 响应式排版（**不再另出手机版长图**）
 
-- **必须另出一版手机长图**：2344 px 宽的图在 390 px 手机上正文只有 2 屏幕像素。
-  给同一份 HTML 加 `@media(max-width:900px)` 断点，再渲染一版 860 宽（430 CSS × 2）。
-- **⚠ 无头 Chrome 有最小窗口宽 500，绝不能按窗宽反推裁剪区间**：
-  `--window-size=430` 时 `clientWidth` 实测是 500 而非 430。
-  **一律按像素量版心边界裁**（`getBoundingClientRect()` 取 `.page` 的 left/right/height）。
-- **SVG 图内文字会跟着版心缩，窄版必须重出一份，且倍率要算不要猜**：
-  固定 viewBox 缩放到容器宽度，版心 1032 → 370 时缩放比 0.37。
+> ⚠ **本节的"长图"部分已不适用**：本技能**不再生成手机版长图**（用户明确要求）。
+> 手机阅读 = 直接用手机打开 HTML。下面这些**关于"窄屏排版怎么才读得出来"的经验全部仍然有效**，
+> 因为 HTML 的 `@media(max-width:900px)` 断点就是靠它们调出来的；
+> 只有"渲染第二张 860 宽 PNG + 按像素量版心裁"那几步已废弃。
+> 👉 现在宽屏长图只按 `shoot_guide.py` 出一次，裁剪逻辑见该脚本的注释与 §9。
+
+- **响应式断点必须做**：2344 px 宽的图在 390 px 手机上正文只有 2 屏幕像素，
+  但 HTML 只要加了 `@media(max-width:900px)` 单栏断点，手机上满宽就能读。
+- **⚠ 无头浏览器有最小窗口宽（实测 500）**：`--window-size=430` 时 `clientWidth` 实测是 500 而非 430。
+  这条对**版式审计探针**依然要紧 —— `qa_guide.py` 用 600 的窗跑 phone 断点正是为了绕开它；
+  而"按窗宽反推裁剪区间"那种做法（宽屏长图）已经彻底不用了。
+- **SVG 图内文字会跟着版心缩**：固定 viewBox 缩放到容器宽度，版心 1032 → 370 时缩放比 0.37。
   倍率 = `目标CSS宽 / viewBox宽`；算出后再决定字号是否需要单独放大。
 - **窄版是另一套排版，别指望桌面文案直接缩下去**：卡片内宽只有 ~167 px（≈13 个汉字），
   长标签必然折行并留下"…最高 / 峰）"这种孤字 → 用 `.donly` / `.monly` 双份文案，
@@ -227,3 +233,29 @@ rows = np.where(off.sum(axis=1) > 0.5 * w)[0]
 
 `--screenshot=out/x.png` 可能不产出任何文件也不报错。**输出一律用
 `Path(...).resolve()` 绝对路径**；截完立刻断言 `out.exists() and size>0` 再往下游走。
+
+---
+
+## ⚠ 手机版多列表格必溢出：5 列 nowrap 表在 430 版心宽 520 px
+
+党岭线 5 列日程表（地点/里程/海拔/时刻/备注，全 `white-space:nowrap`）在 1120 版心没事，
+手机版 430 心里**实测宽 520 px，整体右溢 121 px**——版式审计（overflowX）能抓到，
+但肉眼看长图容易漏（右侧是表格线，不是字）。
+
+**修法：手机版把表格拆成三段式堆叠**，不是缩字号（缩了也放不下）：
+
+```css
+@media (max-width:900px){
+  table.tsc thead{display:none}
+  table.tsc,table.tsc tbody,table.tsc tr,table.tsc td{display:block}
+  table.tsc td{border:none;padding:0;white-space:normal}
+  table.tsc td.n{font-size:14.8px;font-weight:800;margin-bottom:3px}   /* 地点 */
+  table.tsc td.k,table.tsc td.e,table.tsc td.t{display:inline;font-size:12.9px;color:#5F6875}
+  table.tsc td.k::after{content:" km · "}                              /* 里程·海拔·时刻 拼一行 */
+  table.tsc td.e::after{content:" m · "}
+  table.tsc td.s{font-size:13.4px;margin-top:4px}                      /* 备注 */
+}
+```
+
+桌面 HTML 里就要给每个 `<td>` 加好类（`n/k/e/t/s`），桌面 CSS 不引用这些类、零影响。
+**改完必须重渲长图再跑 QA**——长图是快照，HTML 改了图不会自己变（本次就栽在"改完直接交旧图"上）。
