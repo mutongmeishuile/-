@@ -14,7 +14,7 @@
 ----
     python scripts/preflight.py [可选：KML 路径]
 
-不传 KML 就只查环境；传了就顺带判断 KML 格式（gx:Track / LineString）该用哪个解析脚本。
+不传轨迹就只查环境；传了就顺带判断格式（两步路 KML / GPX / 分段 LineString）该用哪个解析脚本。
 """
 import importlib
 import re
@@ -127,7 +127,7 @@ def main():
     if track_ready:
         ok("out/track_real.json 已就位")
 
-    print("⑤ KML 格式（决定用哪个解析脚本，选错会得到 0 个点）")
+    print("⑤ 轨迹文件格式（决定用哪个解析脚本，选错会得到 0 个点）")
     kml = sys.argv[1] if len(sys.argv) > 1 else None
     if not kml:
         # 没传就退回 route_def.CFG["kml"]（与 prep_track.py 同一套解析）
@@ -142,25 +142,32 @@ def main():
         except Exception:                                           # noqa
             pass
     if not kml:
-        print("  [..]   没传 KML，跳过（用法：python preflight.py 路径.kml，"
+        print("  [..]   没传轨迹文件，跳过（用法：python preflight.py 路径.kml|.gpx，"
               "或在 route_def.CFG 里登记 'kml'）")
     else:
         p = Path(kml)
         if not p.exists():
-            fail += bad(f"KML 不存在：{p}")
+            fail += bad(f"轨迹文件不存在：{p}")
         else:
             s = p.read_text(encoding="utf-8", errors="ignore")
             n_coord = len(re.findall(r"<gx:coord>", s))
             n_when = len(re.findall(r"<when>", s))
             n_ls = len(re.findall(r"<LineString>", s))
-            print(f"        gx:coord {n_coord} | when {n_when} | LineString {n_ls}")
-            if n_coord:
+            n_trkpt = len(re.findall(r"<trkpt\b", s))
+            n_rtept = len(re.findall(r"<rtept\b", s))
+            n_wpt = len(re.findall(r"<wpt\b", s))
+            print(f"        gx:coord {n_coord} | when {n_when} | LineString {n_ls} "
+                  f"| trkpt {n_trkpt} | rtept {n_rtept} | wpt {n_wpt}")
+            if n_trkpt or n_rtept:
+                ok(f"→ GPX 格式（trkpt {n_trkpt} / rtept {n_rtept} / wpt {n_wpt}），"
+                   f"用 parse_track_kml.py（它按内容自动识别 GPX）")
+            elif n_coord:
                 ok("→ gx:Track 格式，用 parse_track_kml.py")
             elif n_ls:
                 ok(f"→ 分段 LineString 格式，用 parse_kml_ls.py（{n_ls} 段）")
             else:
-                fail += bad("两种都不是 —— 先人工看一眼文件结构")
-            if n_when > n_coord:
+                fail += bad("三种都不是 —— 先人工看一眼文件结构")
+            if n_coord and n_when > n_coord:
                 print(f"        ⚠ when({n_when}) 多于 coord({n_coord})：多出的属于 POI 标注，"
                       f"解析时只取 <gx:Track> 块内的，别全文 findall")
 

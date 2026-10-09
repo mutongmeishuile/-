@@ -100,14 +100,15 @@ assert (HERE / "out").is_dir()          # 路径约定：所有脚本统一用 H
 命令本身不慢，**慢在人的往返**。一条命令跑完，改起来才敢改：
 
 ```python
-# scripts/make_all.py  —— 支持跳步：python make_all.py --skip-dem
-STEPS = [("地形", "make_terrain.py"), ("HTML", "build_dangling.py"),
-         ("长图", "shoot_dangling.py desk phone"), ("地图", "render_dangling_map_hi.py"),
-         ("GPX", "make_gpx.py"), ("自检", "qa_long.py")]
+# scripts/make_all.py —— 不是一串命令，是 DAG 分层（依赖表就在脚本顶部的 DEPS）
+DEPS = {"prep": [],          "osm": ["prep"],        "gpx": ["prep"],
+        "dem": ["prep","osm"], "html": ["dem","prep"],
+        "long": ["html"],     "map": ["html"],         "qa": ["long","map"]}
+STEP_ARGS = {"osm": ["--soft"]}     # Overpass 抽风时只丢一层矢量，不中断
 ```
 
-**关键：必须支持 `--skip-dem`。** 改配色/改标注根本不用动 DEM，
-加了跳步后单轮从 2 min 降到 ~15 s，改起来心理成本骤降。
+**关键：必须能跳步（`--only html,long,map` / `--skip-dem`，以及 `--dry-run` 先看认没认对脚本）。**
+改配色/改标注根本不用动 DEM，跳步后单轮从 2 min 降到 ~15 s，改起来心理成本骤降。
 
 ### 3.3 数据先冻结，再动底图（省掉"边查边改"）
 

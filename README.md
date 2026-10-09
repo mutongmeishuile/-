@@ -31,12 +31,13 @@ git clone <本仓库地址> ~/.workbuddy/skills/hiking-route-guide-poster
 ## 快速流程
 
 ```bash
-python scripts/preflight.py                 # ① 30s 环境预检（numpy/PIL、浏览器、KML 格式）
-python scripts/parse_track_kml.py 线路.kml  # ② 解析轨迹 → track_full.json
-python scripts/prep_kml_track.py            # ③ 简化 + 等距剖面 → track_real.json
-# ④ 按生成的数据改 scripts/route_def.py（里程/爬升/POIS/日程）
-python scripts/make_all.py --skip-dem       # ⑤ 快速出图（改配色/标注时跳过地形）
-python scripts/make_all.py                  # ⑥ 全量（含地形）
+python scripts/preflight.py                 # ① ~10s 环境预检（numpy/PIL、浏览器、out/ 约定、KML 格式）
+# ② 把 KML 路径登记进 scripts/route_def.py 的 CFG["kml"]（也可命令行直接传）
+python scripts/prep_track.py 线路.kml       # ③ 解析 + 简化 + 等距剖面 → scripts/out/*.json
+# ④ 按 out/ 里的数据填 scripts/route_def.py（里程/爬升/POIS/日程）—— 唯一需要改的文件
+python scripts/make_all.py --dry-run        # ⑤ 先看 DAG 认没认对脚本
+python scripts/make_all.py                  # ⑥ 一条命令跑全程（prep→osm→dem→html→long∥map→gpx→qa）
+python scripts/make_all.py --skip-dem       #   改配色/标注时跳过地形，单轮 ~15s
 ```
 
 ## 环境要求

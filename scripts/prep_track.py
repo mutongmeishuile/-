@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""一步完成轨迹准备：KML → out/track_real.json + out/profile_real.json。
+"""一步完成轨迹准备：KML/GPX → out/track_real.json + out/profile_real.json。
 
 做两件事（按顺序调 parse_track_kml.py 与 prep_kml_track.py）：
-  ① 解析两步路 KML（gx:Track）→ out/track_full.json（全量原始点，导航 GPX 用）
+  ① 解析轨迹文件（两步路 KML / 标准 GPX，自动识别）→ out/track_full.json（全量原始点，导航 GPX 用）
   ② 简化 + 平滑 + 等距剖面 → out/track_real.json / out/profile_real.json（画图用）
 
 KML 路径来源（按优先级）：
@@ -31,7 +31,7 @@ def _kml_from_cfg():
 def main():
     kml = sys.argv[1] if len(sys.argv) > 1 else _kml_from_cfg()
     if not kml:
-        sys.exit("没给 KML 路径。用法：python prep_track.py <线路.kml>，"
+        sys.exit("没给轨迹文件路径。用法：python prep_track.py <线路.kml|.gpx>，"
                  "或在 route_def.CFG 里加 \"kml\": \"...\"")
     # CFG 里的 kml 允许写相对路径（相对项目根 = scripts 的上一级）
     cands = [Path(kml), HERE.parent / kml, HERE / kml]

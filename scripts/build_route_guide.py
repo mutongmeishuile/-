@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
-"""生成「党岭拉东线（精简版）」重装穿越路线攻略 HTML（自包含，含全线地图 + 海拔剖面 + 逐日攻略）"""
+"""【兜底模板 · 不在 make_all 链里】手绘方案：完全拿不到经纬度轨迹时用。
+
+以「党岭拉东线（精简版）」为例的**完整可跑模板**（含全线地图 SVG + 海拔剖面 SVG +
+CSS + 逐日卡渲染）。用法：**复制本文件**，再替换下面的数据区。
+
+★ 用之前先改两处：
+  1. `OUT_DIR` —— 输出目录（默认落在脚本同级的 `out_html/`，绝不要写死成某台机器的绝对路径）；
+  2. 数据区 `S_PT / D1_ROUTE… / CHAINS / RIVERS / PROF / DAY_CARDS / stats` 等，
+     详见 SKILL.md「生成流程 §1 手绘方案」。
+"""
 import math, random
 from pathlib import Path
 
-OUT_DIR = Path(r"C:/Users/S6576/WorkBuddy/2026-09-29-09-25-03/党岭拉东线攻略")
+# ★ 改成你的输出目录；默认脚本同级 out_html/，不写死任何绝对路径
+OUT_DIR = Path(__file__).resolve().parent / "out_html"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 D1_C, D2_C, D3_C, D4_C = "#E4572E", "#1E9E76", "#6C4FD8", "#2D7FF9"

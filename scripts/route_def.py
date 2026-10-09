@@ -5,7 +5,7 @@
 不认具体线路名，全部从这里读。所以本文件里的任何改动都会自动流到四件交付物。
 
 数据来源（自下而上，别跳步）：
-    1. parse_track_kml.py <你的.kml>   → out/track_full.json + out/kml_pois.json
+    1. parse_track_kml.py <你的.kml|.gpx>  → out/track_full.json + out/kml_pois.json
     2. prep_kml_track.py               → out/track_real.json + out/profile_real.json
     3. **本文件**：把第 2 步打印的「原始里程 / 爬升 / 下降 / 海拔范围」填进下面的数字区，
        再把 POIS / SCHEDULE / CFG 的文案按线路写实

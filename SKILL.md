@@ -204,15 +204,23 @@ python scripts/qa_guide.py                   # 数值化自检
   **航点不要直接搬 KML 注记**——里面混着「3550」「回望某某垭口」这类随手标注，导进手表是噪声；
   要用已按真实地名核验过的规范 POI 列表（`route_def.POIS`）。
 
-**两种 KML 格式都要能解析（`parse_track_kml.py` 只认其中一种）**：
+**三种轨迹文件格式都要能进，`parse_track_kml.py` 按内容自动识别前两种**：
 
-| 格式 | 特征 | 解析脚本 |
+| 格式 | 特征 | 谁解析 |
 |---|---|---|
-| `<gx:Track>` + `<gx:coord>` | 现代两步路导出，**带 `<when>` 时间戳** | `scripts/parse_track_kml.py` |
+| 两步路 `<gx:Track>` + `<gx:coord>` | 现代两步路导出，**带 `<when>` 时间戳** | `scripts/parse_track_kml.py`（主用） |
+| **标准 GPX** `<trkpt lat lon>` + `<ele>/<time>` | 手表 / 其它 App 导出，可能多 `<trkseg>`、附 `<wpt>` 航点 | **同一个 `parse_track_kml.py`**（无需换脚本） |
 | 多个 `<Placemark>/<LineString>/<coordinates>` | 旧版 / 分段导出，**无时间戳** | `parse_kml_ls.py`（见 `references/track-prep.md` §分段式 KML） |
 
-拿到文件先 `grep -c "gx:coord"` 与 `grep -c "<LineString>"` 各数一遍，**别假设是哪种**——
-选错了解析结果是 0 点，很容易误判成"文件坏了"。分段式 KML 还有个附带问题：
+拿到文件先数一遍再选脚本，**别假设是哪种**——选错了解析结果是 0 点，很容易误判成"文件坏了"：
+
+```bash
+grep -c "<gx:coord>"  线路.kml     # >0 → 两步路 KML
+grep -c "<trkpt"      线路.gpx     # >0 → GPX（手表导出的基本上是这种）
+grep -c "<LineString>" 线路.kml     # >0 → 分段式，走 parse_kml_ls.py
+```
+
+`preflight.py` 会自动做这个判断。分段式 KML 还有个附带问题：
 **段与段之间可能有几百米的无记录断点**（本线 483 m），如实保留、不插值，GPX 里表现为多个 `<trkseg>`。
 
 ### 1. 手绘方案（**兜底**：完全拿不到轨迹时用）
@@ -220,8 +228,9 @@ python scripts/qa_guide.py                   # 数值化自检
 ⚠ 只有在"只有海报 / 口述数据、连经纬度都拿不到"时才走这条。**能拿到轨迹就走第 0 节**。
 
 以 `scripts/build_route_guide.py` 为模板（党岭拉东线一版的完整脚本，内含地图 SVG、剖面 SVG、CSS、逐日卡渲染；
-它**不在** `make_all` 的默认链里，属于 A 路线遗留模板）。按线路替换文件顶部的数据区：
+它**不在** `make_all` 的默认链里，属于 A 路线遗留模板）。**先复制本文件**，再替换顶部的数据区：
 
+- `OUT_DIR`：输出目录（默认落脚本同级 `out_html/`，**别写死绝对路径**）。
 - `S_PT / C1_PT … / E_PT`：地图画布（1000×552）上的关键点坐标，按"实走方向在图上怎么走"手摆，不必是真实经纬度。
 - `D1_ROUTE … D4_ROUTE`：每天路段折线点，插入起伏让线自然（原图有大量之字弯，照抄走向）。
 - `CHAINS`：等高线背景的山脊链（沿 NE-SW 走向），只影响质感。
@@ -231,7 +240,7 @@ python scripts/qa_guide.py                   # 数值化自检
 - 顶部 `stats`、`notes`、`plan`、`foot` 按线路改写。
 
 ```bash
-python scripts/build_route_guide.py     # 输出 <输出目录>/XX-攻略.html
+python scripts/build_route_guide.py     # 输出到 OUT_DIR/XX-攻略.html（复制后先改 OUT_DIR）
 ```
 
 脚本只依赖标准库，输出单文件 HTML，字体走系统字体栈，**不引用任何 CDN**，离线可渲染。
@@ -307,6 +316,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | 症状 / 场景 | 去哪查 |
 |---|---|
 | **地图画出来是"别的山"、轨迹跑到画布外（bbox 写死）** | `guide_common.resolve_bbox()` + `assert_bbox_covers()`；本文档「生成流程 §0」的窗口段 |
+| **解析出 0 个点（选错了入口）** | 本文档「生成流程 §0」的格式判断表；`preflight.py` 会替你数 gx:coord / trkpt / LineString。KML 与 **GPX 都走 `parse_track_kml.py`**，分段式 LineString 才走 `parse_kml_ls.py` |
 | **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
 | **底图"一片单色"、看不出高差（色带写死了）** | `references/pitfalls-terrain.md` §4 首条（**通用 ramp + p2–p98 拉伸**，无雪区不给雪色端） |
@@ -437,6 +447,12 @@ C:/Users/<用户名>/.workbuddy/skills/hiking-route-guide-poster/     ← 改这
 # 4) cp 完整 route_def.py 进去 → python scripts/make_all.py
 #    → 期望"全流程完成 ✓"；改过底图相关代码时务必看 make_terrain 的窗口行是否为
 #      "轨迹包围盒 + 8% 留白（自动）"，而不是某个写死的经纬度
+# 5) 改过解析器时补一条 GPX 通路回归：用 make_gpx 出的 GPX 反喂 parse_track_kml.py，
+#    trkpt 数应 == 源 track_full.json 点数（证明 GPX 与 KML 两条入口的 schema 一致）
+"$PY" scripts/parse_track_kml.py 峨眉山全景大环线.gpx --out /tmp/rt && \
+  python -c "import json;a=json.load(open('out/track_full.json',encoding='utf-8'));\
+             b=json.load(open('/tmp/rt/track_full.json',encoding='utf-8'));\
+             assert len(a['pts'])==len(b['pts']);print('GPX 通路 OK', len(b['pts']))"
 ```
 
 判据（本次实测全部满足）：

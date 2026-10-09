@@ -15,8 +15,8 @@
    **只记不补点**，如实保留；下游 GPX 会表现为多个 <trkseg>。
 
 用法：
-    python parse_kml_ls.py "D:/路径/线路.kml"          # 输出到 KML 同目录的 kml/ 子目录
-    python parse_kml_ls.py "D:/路径/线路.kml" --out out/
+    python parse_kml_ls.py "D:/路径/线路.kml"          # 输出到 scripts/out/（与 parse_track_kml.py 一致）
+    python parse_kml_ls.py "D:/路径/线路.kml" --out ./kml
     python parse_kml_ls.py "D:/路径/线路.kml" --gap 300
 
 输出（--out 目录下）：
@@ -67,7 +67,8 @@ def main():
     args = ap.parse_args()
 
     src = Path(args.kml)
-    out = Path(args.out) if args.out else src.parent / "kml"
+    # 默认与 parse_track_kml.py 一致落 scripts/out/，下游 prep_kml_track._find 才能直接找到
+    out = Path(args.out) if args.out else Path(__file__).resolve().parent / "out"
     out.mkdir(parents=True, exist_ok=True)
 
     root = ET.parse(src).getroot()

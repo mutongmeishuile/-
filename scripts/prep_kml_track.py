@@ -21,7 +21,7 @@ def _find(name):
         if p.exists():
             return p
     raise FileNotFoundError(
-        f"找不到 {name}。先跑：python parse_track_kml.py <你的.kml>")
+        f"找不到 {name}。先跑：python parse_track_kml.py <你的.kml|.gpx>")
 
 
 SRC = _find("track_full.json")

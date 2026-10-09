@@ -3,6 +3,11 @@
 当用户指定了一个瓦片服务（如 `https://hiking.318318.xyz/t05/{z}/{x}/{y}`）时，用它替换手绘示意底图。
 **这套做法的关键是：底图是真实经纬度投影，所以线路与标注必须换成真实经纬度，否则对不上。**
 
+> **阅读提示**：§7、§11–§14 是**贡嘎项目的实战复盘**（案例叙事）。文中出现的
+> `make_base_tile.py` / `replay_tint.py` / `probe_dem.py` / `fetch_tiles_cyc` 是**当时的临时脚本，本技能未收录**；
+> 现在对应的能力是 `build_base_map.py`（瓦片拼接 + 投影）与 `make_terrain.py`（DEM 自绘底图）。
+> 看这几节要的是**结论与教训**，不是照抄脚本名去运行。
+
 ---
 
 ## 0. 瓦片源清单（务必先看合规，再挑好看）
@@ -214,7 +219,7 @@ SVG `<image>` 内嵌 5120px 底图、viewBox 却是逻辑 1504 → 浏览器 512
 
 `projector` 若引用模块常量 `Z=14`，而 meta 已是 z15（scale=逻辑px/z15原生px）→
 轨迹整体缩到左上角 1/4 区域。**规则：meta 里必须存 `z` 和 `bbox`，SVG 投影函数从 meta 读取，
-禁止引用编译期常量。**（build_map.projector 已改为接受 z/lon0/lat1 参数。）
+禁止引用编译期常量。**（本技能已统一为 `guide_common.projector_of(meta)` —— z / bbox 一律从 `base_meta.json` 读，三处出图共用同一个投影函数。）
 
 ## 10. bbox 应紧贴线路（参考用户给的样图）
 

@@ -9,7 +9,7 @@
 ## 0. 通用：改完必须重出所有下游产物
 
 **一改地图内 SVG 的字号/图例，必须同时重出三样东西**：
-`build_<线路>.py`（HTML）→ `shoot_<线路>_png.py`（两版长图）→ `render_map_hi.py`（全线高清地图）。
+`build_guide.py`（HTML）→ `shoot_guide.py`（宽屏长图，**只一版**）→ `render_map_hi.py`（全线高清地图）。
 漏了高清图，用户放大看的就是旧字号版本。
 改了**底图**（配色 / bbox）则还要在前面加上 `make_terrain.py`。
 

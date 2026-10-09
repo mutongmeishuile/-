@@ -35,27 +35,31 @@ python scripts/parse_track_kml.py "D:/路径/线路.kml" --out ./kml
 - 用 ElementTree 命名空间通配 `{*}`，不要硬编 `gx:` 前缀（导出器不同前缀会变）。
 - 部分轨迹 `<gx:coord>` 只有两个数（无高程），`ele` 置 `None`，后续用 SRTM 或跳过高程。
 
-GPX 补充：能用 `gpxpy` 最好；纯标准库时解析 `<trk>/<trkseg>/<trkpt>` 的 `lat/lon` 属性与子节点 `ele`/`time`，`wpt` 取 `lat/lon`+`<name>`+`<desc>`。
+GPX **已内置支持**：`parse_track_kml.py` 按根元素自动识别，不需要 `gpxpy`、也不用换脚本 ——
+它读 `<trkpt lat lon>` 的属性与子节点 `<ele>/<time>`，多个 `<trkseg>` 串成一条，`<wpt>` 作具名点，
+时间同样转成北京时间 `hh:mm:ss`，输出 schema 与 KML 分支**完全一致**（下游零改动）。
 
-### 2.1 先判断 KML 是哪种格式（**必做，选错脚本会得到 0 点**）
+### 2.1 先判断是哪种格式（**必做，选错脚本会得到 0 点**）
 
-两步路有**两种**导出格式，`parse_track_kml.py` 只认其中一种：
+KML 有**两种**导出格式，`parse_track_kml.py` 只认 `<gx:Track>` 那种；GPX 它也认：
 
 ```bash
-grep -c "gx:coord"     线路.kml     # >0 → <gx:Track> 式，用 parse_track_kml.py
+grep -c "<gx:coord>"   线路.kml     # >0 → <gx:Track> 式，用 parse_track_kml.py
+grep -c "<trkpt"       线路.gpx     # >0 → GPX，同样用 parse_track_kml.py（自动识别）
 grep -c "<LineString>" 线路.kml     # >0 → 分段式，用 parse_kml_ls.py
 ```
 
 | 格式 | 特征 | 时间戳 | 脚本 |
 |---|---|---|---|
-| `<gx:Track>` + `<gx:coord>` | 现代导出，一点一 coord | **有 `<when>`** | `parse_track_kml.py` |
+| `<gx:Track>` + `<gx:coord>` | 现代两步路导出，一点一 coord | **有 `<when>`** | `parse_track_kml.py` |
+| 标准 GPX `<trkpt lat lon>` | 手表 / 其它 App 导出 | 常有 `<time>`，非必然 | `parse_track_kml.py`（同一脚本） |
 | 多个 `<Placemark>/<LineString>/<coordinates>` | 旧版 / 分段导出 | **无** | `parse_kml_ls.py` |
 
 选错的症状是**解析出 0 个点**，第一反应容易误判成"文件坏了"或"用户导错了"——
-所以拿到文件先数一遍，别假设。
+所以拿到文件先数一遍，别假设（`preflight.py` 会替你数）。
 
 ```bash
-python scripts/parse_kml_ls.py "D:/路径/线路.kml" --out ./kml
+python scripts/parse_kml_ls.py "D:/路径/线路.kml"     # 默认落 scripts/out/，与 parse_track_kml.py 一致
 ```
 
 `parse_kml_ls.py` 解析要点：
