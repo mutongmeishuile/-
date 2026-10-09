@@ -410,7 +410,7 @@ def build_map_overlay(mobile=False):
         lx, ly = _lg_rect[0], _lg_rect[1]
         S = FURN_LG
         g = [f'<g class="il"><rect x="{lx}" y="{ly}" width="{LG_W}" height="{LG_H}" rx="{round(14*S)}" '
-             f'fill="#FFFFFF" opacity="0.93" stroke="#D9D2C6" stroke-width="1.4"/>',
+             f'fill="#FFFFFF" opacity="0.96" stroke="#D9D2C6" stroke-width="1.4"/>',
              f'<text x="{lx+18*S:.0f}" y="{ly+LG_TITLE*S:.0f}" font-size="{round(22*S)}" '
              f'font-weight="800" fill="{INK}">{_CFG.get("legend_title", "分日路段")}</text>']
         for i, (col, tag, desc, km, w, dash) in enumerate(lg_rows):
@@ -456,7 +456,7 @@ def build_map_overlay(mobile=False):
         _, _, cr = placed["cp"]
         gx, gy = (cr[0] + cr[2]) / 2, (cr[1] + cr[3]) / 2
         R = CP_R
-        o.append(f'<g><circle cx="{gx:.0f}" cy="{gy:.0f}" r="{R+M:.0f}" fill="#FFFFFF" opacity="0.92"/>'
+        o.append(f'<g><circle cx="{gx:.0f}" cy="{gy:.0f}" r="{R+M:.0f}" fill="#FFFFFF" opacity="0.95"/>'
                  f'<path d="M {gx:.0f},{gy-R*0.71:.0f} L {gx+R*0.26:.0f},{gy+R*0.29:.0f} '
                  f'L {gx:.0f},{gy+R*0.12:.0f} L {gx-R*0.26:.0f},{gy+R*0.29:.0f} Z" fill="#3A4250"/>'
                  f'<text x="{gx:.0f}" y="{gy+R*0.9:.0f}" text-anchor="middle" '

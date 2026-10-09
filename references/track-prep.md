@@ -58,6 +58,12 @@ grep -c "<LineString>" 线路.kml     # >0 → 分段式，用 parse_kml_ls.py
 选错的症状是**解析出 0 个点**，第一反应容易误判成"文件坏了"或"用户导错了"——
 所以拿到文件先数一遍，别假设（`preflight.py` 会替你数）。
 
+> ⚠ **2026-10-10 狼塔 C+V**：`prep_track.py` 早期**写死**调 `parse_track_kml.py`，
+> 而该线是分段式 KML → 整条流水线在第一步就崩，看着像"文件坏了"。
+> 现已改为**按文件内容自动识别**（`_pick_parser()`：先看 `<gx:coord>`/`<trkpt>`/`<rtept>`，
+> 再看 `<LineString>`），所以正常流程**不需要手工挑脚本**；
+> 只有绕过 `prep_track.py` 单独调解析器时才需要照上表判断。
+
 ```bash
 python scripts/parse_kml_ls.py "D:/路径/线路.kml"     # 默认落 scripts/out/，与 parse_track_kml.py 一致
 ```

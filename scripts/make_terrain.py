@@ -50,6 +50,33 @@ UA = "hiking-route-guide/1.0 (local offline terrain render)"
 # DEM 瓦片级别必须与底图投影一致（map_svg.py 的 projector 用 meta["z"]），
 # 否则轨迹与底图会整体错位。terrarium 的最高级别就是 z15（≈4.1 m/px @30.5°）。
 DEM_Z = 15
+# ⚠ DEM 缩放要按窗口大小**自适应降档**（2026-10-10 狼塔 C+V 实测）：
+#   底图最终只有 LOGICAL_W(1504) 逻辑宽，DEM 分辨率再高都是浪费。
+#   但 z15 对**长线**是灾难：狼塔窗口 0.75°×0.57° → DEM 约 17600×20000 px ≈ 3.5 亿像素，
+#   单个 float32 数组就 1.4 GB，`paint_contours` 还要在上百个高程层上各扫一遍全图 →
+#   实测 **25 分钟 + 峰值内存 11.5 GB**（差点把机器拖进 swap），而输出只有 3008 px 宽。
+#   → 超过 DEM_MAX_PX 就逐级降到 z14/z13：瓦片数按 4 倍递减，质量对 1504 宽的成品没有可见损失
+#     （z13 ≈ 19 m/px，仍远细于成品的 50–100 m/px）。
+DEM_MAX_PX = 40_000_000
+
+
+def _window_px(z, lon0, lat0, lon1, lat1):
+    """该窗口在 z 级下的 DEM 像素数（估算，用于决定要不要降档）。"""
+    def px(lon, lat):
+        x = (lon + 180.0) / 360.0 * (TILE * 2 ** z)
+        r = math.radians(lat)
+        y = (1.0 - math.log(math.tan(r) + 1.0 / math.cos(r)) / math.pi) / 2.0 * (TILE * 2 ** z)
+        return x, y
+    x0, y0 = px(lon0, lat1)
+    x1, y1 = px(lon1, lat0)
+    return abs(x1 - x0) * abs(y1 - y0)
+
+
+def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z):
+    """按窗口大小把 DEM 缩放降到合理的档位（返回实际使用的 z）。"""
+    while z > 12 and _window_px(z, lon0, lat0, lon1, lat1) > DEM_MAX_PX:
+        z -= 1
+    return z
 # ---- 超采样（放大不糊的关键）----
 # 逻辑宽 = 版式宽（SVG viewBox 用），栅格按 LOGICAL_W × SS 出图。
 # SVG 里 <image width="1504"> 会把 3008 的 jpeg 缩回逻辑宽渲染 —— 这等于给浏览器做了 2× 超采样：
@@ -804,8 +831,13 @@ def build_terrain():
     LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
     GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "make_terrain")
     print(f"[1/6] 地图窗口（{src}）: {LON0}, {LAT0} → {LON1}, {LAT1}", flush=True)
-    print(f"[1/6] 下载 DEM（terrarium z{DEM_Z}）…")
-    dem, meta = load_dem(DEM_Z, LON0, LAT0, LON1, LAT1)
+    z_use = pick_dem_z(LON0, LAT0, LON1, LAT1)
+    if z_use != DEM_Z:
+        print(f"[1/6] 窗口较大（{_window_px(DEM_Z, LON0, LAT0, LON1, LAT1) / 1e6:.0f} M px @z{DEM_Z} "
+              f"> 上限 {DEM_MAX_PX / 1e6:.0f} M px）→ DEM 自动降到 z{z_use}"
+              f"（约 {_window_px(z_use, LON0, LAT0, LON1, LAT1) / 1e6:.0f} M px）")
+    print(f"[1/6] 下载 DEM（terrarium z{z_use}）…")
+    dem, meta = load_dem(z_use, LON0, LAT0, LON1, LAT1)
     dem = fill_voids(dem)
     lat_c = (LAT0 + LAT1) / 2
     lo, hi = float(np.nanmin(dem)), float(np.nanmax(dem))
@@ -852,7 +884,7 @@ def build_terrain():
          "raster": [RASTER_W, RASTER_H], "ss": SS,
          "box": meta["box"], "bbox": [LON0, LAT0, LON1, LAT1], "z": meta["z"],
          "tx0": meta["tx0"], "ty0": meta["ty0"],
-         "source": f"本地自渲染：地形 DEM z{DEM_Z} + OSM 矢量（非瓦片服务）",
+         "source": f"本地自渲染：地形 DEM z{z_use} + OSM 矢量（非瓦片服务）",
          "attribution": "Elevation: SRTM/Copernicus DEM (AWS Open Data, 免费开放) · "
                         "Map data: © OpenStreetMap contributors (ODbL) · "
                         "本地生成，无瓦片服务速率限制。"}

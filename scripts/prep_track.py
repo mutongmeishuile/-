@@ -28,6 +28,24 @@ def _kml_from_cfg():
         return None
 
 
+def _pick_parser(kml):
+    """按**文件内容**选解析脚本，别按扩展名猜。
+
+    两步路有两条导出路径，schema 完全不同：
+      · 新版 `<gx:Track>` + `<gx:coord>`（带 `<when>` 时间戳）→ parse_track_kml.py
+      · 旧版/分段导出 `<Placemark>/<LineString>/<coordinates>`（无时间戳）→ parse_kml_ls.py
+    选错的结果是"解析出 0 个点"，很容易被误判成"文件坏了"。
+    ⚠ 2026-10-10 狼塔 C+V 实测：整条流水线在 wave0 直接失败，只因为 prep 写死了
+      parse_track_kml.py —— 而该线是分段式 KML，必须走 parse_kml_ls.py。
+    """
+    txt = kml.read_text(encoding="utf-8", errors="ignore")[:4_000_000]
+    if "<gx:coord" in txt or "<trkpt" in txt or "<rtept" in txt:
+        return "parse_track_kml.py"
+    if "<LineString>" in txt:
+        return "parse_kml_ls.py"
+    return "parse_track_kml.py"
+
+
 def main():
     kml = sys.argv[1] if len(sys.argv) > 1 else _kml_from_cfg()
     if not kml:
@@ -43,7 +61,9 @@ def main():
     #   parse_track_kml.py 会报 FileNotFoundError 而看起来像"文件没了"。
     kml = kml.resolve()
 
-    for script in ("parse_track_kml.py", "prep_kml_track.py"):
+    parser = _pick_parser(kml)
+    print(f"轨迹格式识别 → {parser}", flush=True)
+    for script in (parser, "prep_kml_track.py"):
         args = [sys.executable, str(HERE / script)] + ([str(kml)] if "parse" in script else [])
         print(f"=== {script} ===", flush=True)
         r = subprocess.run(args, cwd=str(HERE))

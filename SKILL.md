@@ -125,6 +125,14 @@ agent_created: true
 **整套流水线只有 8 个通用脚本 + 1 个线路文件**，全在 `scripts/` 里，拷进工作区即可用，
 **不依赖任何"已生成的文件"**（不需要先跑过一版，也不需要手工搬中间产物）：
 
+> ⚠ **拷贝脚本时，`route_def.py` 是唯一的线路文件，绝不能覆盖！**
+> `scripts/` 里那份 `route_def.py` 是**示例骨架**（内容是"九华山南北穿越"）。
+> 开工时用 `cp .../scripts/*.py 工作区/scripts/` 一次性拷齐是可以的，
+> **但中途补拷/重拷脚本时只拷通用脚本**，否则会把已经写好的线路配置（标题、8 天分日、
+> 20 个点位、全部文案）**静默冲成示例**——`make_all` 仍会跑完、QA 仍会通过，
+> 只是交付物变成"九华山"（2026-10-10 狼塔 C+V 实测踩过，产物文件名都变了才被发现）。
+> 判据：交付物文件名前缀 == `route_def.CFG["file_stem"]`，对不上就是被覆盖了。
+
 | 步骤 | 脚本 | 产出（一律落 `scripts/out/`） |
 |---|---|---|
 | prep | `prep_track.py` | `track_full.json`（全量原始点）· `track_real.json`（简化点）· `profile_real.json`（等距剖面）· `kml_pois.json` |
@@ -355,7 +363,9 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | 症状 / 场景 | 去哪查 |
 |---|---|
 | **地图画出来是"别的山"、轨迹跑到画布外（bbox 写死）** | `guide_common.resolve_bbox()` + `assert_bbox_covers()`；本文档「生成流程 §0」的窗口段 |
-| **解析出 0 个点（选错了入口）** | 本文档「生成流程 §0」的格式判断表；`preflight.py` 会替你数 gx:coord / trkpt / LineString。KML 与 **GPX 都走 `parse_track_kml.py`**，分段式 LineString 才走 `parse_kml_ls.py` |
+| **解析出 0 个点（选错了入口）** | 本文档「生成流程 §0」的格式判断表；`preflight.py` 会替你数 gx:coord / trkpt / LineString。KML 与 **GPX 都走 `parse_track_kml.py`**，分段式 LineString 才走 `parse_kml_ls.py`。**`prep_track.py` 现已按文件内容自动识别**，正常流程不用手工挑脚本 |
+| **长线（>100 km）渲底图特别慢 / 内存爆掉（几十分钟、十几 GB）** | `references/self-hosted-terrain.md` §2.1（`pick_dem_z()` 按窗口像素数自适应降档，z15→z13，25 分钟降到 1 分钟） |
+| **`make_all` 跑完但交付物变成"别的线路名"（route_def 被示例覆盖）** | 本文档「生成流程 §0」的开头警示；重拷脚本时**只拷通用脚本，别碰 `route_def.py`** |
 | **`prep_track.py` 报 `FileNotFoundError: '线路.kml'`，但文件明明在当前目录** | 已修（`prep_track.py` 末尾 `kml.resolve()`）。子进程以 `cwd=scripts/` 跑，相对路径会指错地方；传绝对路径也能绕开 |
 | **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
@@ -459,6 +469,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
       **但桌面版必须为 0** —— 那是出长图的那一版
 - [ ] **三件套不压轨迹、彼此不重叠**（`self_check` 的「家具互相重叠」应为 0）
 - [ ] 用 `new_route.py` 生成的 route_def：`python route_def.py` 打印的「待办还剩 N 处」**已清零**
+- [ ] **交付物文件名前缀 == `route_def.CFG["file_stem"]`**（对不上说明 `route_def.py` 被示例覆盖了）
 - [ ] 图例**每一行样本图形都显示**（不只文字）
 - [ ] 手机版无横向滚动、`g.il` 已隐藏、文字版图例正常
 - [ ] 手机版卡片副标题**没有把数值重复一遍**（`monly` 别填成值本身）
