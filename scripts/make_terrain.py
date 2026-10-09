@@ -327,6 +327,13 @@ def fill_voids(dem):
 
     out = dem.copy()
     out[y0:y1, x0:x1] = filled
+    # ⚠ 通用护栏：空洞是"缺数据"，填它绝不会降低全域最高点。
+    #   如果填完最高点掉了，说明被判为空洞的其实是真峰顶 —— 任何线路都适用这条不变量。
+    pre_max = float(np.nanmax(dem))
+    post_max = float(np.nanmax(out))
+    if post_max < pre_max - 5:
+        print(f"   ⚠⚠ 填充后全域最高点从 {pre_max:.0f} 掉到 {post_max:.0f} m —— "
+              f"疑似把真峰顶当空洞填平了！请调大 VOID_MAD（当前 {VOID_MAD:.0f}）后重跑")
     print(f"   填补 SRTM 空洞 {int(bad.sum())} px（占 {100*bad.mean():.2f}%；"
           f"1/{f} 分辨率调和插值 + 全分辨率抹缝，中位 {med:.0f} m 基准）")
     return out

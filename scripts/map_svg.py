@@ -228,6 +228,19 @@ def _legend_size():
     return (round(566 * FURN_LG), round(g["h"] * FURN_LG))
 
 
+def _nice_bar_km(m_per_px, iw, target_frac=0.16):
+    """按底图比例自适应选一个"整数好看"的比例尺长度（km）。
+
+    ⚠ 写死长度是不通用的：短线路（bbox 只有几公里）会被 2 km 的条占满整幅，
+    长线路（上百公里）又会显得太小。这里取"地图宽度的 target_frac"当目标像素长，
+    再吸附到 0.1/0.2/0.5/1/2/5/… 的整数档。
+    """
+    target_m = iw * target_frac * m_per_px
+    cand = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+    km = min(cand, key=lambda k: abs(k * 1000 - target_m))
+    return km
+
+
 def build_map_overlay(mobile=False):
     """返回地图 SVG 的内容（不含 <svg> 外壳与底图）。"""
     global PS, _PAD, _PIN_R
@@ -315,11 +328,11 @@ def build_map_overlay(mobile=False):
     # ⚠ 比例尺：色条长度**绝不能被 FURN_* 缩放**（否则"1 km"就不等于 1 km 了）。
     #   而且底衬框必须比色条宽（含内衬），否则色条会戳出框外 ——
     #   2026-10-09 实测就是"白底方框比色条窄、色条压在底图花纹上"，用户一眼看出不协调。
-    # 色条取 2 km：本图 1 km ≈ 80 逻辑 px（地图逻辑宽 1504 px 覆盖约 18.8 km），
-    # 取 1 km 时"0.5"与"1 km"两个数字会正好贴在一起（实测撞字）→ 取 2 km。
-    # ⚠ 卡高必须**按字高算**：数字不参与 FURN_SB 缩放，卡高就不能只按 FURN_SB 缩 ——
-    #   否则数字会溢出卡片上沿被切掉（实测踩坑）。
-    sb_bar = 2000 / M_PER_PX
+    # 比例尺长度**按底图比例自适应**（取整数档，目标 ≈ 地图宽度的 16%）。
+    # 本图 1 km ≈ 80 逻辑 px，自动选出的正是 2 km —— 但换一条线路（bbox 大小不同）时
+    # 写死 2 km 就会要么占满整幅、要么小到看不清。档位标签统一 0 / 一半 / 全长。
+    sb_km = _nice_bar_km(M_PER_PX, IW)
+    sb_bar = sb_km * 1000 / M_PER_PX
     sb_fs = 12 * M                                 # 数字字号（信息，不缩放）
     sb_th = 4.4 * M                                # 色条高度
     sb_padx = round(11 * M * FURN_SB)              # 左右内衬（装饰，可缩）
@@ -471,9 +484,9 @@ def build_map_overlay(mobile=False):
                  f'<text x="{bx:.1f}" y="{num_y:.1f}" font-size="{fs:.1f}" '
                  f'font-weight="700" fill="#3A4250">0</text>'
                  f'<text x="{bx+sb_bar/2:.1f}" y="{num_y:.1f}" text-anchor="middle" '
-                 f'font-size="{fs:.1f}" fill="#3A4250">1</text>'
+                 f'font-size="{fs:.1f}" fill="#3A4250">{sb_km/2:g}</text>'
                  f'<text x="{bx+sb_bar:.1f}" y="{num_y:.1f}" text-anchor="end" '
-                 f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">2 km</text></g>')
+                 f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">{sb_km:g} km</text></g>')
     return "".join(o), placed
 
 
