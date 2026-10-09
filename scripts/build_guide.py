@@ -304,14 +304,15 @@ def _duration():
 
 
 def _auto_stats():
-    top = max(RD.POIS, key=lambda p: p[3]) if RD.POIS else None
+    _with_ele = [d for d in GC.pois_of(RD) if d["ele"] is not None]
+    top = max(_with_ele, key=lambda d: d["ele"]) if _with_ele else None
+    top_name = top["name"].split(" · ")[0] if top else "最高点"
     dur = _duration()
     cards = [
         (f"{TOTAL_KM:.1f} km", "总里程（实测轨迹累计）", "总里程 · 实测轨迹"),
         (f"+{RD.ASC} / −{RD.DESC} m", "累计爬升 / 下降", "累计爬升 / 下降"),
-        (f"{RD.fmt_ele(top[3])} m" if top else "—",
-         f"最高点 · {top[0].split(' · ')[0]}" if top else "最高点",
-         f"最高点 · {top[0].split(' · ')[0]}" if top else "最高点"),
+        (f"{RD.fmt_ele(top['ele'])} m" if top else "—",
+         f"最高点 · {top_name}", f"最高点 · {top_name}"),
         (dur, "实测用时", "实测用时"),
     ]
     return CFG.get("stats", cards)
@@ -370,7 +371,6 @@ def build_html():
     c2 = MS.self_check(True)
     prof_d = profile_svg(fs=1.0, mobile=False)
     prof_p = profile_svg(fs=2.4, mobile=True)
-
     days_html = "".join(day_card(*c) for c in CFG.get("day_cards", []))
     return c1 + c2, f'''<!DOCTYPE html>
 <html lang="zh-CN">

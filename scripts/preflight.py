@@ -68,13 +68,44 @@ def main():
         ok(f"scripts/out/ 存在（{len(list(out.glob('*.json')))} 个 json）")
     else:
         print("  [..]   scripts/out/ 不存在（首次运行正常，各脚本会建）")
-    for f in ("guide_common.py", "route_def.py", "prep_track.py", "fetch_osm.py",
-              "make_terrain.py", "build_guide.py", "shoot_guide.py",
-              "render_map_hi.py", "make_gpx.py", "qa_guide.py"):
-        if (HERE / f).exists():
-            ok(f"{f} 就位")
-        else:
-            fail += bad(f"缺 {f}（通用脚本缺一不可，别从旧项目拷贝残缺副本）")
+    # ⚠ 这份清单不是"有几个脚本"的清单，而是"默认链跑通所必需"的清单 ——
+    #   别只列 make_all 的 8 个步骤名：步骤名不等于文件名，且有几步是**一个脚本
+    #   调另一个**（prep_track → parse_track_kml/prep_kml_track）或**import 另一个**
+    #   （build_guide → map_svg；make_terrain → draw_osm）。漏掉被调用的那个，
+    #   preflight 全绿、跑到一半才炸，正是最费时间的返工项。
+    REQUIRED = (
+        # 共享库与唯一配置
+        "guide_common.py", "route_def.py",
+        # prep：入口 + 它按顺序 subprocess 调用的两个解析器
+        "prep_track.py", "parse_track_kml.py", "prep_kml_track.py",
+        # osm / dem：fetch_osm 抓底图，make_terrain 出地形并 import draw_osm 叠注记
+        "fetch_osm.py", "make_terrain.py", "draw_osm.py",
+        # html / long / map：build_guide 与 render_map_hi 共用 map_svg 画图
+        "build_guide.py", "map_svg.py", "shoot_guide.py", "render_map_hi.py",
+        # gpx / qa
+        "make_gpx.py", "qa_guide.py",
+    )
+    # 按需脚本：只在特定线路/场合用到，缺了不算错，但值得提醒一句
+    OPTIONAL = (
+        ("parse_kml_ls.py",  "KML 是分段 <LineString> 时才用它替代 parse_track_kml.py"),
+        ("tiles.py",         "B 路线：在线瓦片下载器（build_base_map / tile_tint 的前置）"),
+        ("build_base_map.py", "B 路线：拼在线瓦片当底图"),
+        ("tile_tint.py",     "B 路线：抹掉瓦片自带等高线 + 线画分离 + DEM 自绘"),
+        ("build_route_guide.py", "没有轨迹、纯手绘的兜底方案"),
+        ("new_route.py",     "开工准备：从 out/ 产物生成 route_def.py 骨架"),
+        ("make_all.py",      "一条命令跑全流程（调度器）"),
+    )
+    miss_req = [f for f in REQUIRED if not (HERE / f).exists()]
+    if miss_req:
+        for f in miss_req:
+            fail += bad(f"缺 {f}（默认链缺一不可，别从旧项目拷贝残缺副本）")
+    else:
+        ok(f"默认链 {len(REQUIRED)} 个脚本全部就位")
+    miss_opt = [f for f, _ in OPTIONAL if not (HERE / f).exists()]
+    if miss_opt:
+        for f, why in OPTIONAL:
+            if f in miss_opt:
+                print(f"  [warn] 缺 {f} —— 不影响默认链；{why}")
     # ⚠ 两套 out/ 是真实返工项：有的脚本写 HERE/"out"，有的写上一级
     if (HERE.parent / "out").is_dir():
         print("  [warn] 上一级也有 out/ —— 确认所有脚本统一用 HERE/'out'，别两套并存")

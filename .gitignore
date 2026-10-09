@@ -7,6 +7,15 @@ __pycache__/
 *.pyo
 
 # 本地运行产生的中间产物
-demcache/
+# ⚠ gitignore 的 # 只在**行首**才是注释；写在模式后面会被当成模式的一部分，
+#   `out_html/  # xxx` 这样写等于匹配一个带空格和 # 的路径 —— 永远匹配不上。
+#   加注释请单独占一行。
 out/
+out_html/
+
+# 旧版 DEM 缓存位置；现在缓存在 ~/.workbuddy/cache/hiking-dem/（跨项目共享，见 guide_common.dem_cache_dir）
+demcache/
 *.log
+
+# new_route.py 覆盖 route_def.py 前留的备份
+*.py.bak

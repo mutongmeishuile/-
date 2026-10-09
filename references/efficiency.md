@@ -264,4 +264,4 @@ python scripts/make_all.py --dry-run           # 先看分层认没认对脚本
   `sys.argv = sys.argv[:1]` 再 import，否则自己的参数被它当成 zoom 吃掉报
   `invalid literal for int()`。
 - **build_route().pts 是 (lon,lat) 二元组**，高程在 `r["ele"]`——探针里 `p[2]` 直接
-  IndexError。探针脚本落盘复用（probe_dem.py），不要每次 inline 重写。
+  IndexError。探针脚本落盘复用（如 `probe_xx.py`，用完别提交），不要每次 inline 重写。

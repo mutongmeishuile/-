@@ -53,9 +53,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 # 排除掉"模板/其他路线方案"的脚本，避免被自动发现误挑
+# （discover() 本来就只按前缀挑，列在这里是为了把"它们存在但不在默认链里"写明白）
 EXCLUDE = {
     "build_base_map.py",     # B 路线（在线瓦片）专用，不在默认链里
+    "tile_tint.py",          # B 路线：瓦片线画分离 + DEM 自绘，人工在 build_base_map 之后跑
     "build_route_guide.py",  # 无轨迹时的手绘方案模板
+    "new_route.py",          # 生成 route_def.py 骨架；跑一次就够，属"开工准备"不属流水线
     "make_all.py", "preflight.py", "guide_common.py",
 }
 

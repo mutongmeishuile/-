@@ -38,6 +38,10 @@ def main():
     kml = next((p for p in cands if p.exists()), None)
     if kml is None:
         sys.exit(f"KML 不存在。找过：{[str(c) for c in cands]}")
+    # ⚠ 必须 resolve()：下面 subprocess 是以 cwd=HERE(scripts/) 跑的，
+    #   相对路径（哪怕在当前目录里确实存在）到了子进程就指向 scripts/ 了，
+    #   parse_track_kml.py 会报 FileNotFoundError 而看起来像"文件没了"。
+    kml = kml.resolve()
 
     for script in ("parse_track_kml.py", "prep_kml_track.py"):
         args = [sys.executable, str(HERE / script)] + ([str(kml)] if "parse" in script else [])

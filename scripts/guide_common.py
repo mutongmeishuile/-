@@ -11,6 +11,8 @@
   ⑤ 地图「三件套」（图例 / 指北针 / 比例尺）的动态落点求解器 `Placer`
   ⑥ **地图窗口（bbox）自动推导 + 覆盖校验** —— 窗口写死是"画错山"的根源，
      详见 `resolve_bbox()` / `assert_bbox_covers()` 的注释。
+  ⑦ 跨项目共享的 DEM 瓦片缓存目录 `dem_cache_dir()`（瓦片按 z/x/y 命名，天然全局唯一）
+  ⑧ POI 归一化 `poi()` / `pois_of()`：元组与字典两种写法都收
 
 Placer 的设计目标（对应技能要求「缩小 + 动态放在合适位置，不遮盖轨迹」）：
   · 尺寸由调用方给定，调用方按 FURN_* 系数缩小；
@@ -21,6 +23,7 @@ Placer 的设计目标（对应技能要求「缩小 + 动态放在合适位置�
 """
 import json
 import math
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -29,6 +32,27 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 ROOT = HERE.parent                      # 交付物（HTML / 长图 / 高清图 / GPX）落在这里
 OUT.mkdir(exist_ok=True)
+
+
+# ------------------------------------------------------------------ 全局缓存
+def dem_cache_dir():
+    """DEM 瓦片缓存目录 —— **用户级、跨项目共享**。
+
+    瓦片文件名 `terr_{z}_{x}_{y}.png` 本身就全局唯一（z/x/y 是地球上的唯一格子），
+    所以缓存**没有任何理由**放在项目里。旧版放在 `scripts/demcache/`，
+    后果是：同一片山区做第二条线路时，一块都复用不上，又得重下几万块瓦片
+    （实测冷缓存 100–200 s，热缓存 6 s —— 差别全在这里）。
+
+    可用环境变量 `HIKING_DEM_CACHE` 覆盖（缓存盘不在 C 盘时用）。
+    """
+    env = os.environ.get("HIKING_DEM_CACHE")
+    base = Path(env) if env else (Path.home() / ".workbuddy" / "cache" / "hiking-dem")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:                     # 家目录不可写时退回项目内，别让流水线断
+        base = HERE / "demcache"
+        base.mkdir(exist_ok=True)
+    return base
 
 BROWSER_CANDS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -148,8 +172,8 @@ def resolve_bbox(pad_frac=0.08, min_pad=0.004):
     try:
         sys.path.insert(0, str(HERE))
         import route_def as RD
-        extra = [(p[1], p[2]) for p in getattr(RD, "POIS", [])
-                 if len(p) >= 3 and (p[1] or p[2])]     # 丢掉 (0,0) 占位点
+        # 丢掉 (0,0) 占位点：轨迹未就绪时 _p() 会退化成占位坐标，混进包围盒会毁掉窗口
+        extra = [(d["lon"], d["lat"]) for d in pois_of(RD) if (d["lon"] or d["lat"])]
         fixed = getattr(RD, "CFG", {}).get("bbox")
         if fixed:
             return (*[float(v) for v in fixed], "route_def.CFG['bbox']（显式覆盖）")
@@ -185,6 +209,44 @@ def assert_bbox_covers(bbox, where=""):
     dy = (y1 - y0) / max(oy1 - oy0, 1e-9)
     if dx > 12 or dy > 12:
         print(f"   ⚠ 窗口是轨迹包围盒的 {dx:.1f}×{dy:.1f} 倍，先确认坐标没写错。")
+
+
+# ------------------------------------------------------------------ POI 归一化
+# route_def.POIS 有两种合理写法，都要能收 —— 只认一种的话，手写配置的人一踩就是
+# `KeyError: 0` 或 `TypeError`，而且报错点在下游几百行外，很难回想到是 schema 问题。
+#   元组（模板默认，紧凑）：(name, lon, lat, ele, kind, dx, dy, anchor)
+#   字典（手写直观，字段自解释）：
+#       {"name":"金顶","lon":103.336,"lat":29.519,"ele":3079,"kind":"peak_hi",
+#        "dx":-28,"dy":-6,"anchor":"end"}
+_POI_KEYS = ("name", "lon", "lat", "ele", "kind", "dx", "dy", "anchor")
+
+
+def poi(p):
+    """把一条 POI 归一化成 dict，兼容元组与字典。**返回的 dict 八个键一定都在**，
+    缺的给安全默认值 —— 下游可以放心 `d["lon"]`，不必层层判断。"""
+    if isinstance(p, dict):
+        d = dict(p)
+    else:
+        d = {k: p[i] for i, k in enumerate(_POI_KEYS) if i < len(p)}
+    d.setdefault("name", "?")
+    d.setdefault("lon", None)
+    d.setdefault("lat", None)
+    d.setdefault("ele", None)
+    d.setdefault("dx", 0)
+    d.setdefault("dy", 0)
+    d.setdefault("anchor", "start")
+    d.setdefault("kind", "poi")
+    if d.get("kind") is None:
+        d["kind"] = "poi"
+    return d
+
+
+def pois_of(mod=None):
+    """取 route_def.POIS 并全部归一化。mod 省略时自动 import route_def。"""
+    if mod is None:
+        sys.path.insert(0, str(HERE))
+        import route_def as mod                                    # noqa: F811
+    return [poi(p) for p in (getattr(mod, "POIS", []) or [])]
 
 
 # ------------------------------------------------------------------ 文本宽度

@@ -28,12 +28,17 @@ TILE = 256
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 OUT.mkdir(exist_ok=True)
-CACHE = HERE / "demcache"
-CACHE.mkdir(exist_ok=True)
 
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 import guide_common as GC                                           # noqa: E402
+
+# DEM 瓦片缓存 —— **用户级、跨项目共享**（`~/.workbuddy/cache/hiking-dem/`）。
+# 瓦片按 z/x/y 命名，本身就是地球上的唯一格子，所以缓存没有理由放在项目里。
+# 旧版放 `scripts/demcache/`：同一片山区做第二条线路时一块都复用不上，
+# 又得重下几万块瓦片（冷缓存 100–200 s vs 热缓存 6 s，差别全在这）。
+# 换盘/多机用 HIKING_DEM_CACHE 环境变量覆盖。
+CACHE = GC.dem_cache_dir()
 
 TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 UA = "hiking-route-guide/1.0 (local offline terrain render)"
@@ -655,9 +660,9 @@ def avoid_points(meta, scale_raster, ss):
             print(f"   （轨迹避让读取失败：{e}）")
     try:
         sys.path.insert(0, str(HERE))
-        from route_def import POIS
-        for p in POIS:
-            x, y = proj(p[1], p[2])
+        import route_def as _RD
+        for d in GC.pois_of(_RD):
+            x, y = proj(d["lon"], d["lat"])
             pts.append((x, y, 20.0 * ss))
     except Exception:                                              # noqa
         pass
@@ -734,11 +739,11 @@ def build_terrain():
         #   全名比对不成立，底图上会并排出现两条同地注记。
         #   → 除全名外，再把「·」前的核心地名也加进跳过表。
         try:
-            from route_def import POIS
+            import route_def as _RD
             skip = set()
-            for _p in POIS:
-                skip.add(_p[0])
-                skip.add(_p[0].split("·")[0].strip())
+            for d in GC.pois_of(_RD):
+                skip.add(d["name"])
+                skip.add(d["name"].split("·")[0].strip())
         except Exception:                                          # noqa
             skip = set()
         pil = draw_overlay(pil, m, OUT / "osm.json", skip_names=skip,

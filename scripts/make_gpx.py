@@ -6,6 +6,8 @@
 三个必须记住的点（都踩过）：
   1. **航点不要直接搬 KML 注记** —— 里面混着「3550」「回望某某垭口」这类随手标注，
      导进手表就是噪声。用**已核验过的规范 POI 列表**（route_def.POIS）。
+     POIS 允许**元组或字典**两种写法（`(name, lon, lat, ele, kind, …)` 或同名键的 dict），
+     由 `guide_common.poi()` 统一归一化 —— 别再自己下标取值。
   2. **时间戳要写 UTC**（`YYYY-MM-DDTHH:MM:SSZ`）。轨迹里存的是北京时间（UTC+8），
      取 `HH:MM:SS` 字符串直接反推会让手表整体偏 8 小时。
   3. **分成几段就把段界点归到前一天**，别把界点写两遍，否则 trkpt 总数会多出"段数−1"个。
@@ -92,13 +94,17 @@ def main():
                 ET.SubElement(tp, "time").text = t
             n_pt += 1
 
-    for p in getattr(RD, "POIS", []):
-        name, lon, lat, ele, kind = p[0], p[1], p[2], p[3], p[4]
-        w = ET.SubElement(gpx, "wpt", {"lat": f"{lat:.6f}", "lon": f"{lon:.6f}"})
-        ET.SubElement(w, "ele").text = f"{float(ele):.1f}"
-        ET.SubElement(w, "name").text = name
-        ET.SubElement(w, "desc").text = kind
-        ET.SubElement(w, "sym").text = "Flag, Blue" if kind in ("start", "end") else "Pin"
+    for d in GC.pois_of(RD):
+        # POIS 允许元组或字典两种写法（GC.poi 已归一化）；ele 缺省时不写 <ele>，
+        # 别硬塞一个 0 —— 手表会把它当成"海拔 0 m 的航点"。
+        w = ET.SubElement(gpx, "wpt",
+                          {"lat": f"{float(d['lat']):.6f}", "lon": f"{float(d['lon']):.6f}"})
+        if d["ele"] is not None:
+            ET.SubElement(w, "ele").text = f"{float(d['ele']):.1f}"
+        ET.SubElement(w, "name").text = d["name"]
+        ET.SubElement(w, "desc").text = str(d["kind"])
+        ET.SubElement(w, "sym").text = ("Flag, Blue" if d["kind"] in ("start", "end")
+                                        else "Pin")
 
     ET.indent(gpx, space=" ")
     OUT_GPX.write_text('<?xml version="1.0" encoding="UTF-8"?>\n'

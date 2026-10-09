@@ -374,8 +374,9 @@ def main():
     ss = im.width / meta["size"][0]
     print(f"输入 {im.size}  逻辑 {tuple(meta['size'])}  超采样 {ss:.2f}×  z{meta['z']}")
     try:
-        from route_def import POIS
-        skip = {p[0] for p in POIS}
+        import guide_common as GC
+        import route_def as _RD
+        skip = {d["name"] for d in GC.pois_of(_RD)}
     except Exception:                                              # noqa
         skip = set()
     im = draw_overlay(im, meta, skip_names=skip,
