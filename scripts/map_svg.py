@@ -199,11 +199,29 @@ def build_map_overlay(mobile=False):
     ROUTE_W, HALO_W = 5.4 * M, 8.6 * M
     o.append(f'<path d="{d_of(XY)}" fill="none" stroke="#FFFFFF" stroke-width="{HALO_W}" '
              f'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
-    for seg, col in ((XY[:SPLIT_I + 1], D1_C), (XY[SPLIT_I:], D2_C)):
+    # ---- 分日配色：支持 N 天。优先 CFG["days"] 的 color + CFG["day_bounds"]（km），
+    #      没有 day_bounds 时退回单分界 split1（两天）的老行为。
+    _day_cols = [d.get("color", D1_C) for d in _CFG.get("days", [])] or [D1_C, D2_C]
+    _bounds_km = [0.0] + [float(b) for b in _CFG.get("day_bounds", [])] + [float(TOTAL_KM)]
+    if len(_bounds_km) == 2:                      # 无 day_bounds → 老的两段行为
+        _bounds_km = [0.0, float(KM[SPLIT_I]), float(TOTAL_KM)]
+    while len(_day_cols) < len(_bounds_km) - 1:   # 分段多于颜色 → 沿用同族末色
+        _day_cols.append(_day_cols[-1])
+
+    def _idx_km(kmv):
+        for i, k in enumerate(KM):
+            if k >= kmv:
+                return i
+        return len(KM) - 1
+
+    _split_is = [_idx_km(b) for b in _bounds_km]
+    for si in range(len(_bounds_km) - 1):
+        i0, i1 = _split_is[si], _split_is[si + 1]
+        seg = XY[i0:max(i1 + 1, i0 + 2)]
         if len(seg) < 2:
             continue
-        o.append(f'<path d="{d_of(seg)}" fill="none" stroke="{col}" stroke-width="{ROUTE_W}" '
-                 f'stroke-linecap="round" stroke-linejoin="round"/>')
+        o.append(f'<path d="{d_of(seg)}" fill="none" stroke="{_day_cols[si]}" '
+                 f'stroke-width="{ROUTE_W}" stroke-linecap="round" stroke-linejoin="round"/>')
 
     # 每 5 km 里程点
     for target in range(5, int(TOTAL_KM) + 1, 5):
@@ -216,13 +234,14 @@ def build_map_overlay(mobile=False):
                  f'font-size="{10*(MFS_S if mobile else 1.0):.0f}" font-weight="800" '
                  f'fill="#3A4250">{target}</text>')
 
-    # 分日界短线
-    sx, sy = XY[SPLIT_I]
-    o.append(f'<line x1="{sx-56*M:.0f}" y1="{sy:.1f}" x2="{sx+56*M:.0f}" y2="{sy:.1f}" '
-             f'stroke="#FFFFFF" stroke-width="{7*M:.1f}" stroke-linecap="round"/>'
-             f'<line x1="{sx-56*M:.0f}" y1="{sy:.1f}" x2="{sx+56*M:.0f}" y2="{sy:.1f}" '
-             f'stroke="#6C7480" stroke-width="{2.4*M:.1f}" '
-             f'stroke-dasharray="{11*M:.0f} {8*M:.0f}" stroke-linecap="round"/>')
+    # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
+    for _bi in _split_is[1:-1] if len(_split_is) > 2 else [SPLIT_I]:
+        sx, sy = XY[_bi]
+        o.append(f'<line x1="{sx-56*M:.0f}" y1="{sy:.1f}" x2="{sx+56*M:.0f}" y2="{sy:.1f}" '
+                 f'stroke="#FFFFFF" stroke-width="{7*M:.1f}" stroke-linecap="round"/>'
+                 f'<line x1="{sx-56*M:.0f}" y1="{sy:.1f}" x2="{sx+56*M:.0f}" y2="{sy:.1f}" '
+                 f'stroke="#6C7480" stroke-width="{2.4*M:.1f}" '
+                 f'stroke-dasharray="{11*M:.0f} {8*M:.0f}" stroke-linecap="round"/>')
 
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
 
