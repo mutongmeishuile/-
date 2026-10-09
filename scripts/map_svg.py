@@ -28,10 +28,10 @@ PROJ = GC.projector_of(meta)
 M_PER_PX = GC.m_per_px(meta)
 
 INK = "#1F2430"
-# ---- 家具缩放系数（要求「缩小」，2026-10-09 按用户反馈再收一档）----
-FURN_LG = 0.66        # 图例：566 基准宽 → 374（面积 ≈ 0.44）
-FURN_CP = 0.62        # 指北针：半径 42 → 26
-FURN_SB = 0.68        # 比例尺：整体缩小 + 细身化
+# ---- 家具缩放系数（要求「缩小」，2026-10-09 按用户反馈两次收档）----
+FURN_LG = 0.55        # 图例：566 基准宽 → 311（面积 ≈ 0.30）
+FURN_CP = 0.58        # 指北针：半径 42 → 24
+FURN_SB = 0.62        # 比例尺：只作用于字与内衬，**不作用于色条长度**（见 §12）
 
 EMBED_MAX = 1600      # 网页内嵌底图上限；高清地图用 embed_max=0
 PS_BASE = 0.85        # 点位符号／标注基准缩放
@@ -279,10 +279,15 @@ def build_map_overlay(mobile=False):
 
     lg_rows = _legend_rows()
     LG_W, LG_H = _legend_size()
-    lg_pad = round(14 * M)
-    sb_bar = 2000 / M_PER_PX
-    SB_W, SB_H = round((sb_bar + 46 * M) * FURN_SB), round(66 * M * FURN_SB)
-    CP_R = round(42 * M * FURN_CP)          # 42 → 30
+    lg_pad = round(12 * M)
+    # ⚠ 比例尺：色条长度**绝不能被 FURN_* 缩放**（否则"1 km"就不等于 1 km 了）。
+    #   而且底衬框必须比色条宽（含内衬），否则色条会戳出框外 ——
+    #   2026-10-09 实测就是"白底方框比色条窄、色条压在底图花纹上"，用户一眼看出不协调。
+    sb_bar = 1000 / M_PER_PX                 # 1 km 的像素长度（更短更雅致，也更好摆位）
+    sb_pad = round(11 * M * FURN_SB)
+    SB_W = round(sb_bar + 2 * sb_pad)
+    SB_H = round(30 * M * FURN_SB)
+    CP_R = round(42 * M * FURN_CP)          # 42 → 24
     CP_W = CP_H = CP_R * 2 + 16 * M
 
     placed = {}
@@ -336,13 +341,16 @@ def build_map_overlay(mobile=False):
             px = min(max(x, box[0]), box[2])
             py = min(max(y, box[1]), box[3])
             o.append(f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
-                     f'stroke="#FFFFFF" stroke-width="{4*M:.1f}" stroke-linecap="round"/>'
+                     f'stroke="#FFFFFF" stroke-width="{2.6*M:.1f}" stroke-linecap="round"/>'
                      f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
                      f'stroke="{col}" stroke-width="{1.4*M:.1f}" stroke-linecap="round" '
                      f'opacity="0.75"/>')
+        # ⚠ 白描边要"细而净"：5.4*PS（≈4.6 逻辑 px / 9 栅格 px）在浅色地形上会糊成
+        #   一圈白阴影（用户原话"字体看上去有白色的阴影"）。收到 2.4*PS ≈ 字号的 13%，
+        #   读起来是"描边"而不是"发光"，同时仍能压住底图等高线。
         o.append(f'<text x="{tx}" y="{ty+7.4*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
-                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{5.4*PS:.1f}" '
-                 f'paint-order="stroke" stroke-linejoin="round">{t}</text>')
+                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{2.4*PS:.1f}" '
+                 f'stroke-opacity="0.92" paint-order="stroke" stroke-linejoin="round">{t}</text>')
 
     # ---- 落位绘制 ----
     if "lg" in placed:
@@ -398,25 +406,28 @@ def build_map_overlay(mobile=False):
     if "sb" in placed:
         sx0, sy0, srect = placed["sb"]
         bw, bh = srect[2] - srect[0], srect[3] - srect[1]
-        bx, by = sx0 + 12 * M, sy0 + bh - 13 * M
-        # 比例尺：细身、圆角、半透明底 + 仅一条细描边，不再用"白方块 + 粗黑条"的硬框
-        th = 4.6 * M
+        fs = 12.5 * M * FURN_SB                     # 数字字号随 FURN_SB 缩，色条不缩
+        th = 4.4 * M                                # 色条高度
+        bx = sx0 + (bw - sb_bar) / 2.0              # 色条在底衬框内居中
+        bar_bottom = sy0 + bh - round(9 * M * FURN_SB)
+        bar_top = bar_bottom - th
+        num_y = bar_top - 4.5 * M                   # 数字紧贴色条上方，不留空
         o.append(f'<g><rect x="{sx0}" y="{sy0}" width="{bw:.0f}" height="{bh:.0f}" '
-                 f'rx="{round(7*M)}" fill="#FFFFFF" opacity="0.86" stroke="#DAD3C7" '
+                 f'rx="{round(6*M)}" fill="#FBFAF7" opacity="0.94" stroke="#CFC7B9" '
                  f'stroke-width="{1.1*M:.1f}"/>'
-                 f'<rect x="{bx:.0f}" y="{by-th:.1f}" width="{sb_bar/2:.1f}" '
+                 f'<rect x="{bx:.1f}" y="{bar_top:.1f}" width="{sb_bar/2:.1f}" '
                  f'height="{th:.1f}" fill="#3A4250"/>'
-                 f'<rect x="{bx+sb_bar/2:.1f}" y="{by-th:.1f}" width="{sb_bar/2:.1f}" '
+                 f'<rect x="{bx+sb_bar/2:.1f}" y="{bar_top:.1f}" width="{sb_bar/2:.1f}" '
                  f'height="{th:.1f}" fill="#FFFFFF" stroke="#3A4250" stroke-width="{1.1*M:.1f}"/>'
-                 f'<line x1="{bx+sb_bar/2:.1f}" y1="{by-th-2*M:.1f}" '
-                 f'x2="{bx+sb_bar/2:.1f}" y2="{by+2*M:.1f}" stroke="#3A4250" '
+                 f'<line x1="{bx+sb_bar/2:.1f}" y1="{bar_top-1.6*M:.1f}" '
+                 f'x2="{bx+sb_bar/2:.1f}" y2="{bar_bottom+1.6*M:.1f}" stroke="#3A4250" '
                  f'stroke-width="{1.1*M:.1f}"/>'
-                 f'<text x="{bx:.0f}" y="{by-th-5*M:.1f}" font-size="{round(12.5*M)}" '
+                 f'<text x="{bx:.1f}" y="{num_y:.1f}" font-size="{fs:.1f}" '
                  f'font-weight="700" fill="#3A4250">0</text>'
-                 f'<text x="{bx+sb_bar/2:.1f}" y="{by-th-5*M:.1f}" text-anchor="middle" '
-                 f'font-size="{round(12.5*M)}" fill="#3A4250">1</text>'
-                 f'<text x="{bx+sb_bar:.1f}" y="{by-th-5*M:.1f}" text-anchor="end" '
-                 f'font-size="{round(12.5*M)}" font-weight="700" fill="#3A4250">2 km</text></g>')
+                 f'<text x="{bx+sb_bar/2:.1f}" y="{num_y:.1f}" text-anchor="middle" '
+                 f'font-size="{fs:.1f}" fill="#3A4250">0.5</text>'
+                 f'<text x="{bx+sb_bar:.1f}" y="{num_y:.1f}" text-anchor="end" '
+                 f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">1 km</text></g>')
     return "".join(o), placed
 
 

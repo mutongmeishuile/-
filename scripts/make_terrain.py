@@ -612,7 +612,9 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True):
     sx, sy = scale
     S = SS
     f = _label_font(max(9, int(round(LABEL_FONT * S))))
-    stroke = max(2, int(round(2.0 * S)))
+    # 白描边收细：2.0*S（≈字号 18%）在浅色地形上会糊成"白阴影"（用户反馈），
+    # 收到 1.7*S ≈ 14%，读起来是干净的描边；再细就会在深色晕渲上失去可读性。
+    stroke = max(2, int(round(1.7 * S)))
     gap, sep, win = LABEL_GAP * S, LABEL_SEP * S, LABEL_WINDOW * S
     W, H = pil.size
 

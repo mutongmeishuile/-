@@ -175,7 +175,7 @@ class Labeller:
         return n
 
     def place(self, d, text, xy, font, fill, stroke=(255, 255, 255),
-              anchor_center=True, force=False, pad=2, stroke_w=2, fallback=True):
+              anchor_center=True, force=False, pad=2, stroke_w=1.8, fallback=True):
         """放注记。优先完全不压已有注记；**实在放不下也要放**（fallback）。
 
         ⚠ 2026-10-09 亚丁线实测：等高线高程标注会先占用网格（104 个标注 ≈ 10% 单元，
@@ -385,7 +385,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         d.polygon(tri, fill=(84, 60, 40), outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
         if lab.place(d, txt, (x, y + 7 * S), f_peak, (58, 40, 26), anchor_center=False,
-                     stroke_w=2.8 * S, pad=2 * S):
+                     stroke_w=2.1 * S, pad=2 * S):
             n_peak += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
@@ -425,7 +425,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not name or name in skip_names:
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_center=True,
-                     stroke_w=2.8 * S, pad=2 * S):
+                     stroke_w=2.1 * S, pad=2 * S):
             n_water += 1
 
     if verbose:
