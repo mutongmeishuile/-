@@ -412,7 +412,9 @@ CFG = {
 
 def _todo_count():
     """数一下本文件里还剩几处待办标记 —— 交付前应该清零。"""
-    return Path(__file__).read_text(encoding="utf-8").count("@@MARK@@ ")
+    # 占位都是「★ TODO」<描述>（开引号+标记+空格）；本函数计数调用里那个字面量
+    # 也含在内，故总数减 1 排除自身这行，得到真实占位数。
+    return max(Path(__file__).read_text(encoding="utf-8").count('"@@MARK@@ ') - 1, 0)
 
 
 if __name__ == "__main__":

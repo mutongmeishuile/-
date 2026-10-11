@@ -143,9 +143,9 @@ def todo_guard():
     rd = HERE / "route_def.py"
     if not rd.exists():
         return 0
-    # 只数「★ TODO 」(标记后带空格) —— 真正的占位都是 "★ TODO <描述>" 形式；
-    # 常数定义 `TODO = "★ TODO"` 与本文件里的 `.count("★ TODO")` 不含尾随空格，避免误报。
-    n = rd.read_text(encoding="utf-8").count("★ TODO ")
+    # 占位都是 "★ TODO <描述>"（开引号+标记+空格）；route_def 的 _todo_count 函数自身那行
+    # 也含 '"★ TODO '，故总数减 1 排除自身这行，得到真实占位数。
+    n = max(rd.read_text(encoding="utf-8").count('"★ TODO ') - 1, 0)
     if n:
         print(f"  !! route_def.py 仍有 {n} 处 ★ TODO 未填 —— 交付物会带占位文字，先回填再交付")
     else:
