@@ -16,9 +16,6 @@
    而且裁掉的那块是页面的白底，和"留白"长得一模一样，肉眼只能看见"底部有点空"。
    → 正解：**开窗留余量 + 按量到的 SVG 矩形裁**（与 shoot_guide.py 同一套做法）。
 """
-import json
-import re
-import subprocess
 import time
 
 import numpy as np
@@ -31,26 +28,10 @@ import route_def as RD
 CFG = getattr(RD, "CFG", {})
 STEM = CFG.get("file_stem", "线路")
 OUT_JPG = GC.ROOT / f"{STEM}-全线地图.jpg"
-BROWSER = GC.find_browser()
 
 W = MS.IW * 2                       # 与 make_terrain 的超采样一致（逻辑宽 ×2 = 栅格宽）
 H = round(MS.IH * W / MS.IW)
-SLACK_W, SLACK_H = 60, 260          # 给浏览器 chrome / 滚动条留的余量（只用于开窗，不参与裁剪）
-
-MEASURE_JS = r"""
-<script>
-window.addEventListener('load', function(){
-  var s = document.querySelector('svg');
-  var r = s.getBoundingClientRect();
-  document.body.setAttribute('data-m', JSON.stringify({
-    x: Math.round(r.left), y: Math.round(r.top),
-    w: Math.round(r.width), h: Math.round(r.height),
-    vpW: document.documentElement.clientWidth,
-    vpH: document.documentElement.clientHeight
-  }));
-});
-</script>
-"""
+SLACK_W, SLACK_H = 60, 260          # 给浏览器 chrome 留的余量（只用于开窗，不参与裁剪）
 
 
 def _page_html(svg_path_svg):
@@ -58,32 +39,11 @@ def _page_html(svg_path_svg):
         '<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
         '*{margin:0;padding:0}html,body{background:#fff}'
         f'svg{{display:block;width:{W}px;height:{H}px}}'
-        f'</style></head><body>{svg_path_svg}{MEASURE_JS}</body></html>')
-
-
-def _run(extra, html, timeout=600):
-    return subprocess.run([BROWSER, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-                           "--no-sandbox", *extra, html.as_uri()],
-                          check=True, capture_output=True, timeout=timeout)
-
-
-def _measure(html):
-    """① DOM 量 SVG 矩形：只排版不光栅，约 0.5 s。"""
-    dom = _run([f"--window-size={W + SLACK_W},{H + SLACK_H}", "--dump-dom"],
-               html).stdout.decode("utf-8", "ignore")
-    m = re.search(r'data-m="([^"]+)"', dom)
-    if not m:
-        raise RuntimeError("量尺脚本没跑起来（--dump-dom 里找不到 data-m）")
-    import html as _h
-    d = json.loads(_h.unescape(m.group(1)))
-    if d["w"] < W or d["h"] < H:
-        raise RuntimeError(f"SVG 被视口压扁了：量到 {d['w']}×{d['h']}，应为 {W}×{H}；"
-                           f"视口 {d['vpW']}×{d['vpH']} —— 把 SLACK_W/SLACK_H 调大")
-    return d
+        f'</style></head><body>{svg_path_svg}</body></html>')
 
 
 def _assert_full_frame(a, tag):
-    """② 断言：没有整行/整列近乎纯白（白带 = 内容被裁，页面白底露出来了）。"""
+    """断言：没有整行/整列近乎纯白（白带 = 内容被裁，页面白底露出来了）。"""
     white = (a > 246).all(2)
     worst_row = white.mean(1).max()
     worst_col = white.mean(0).max()
@@ -102,12 +62,10 @@ def main():
     raw.unlink(missing_ok=True)
     try:
         t = time.time()
-        m = _measure(html)
-        print(f"  量尺：SVG @ ({m['x']},{m['y']}) {m['w']}×{m['h']} · 视口 {m['vpW']}×{m['vpH']}")
-        # 与量尺同一个窗尺寸截图 → 布局一致，裁切区间才准
-        _run([f"--window-size={W + SLACK_W},{H + SLACK_H}", f"--screenshot={raw}"], html)
-        im = Image.open(raw).convert("RGB")
-        box = (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])
+        # SVG 在 (0,0)、尺寸 W×H（body 白底、svg 无 margin）；开窗留余量，按 (0,0,W,H) 裁。
+        # 不再用 --dump-dom（本机 Edge 不输出），几何裁切与旧版量到的偏移一致。
+        im = GC.browser_shot(html, raw, W + SLACK_W, H + SLACK_H, scale=1)
+        box = (0, 0, W, H)
         im = im.crop(box)
         if im.size != (W, H):
             raise RuntimeError(f"裁出来是 {im.size}，应为 {(W, H)}")

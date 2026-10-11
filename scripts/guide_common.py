@@ -25,8 +25,13 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
+
+import numpy as np
+from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
@@ -369,3 +374,155 @@ class Placer:
             return None
         self.taken.append(pick[3])
         return pick[1], pick[2], pick[3]
+
+
+# ------------------------------------------------------------------ 无头浏览器截图
+# 本机实测：Edge/Chrome 的 `--headless=new --screenshot` 能出图，但**主进程会提前返回
+# rc=0，真正的 PNG 由后台子进程异步写出**；`--dump-dom` 在这一版 Edge 上彻底不输出
+# （重定向到文件也是 0 字节），不能再用来量版式。所以统一改走：
+#   · 截图落到文件 → 轮询等文件写出并尺寸稳定（兼容异步写图）；
+#   · 版式尺寸改由像素检测 / 已知几何得到，不再依赖 dump-dom 的 data-m。
+def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
+    """用无头浏览器把 HTML 截成 PNG（落 out_path），返回 Image 对象。
+
+    html_path 必须是绝对路径（file:// 也行）；out_path 用绝对路径，否则某些环境下
+    截图落盘位置会跑偏。结束后轮询文件直到尺寸稳定，规避"主进程已返回、子进程还没写完"。
+    """
+    BROWSER = find_browser()
+    out_path = Path(out_path)
+    args = [BROWSER, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+            "--no-sandbox", "--disable-dev-shm-usage",
+            f"--force-device-scale-factor={scale}",
+            f"--window-size={win_w},{win_h}",
+            f"--screenshot={out_path}", Path(html_path).as_uri()]
+    subprocess.run(args, check=True, capture_output=True, timeout=timeout)
+    prev, stable = -1, 0
+    for _ in range(120):                       # 最多等 60s
+        if out_path.exists():
+            sz = out_path.stat().st_size
+            if sz == prev and sz > 0:
+                stable += 1
+                if stable >= 2:
+                    break
+            else:
+                stable = 0
+            prev = sz
+        time.sleep(0.5)
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError("浏览器截图未生成（无头浏览器可能未正常出图）")
+    return Image.open(out_path).convert("RGB")
+
+
+def _loopback_ok(port):
+    """自检：本机是否允许 127.0.0.1 回环连接。本环境沙箱禁用监听套接字，会返回 False。"""
+    import socket
+    try:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", port))
+        srv.listen(1)
+        srv.settimeout(1.0)
+        cl = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cl.settimeout(1.0)
+        cl.connect(("127.0.0.1", port))
+        conn, _ = srv.accept()
+        cl.close()
+        conn.close()
+        srv.close()
+        return True
+    except Exception:
+        return False
+
+
+def content_box(im, tol=16, min_frac=0.02):
+    """返回内容（非背景）包围盒 (x0, y0, x1, y1)。
+
+    背景色取四角主色（内容一般不贴到四个角）。用"整行/整列有多少非背景像素"判定，
+    比逐像素找边界更抗抗锯齿与零散文字。返回 None 表示量不到（页面背景与内容同色）。
+    """
+    a = np.asarray(im).astype(np.int16)
+    h, w = a.shape[:2]
+    corners = np.concatenate([a[0, :max(1, w // 20)],
+                              a[h - 1, :max(1, w // 20)],
+                              a[:max(1, h // 20), 0],
+                              a[:max(1, h // 20), w - 1]])
+    bg = np.median(corners, axis=0)
+    diff = np.abs(a - bg).sum(axis=2)
+    mask = diff > tol * 3
+    rows = np.where(mask.sum(axis=1) > min_frac * w)[0]
+    cols = np.where(mask.sum(axis=0) > min_frac * h)[0]
+    if not rows.size or not cols.size:
+        return None
+    return int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+
+
+# ------------------------------------------------------------------ 浏览器内执行 JS 并取回结果
+# 本机 Edge 的 --dump-dom 不输出，无法用"取回 data-* 属性"的老办法。改用：
+#   注入的 JS 把结果 JSON 通过 new Image().src 信标发回本地 HTTP 服务（无需 websocket / CDP）。
+#   js 末尾约定：把结果放进全局 `OUT`，本函数自动补一段信标发出。
+def browser_eval(html_text, js, port=9333, win_w=1200, win_h=2200, timeout=60):
+    """在无头浏览器里跑 js（结果须赋给全局 OUT），通过信标取回，返回解析后的 dict。
+
+    注意：本机沙箱禁用回环监听（127.0.0.1 连不通），信标走不通；且本机 Edge 的
+    --dump-dom 不输出。所以若回环不可用，直接返回 None（调用方应优雅跳过该项检查）。
+    """
+    import http.server
+    import socket
+    import threading
+    import urllib.parse
+
+    if not _loopback_ok(port):
+        return None
+
+    BROWSER = find_browser()
+    box = {"data": None, "raw": None}
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path)
+            if u.path == "/d":
+                d = urllib.parse.parse_qs(u.query).get("d", [""])[0]
+                try:
+                    box["data"] = json.loads(urllib.parse.unquote(d))
+                except Exception:
+                    box["raw"] = d
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", port), _H)
+    thr = threading.Thread(target=srv.handle_request, daemon=True)
+    thr.start()
+
+    tmp = OUT / f"_audit_{port}.html"
+    beacon = (f"\ntry{{new Image().src='http://127.0.0.1:{port}/d?d='+"
+              f"encodeURIComponent(JSON.stringify(OUT));}}catch(e){{}}")
+    src = html_text
+    if "</body>" in src:
+        src = src.replace("</body>", f"<script>{js}{beacon}</script></body>", 1)
+    else:
+        src = src + f"<script>{js}{beacon}</script>"
+    tmp.write_text(src, encoding="utf-8")
+    proc = None
+    try:
+        # 不用 --dump-dom / --screenshot：让浏览器驻留，等信标请求真正到达本地服务后再结束。
+        proc = subprocess.Popen([BROWSER, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+                                "--no-sandbox", "--disable-dev-shm-usage",
+                                f"--force-device-scale-factor=1",
+                                f"--window-size={win_w},{win_h}", tmp.as_uri()],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        thr.join(timeout=timeout)          # 等本地服务收到信标
+        if proc.poll() is None:
+            proc.terminate()              # 浏览器驻留 → 主动结束
+            try:
+                proc.wait(timeout=8)
+            except Exception:
+                proc.kill()
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+        tmp.unlink(missing_ok=True)
+    return box["data"] if box["data"] is not None else box["raw"]
