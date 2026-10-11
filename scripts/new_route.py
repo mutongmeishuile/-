@@ -26,10 +26,9 @@ POI 候选 / 剖面标注 / 时间表）本来就能从 `prep_track.py` 的输�
 import argparse
 import json
 import math
-import math
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -191,6 +190,32 @@ def estimate_days(total_km):
     if total_km <= PACE_KM_PER_DAY:
         return 1
     return max(2, math.ceil(total_km / PACE_KM_PER_DAY))
+
+
+def detect_overnights(real_pts, gap_h=3.0, max_move_km=0.8):
+    """从轨迹时间戳里找「隔夜停留」：相邻点时刻差 >gap_h 而里程几乎不动。
+
+    时间戳通常只有时刻（无日期），多天行程在午夜回绕——用 (t2-t1)%24h 计算差值即可。
+    返回按里程排序的营地 km 列表（取停留开始处的里程）；无时间戳则返回 []。
+    """
+    stays = []
+    prev = None
+    for p in real_pts:
+        ts = (p.get("t") or "")[:8]
+        try:
+            t = datetime.strptime(ts, "%H:%M:%S")
+        except ValueError:
+            return []
+        if prev:
+            dt = (t - prev[1]) % timedelta(hours=24)
+            if dt.total_seconds() >= gap_h * 3600 and p["km"] - prev[0] < max_move_km:
+                if stays and abs(prev[0] - stays[-1][1]) < 1.0:
+                    if dt.total_seconds() / 3600 > stays[-1][0]:
+                        stays[-1] = (dt.total_seconds() / 3600, prev[0])
+                else:
+                    stays.append((dt.total_seconds() / 3600, prev[0]))
+        prev = (p["km"], t)
+    return sorted(km for _, km in stays)
 
 
 # 营地类标注关键词：用户在 KML/GPX 里自己标的过夜参考点（木屋/蒙古包/营地…）。
@@ -477,8 +502,17 @@ def gen(args):
     if not real_pts:
         sys.exit("track_real.json 里没有轨迹点 —— 先跑 prep_track.py")
 
-    # 不给 --days 时按日均里程自动估算天数（仍是粗估，联网核实为准）
-    if args.days is None:
+    # 不给 --days 时先看轨迹时间戳里有没有「隔夜停留」（时刻差 >3h 而里程不动）：
+    # 这是**第一优先级**依据——实走记录里的过夜点就是真实分日营地；
+    # 没有时间戳/没有隔夜才退回日均里程估算（粗估，联网核实为准）。
+    nights = detect_overnights(real_pts)
+    use_night_splits = False
+    if args.days is None and nights:
+        args.days = len(nights) + 1
+        use_night_splits = True
+        print(f"  ✓ 轨迹时间戳识别出 {len(nights)} 处隔夜停留 → 按 {args.days} 天切分"
+              f"（营地 @ {'、'.join(f'{k:.1f}km' for k in nights)}）")
+    elif args.days is None:
         args.days = estimate_days(total_km)
         print(f"  ⚠ 天数未指定 → 按日均约 {PACE_KM_PER_DAY}km 估算为 {args.days} 天"
               f"（请联网核实该线路常见天数；不同就 `new_route --days N` 重生成骨架）")
@@ -506,7 +540,12 @@ def gen(args):
                  "  · 该 KML/GPX 确实没标注 → POIS 请手工补（坐标可用 at(km) 反算）\n"
                  "  · 或者解析异常 → 确认导入的是本线路的轨迹文件")
 
-    splits = suggest_split(total_km, pois, args.days)
+    # 分界优先级：轨迹隔夜营地（实走过夜点）> 营地标注锚定 > 里程等分。
+    # 显式 --days 时尊重用户值，仍用 suggest_split（营地锚定）。
+    if use_night_splits:
+        splits = [(round(k, 2), "轨迹时间戳识别的隔夜营地") for k in nights]
+    else:
+        splits = suggest_split(total_km, pois, args.days)
     bounds = [km for km, _ in splits]
     dstats = day_stats(real_pts, total_km, bounds)
 
