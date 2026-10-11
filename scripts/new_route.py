@@ -18,9 +18,14 @@ POI 候选 / 剖面标注 / 时间表）本来就能从 `prep_track.py` 的输�
     python new_route.py --name 峨眉山全景大环线 --days 2
     python new_route.py --kml 峨眉山.kml          # 把 KML 文件名登记进 CFG
     python new_route.py --stdout                 # 只打印，不落盘（先看看再决定）
+
+天数：不给 --days 时按「日均约 20km（山地重装）」自动估算并向上取整，
+例如 105km → 6 天。这是**估算值**，请联网核实该线路真实常见天数，
+不对就 `python new_route.py --days N` 重生成骨架。绝不再盲默认 2 天。
 """
 import argparse
 import json
+import math
 import math
 import re
 import sys
@@ -176,16 +181,47 @@ def day_stats(real_pts, total_km, bounds, thr=3.0):
     return out
 
 
+# 山地重装徒步常见日均里程，用于「不给 --days 时」自动估算天数。
+# 这是粗估起点，最终天数仍需联网核实（见 research_route 提纲的「天数核实」）。
+PACE_KM_PER_DAY = 20
+
+
+def estimate_days(total_km):
+    """按日均里程估算天数：单日线(≤20km)→1 天；多日线向上取整、最少 2 天。"""
+    if total_km <= PACE_KM_PER_DAY:
+        return 1
+    return max(2, math.ceil(total_km / PACE_KM_PER_DAY))
+
+
+# 营地类标注关键词：用户在 KML/GPX 里自己标的过夜参考点（木屋/蒙古包/营地…）。
+# 分日切分时**优先锚到这类标注**——它们比"里程等分"更接近真实行程；
+# 但只做"附近有营地就锚营地"，不把沿途每个木屋都切成一天。
+CAMP_KW = ("营地", "木屋", "帐篷", "宿营", "止宿", "扎营", "蒙古包", "毡房", "露营")
+
+
+def is_camp(name):
+    return any(k in (name or "") for k in CAMP_KW)
+
+
 def suggest_split(total_km, pois, n_days):
-    """分段建议：取等分点里程最近的 POI（通常就是垭口/营地/村），偏离太远就按里程等分。"""
+    """分段建议：每个等分点优先锚到附近**营地类标注**，其次普通点位，都太远才按里程等分。"""
     if n_days <= 1:
         return []
     out = []
+    tol = max(2.0, total_km * 0.12)
+    camps = [r for r in pois if is_camp(r.get("name"))]
     for k in range(1, n_days):
         want = total_km / n_days * k
-        best = min(pois, key=lambda r: abs(r["km"] - want)) if pois else None
-        if best and abs(best["km"] - want) <= max(2.0, total_km * 0.12):
-            out.append((round(best["km"], 2), f"最近的点位是「{_q(best['name'])}」"))
+        best = why = None
+        c = min(camps, key=lambda r: abs(r["km"] - want), default=None) if camps else None
+        if c and abs(c["km"] - want) <= tol:
+            best, why = c, f"最近的营地标注是「{_q(c['name'])}」"
+        else:
+            p = min(pois, key=lambda r: abs(r["km"] - want)) if pois else None
+            if p and abs(p["km"] - want) <= tol:
+                best, why = p, f"最近的点位是「{_q(p['name'])}」"
+        if best:
+            out.append((round(best["km"], 2), why))
         else:
             out.append((round(want, 2), "按里程等分"))
     return out
@@ -441,6 +477,12 @@ def gen(args):
     if not real_pts:
         sys.exit("track_real.json 里没有轨迹点 —— 先跑 prep_track.py")
 
+    # 不给 --days 时按日均里程自动估算天数（仍是粗估，联网核实为准）
+    if args.days is None:
+        args.days = estimate_days(total_km)
+        print(f"  ⚠ 天数未指定 → 按日均约 {PACE_KM_PER_DAY}km 估算为 {args.days} 天"
+              f"（请联网核实该线路常见天数；不同就 `new_route --days N` 重生成骨架）")
+
     name = args.name or HERE.parent.name or "未命名线路"
     stem = args.stem or name
     kml_name = args.kml or f"{name}.kml"
@@ -600,7 +642,9 @@ def main():
     ap.add_argument("--name", help="线路名（默认取项目目录名）")
     ap.add_argument("--stem", help="交付物文件名前缀（默认同 --name）")
     ap.add_argument("--kml", help="轨迹文件名（写进 CFG['kml']，便于一条命令重跑）")
-    ap.add_argument("--days", type=int, default=2, help="分几天（默认 2，只影响分段建议）")
+    ap.add_argument("--days", type=int, default=None,
+                    help=f"分几天（默认不填：按日均约 {PACE_KM_PER_DAY}km 自动估算并向上取整，"
+                         "如 105km→6 天；请联网核实后必要时重跑 --days N）")
     ap.add_argument("--stdout", action="store_true", help="只打印，不写文件")
     ap.add_argument("--out", default=None, help="输出路径（默认 scripts/route_def.py）")
     a = ap.parse_args()
