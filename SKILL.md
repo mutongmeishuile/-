@@ -175,6 +175,13 @@ terrarium 老老实实把千里之外的另一座山渲了出来 —— 页面�
 不再"给足 7600 px 窗高盲截"；`make_all` 的分层并行只省 ~6–10 s，
 **真正的省时来自"一条命令、不用人守着"**，别指望并行救那 2 min 的 DEM。
 
+**快速迭代的省时开关**（改配色/改文案反复跑时用）：
+- `--skip-dem`：跳过 OSM 抓取 + 地形渲染（约 21 s，其中等高线标签的 marching-squares 约占 12 s，
+  是标签几何必需的第二步、不可省；地形不动时靠它跳过）。
+- `--skip-qa`：跳过末尾 QA 自检（约 4 s 的双浏览器截图）；**定稿前务必再跑一次** `qa_guide` 确认 0 问题。
+- 热缓存下整链路约 **47 s**；`--skip-dem` 后约 **15 s**。**更大的省时来自"自主生成"消除了人工往返**——
+  过去卡在"人改文案"那一步，现在模型按 `research_route` 的清单联网回填，人无需在中间守着。
+
 
 ```bash
 # ⓪ 环境预检（~10 s）：numpy/PIL、浏览器路径、out/ 路径约定、KML 格式 + route_def 校验
@@ -194,6 +201,8 @@ python scripts/make_all.py --skip-dem
 ```bash
 python scripts/prep_track.py                 # KML/GPX 取 route_def.CFG["kml"]，也可命令行直接传
 python scripts/new_route.py --days 2         # ★ 自动生成 route_def.py 骨架（数字全填好，文案留待办）
+python scripts/research_route.py --region 线路名   # ★ 列出"该去查什么"（用户标注点 + OSM 地物 + 逐条检索清单）→ out/research_brief.md
+#   ↑ 按 research_brief.md 用 WebSearch 把 route_def.py 里的 ★ TODO 逐条回填（模型可自主完成，见下方「自主生成」）
 python scripts/fetch_osm.py --soft           # 抓不到只丢一层矢量，不中断
 python scripts/make_terrain.py               # DEM 晕渲 + 等高线 → 叠 OSM → base_map.jpg
 python scripts/build_guide.py                # → <file_stem>-攻略.html
@@ -211,13 +220,39 @@ python scripts/qa_guide.py                   # 数值化自检
 ```bash
 python scripts/prep_track.py <你的.kml|.gpx>   # ① 出 out/ 四个 json
 python scripts/new_route.py --name 线路名 --kml <你的.kml|.gpx>
-                                               # ② 生成 route_def.py（数字已填好）
-# ③ 打开 route_def.py，把 ★ TODO 逐条改写（grep "★ TODO" 一眼看全）
-python scripts/make_all.py                     # ④ 一条命令出四件交付物
+                                               # ② 生成 route_def.py（数字已填好，★ TODO 留文案）
+python scripts/research_route.py --region 线路名
+                                               # ③ 出 out/research_brief.md：该查的地名/水源/营地/装备
+# ④ 按 brief 用 WebSearch（8264 / 两步路 / 官方公告…）把 ★ TODO 逐条回填进 route_def.py
+#    —— 这一步模型能自主完成（见下方「自主生成」），无需人介入
+python scripts/make_all.py                     # ⑤ 一条命令出四件交付物 + QA
 ```
 
 > `--kml` 建议**每次都写**：不给时它按线路名猜 `<线路名>.kml`，猜错不会当场报错，
-> 要等 ④ 的 `prep` 才炸成"KML 不存在"。写了 `--kml` 就一步到位（它也会顺手核对文件在不在）。
+> 要等 `prep` 才炸成"KML 不存在"。写了 `--kml` 就一步到位（它也会顺手核对文件在不在）。
+
+### 0-1. 自主生成：研究回填（从骨架到成品，不靠人）
+
+过去这条流水线"差最后一步"：① 出数据 → ② `new_route` 生成骨架（数字填好、文案留 `★ TODO`）
+→ **③ 人打开 `route_def.py` 把 TODO 逐条改写** → ④ `make_all` 出图。**第 ③ 步是唯一的"人"缺口**。
+
+现在用 `research_route.py` + 模型联网把缺口也补上，做到"**只依赖技能 + 一份轨迹**"就能自主产出：
+
+1. `prep_track` → `new_route` → `research_route`（带 `--region 线路名`）。
+   `research_route` 读 `out/` 里的轨迹 / 用户 KML 标注点 / OSM 具名地物，算出每个地物"距线路几 km"，
+   输出 `out/research_brief.md`：**① 路线概览 ② 用户标的营地/水源候选（按里程排）③ OSM 标准地名 ④ 逐条检索清单**。
+2. 按 `research_brief.md` 的清单用 WebSearch（8264、两步路、莉景/六只脚、小红书/抖音攻略、官方保护区公告）
+   逐条核实，把结论**写回 `route_def.py` 里的 `★ TODO` 占位**（grep `★ TODO` 一眼看全所有待办）。
+3. `make_all` → `qa_guide`：`todo_guard` 数的是 `★ TODO `（标记后带空格的才是真占位），
+   **只要还有没填的，就亮红灯不准交付**；同时桌面/手机两版审计截图确认版式 0 问题。
+
+**质量红线（自主 ≠ 瞎编）**：
+- 地名、门票/许可价、水源/营地现状、装备建议 **绝不能凭空编**——至少 1 个来源佐证。
+- 用户 KML 自己标的点（"木屋""小溪""商业营地"）是"位置"的实锤，但**名称与现状仍要联网核实**（标注常是随手记）。
+- 里程/爬升口径按本文「① 本地找拐点 → ② 联网验证宿营地 → ③ 交叉校验 → ④ 落笔」四步来，别直接抄缩略图数字。
+
+> 一句话：**技能把"方法"全编码了（轨迹→骨架→该查什么→出图→QA），模型按技能执行时负责把联网调研填回去**。
+> 交给模型"跑这个技能 + 这份 KML"，它就能端到端出攻略，不需要人卡在中间改文案。
 
 **B 路线（用户点名在线瓦片）多一步**：瓦片自带等高线要么太淡要么太密、底色又是"一色米底"，
 用 `tile_tint.py` 把它改成地形图管线 —— **瓦片只留线画（步道/公路/文字/水体），

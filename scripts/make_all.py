@@ -31,6 +31,7 @@
 ----
     python scripts/make_all.py                  # 全跑（默认分层并行）
     python scripts/make_all.py --skip-dem       # 跳过 OSM+地形（改配色/改标注时用）
+    python scripts/make_all.py --skip-qa        # 跳过末尾 QA 自检（快速迭代用，定稿前再跑一次）
     python scripts/make_all.py --only html,long,map
     python scripts/make_all.py --serial         # 强制串行（并行输出看不清时排错用）
     python scripts/make_all.py --jobs 2         # 限制同时跑的进程数
@@ -130,6 +131,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-dem", action="store_true",
                     help="跳过 OSM 抓取与地形渲染（改配色/改标注时用，省 2 min+）")
+    ap.add_argument("--skip-qa", action="store_true",
+                    help="跳过末尾 QA 自检（快速迭代用，定稿前务必再跑一次确认 0 问题）")
     ap.add_argument("--only", default="", help="只跑指定步骤，逗号分隔，如 html,long")
     ap.add_argument("--serial", action="store_true", help="强制串行（排错时用）")
     ap.add_argument("--jobs", type=int, default=0, help="同时跑的进程数上限（默认不限）")
@@ -165,6 +168,8 @@ def main():
         if only and key not in only:
             continue
         if key in ("osm", "dem") and a.skip_dem:
+            continue
+        if key == "qa" and a.skip_qa:
             continue
         if not scripts:
             print(f"  [..]   {desc}({key})：没找到脚本，跳过")

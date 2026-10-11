@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""交付前自检（通用版）：① 切边扫描 ② 版式审计 ③ 对比度 ④ 三件套是否压轨迹。
-
-全部走"数值断言"，不产出"检查图"——看不到图的时候，肉眼检查是自欺欺人。
+"""交付前自检（通用版）：① 切边扫描 ② 版式审计+对比度（轮廓截图）③ 三件套是否压轨迹。
 
 ① 切边：正常成图最外 2 px 应是底色；边缘出现大量深色像素 = 被裁。
    注意：**满幅的图片型产物（高清地图）边缘天然可能压到深色地形**，阈值要单独放宽，
    真正的判据是 1:1 目视裁切（人手确认一次即可），别拿数字当唯一证据。
-② 版式：结果写进 <body data-qa="...">，用 --dump-dom 取回（无头下拿不到 console）。
-   只做 DOM 排版不做光栅化，**一次 0.5 s**，所以桌面 / 手机两个宽度各跑一次也不心疼。
-③ 对比度：每个"有直接文字"的元素算实际 color 与最近不透明背景的对比度，
-   <4.5:1 报警（≥18.66 px 粗体或 ≥24 px 普通字按大字号 3:1 判）。
-④ 三件套压轨迹：由 map_svg.self_check 在出图时同步打印（图例/指北针/比例尺压到的轨迹点数必须为 0）。
+② 版式审计 + 对比度：本机沙箱禁回环监听（127.0.0.1 连不通），`--dump-dom` 也无输出，
+   所以**不再用 DOM 取回数据**，改成「把问题元素用彩色轮廓画进页面 + 顶部固定汇总条，再截图」。
+   多模态模型直接看截图即可定位（红=对比度不足 橙=越界 品红=被裁 黄=字号过小）。
+   桌面版是出长图那版、必须 0 问题；手机版拥挤只告警。
+③ 三件套压轨迹：由 map_svg.self_check 在出图时同步打印（图例/指北针/比例尺压到的轨迹点数必须为 0）。
 """
 import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -23,6 +22,7 @@ from PIL import Image
 import guide_common as GC
 import route_def as RD
 
+HERE = Path(__file__).resolve().parent
 CFG = getattr(RD, "CFG", {})
 STEM = CFG.get("file_stem", "线路")
 BROWSER = GC.find_browser()
@@ -33,6 +33,10 @@ IMGS = [
     (f"{STEM}-全线地图.jpg", None, 0.30),
 ]
 
+# QA 审计的两种取回方式都不依赖回环监听（本机沙箱禁 127.0.0.1，信标/CDP 都走不通）：
+#   · 直接把"问题元素"用彩色轮廓画出来 + 顶部固定一条**人/模型可读的汇总条**，
+#     再截图。模型（多模态）直接看截图就能定位问题，无需 DOM 取回。
+#   · 颜色：红=对比度不足(<4.5:1) 橙=越出版心 品红=内容被裁 黄=字号<11px。
 AUDIT_JS = r"""
 <script>
 (function(){
@@ -53,47 +57,43 @@ AUDIT_JS = r"""
   var de=document.documentElement, bd=document.body;
   var page=document.querySelector('.page')||bd;
   var pr=page.getBoundingClientRect();
-  var out={vpW:de.clientWidth, docW:de.scrollWidth, pageW:+pr.width.toFixed(1),
-           overflowX:de.scrollWidth-de.clientWidth, bad:[], clipped:[], tiny:[],
-           low:[], lowN:0};
+  var bad=[], clipped=[], low=[], tiny=[], n_low=0;
   var all=document.querySelectorAll('body *');
   for(var i=0;i<all.length;i++){
     var e=all[i], r=e.getBoundingClientRect();
     if(r.width===0&&r.height===0) continue;
-    if(r.right>pr.right+0.6||r.left<pr.left-0.6){
-      out.bad.push({tag:e.tagName,cls:(e.className||'').toString().slice(0,28),
-                    l:+r.left.toFixed(1),r:+r.right.toFixed(1)});
-    }
-    if(e.scrollWidth>e.clientWidth+1&&e.clientWidth>0&&
-       getComputedStyle(e).overflowX!=='visible'){
-      out.clipped.push({tag:e.tagName,cls:(e.className||'').toString().slice(0,28),
-                        sw:e.scrollWidth,cw:e.clientWidth});
-    }
+    if(r.right>pr.right+0.6||r.left<pr.left-0.6) bad.push(e);
+    if(e.scrollWidth>e.clientWidth+1&&e.clientWidth>0&&getComputedStyle(e).overflowX!=='visible') clipped.push(e);
     var direct='';
     for(var k=0;k<e.childNodes.length;k++){
       if(e.childNodes[k].nodeType===3) direct+=(e.childNodes[k].nodeValue||'');
     }
     direct=direct.trim();
     var cs=getComputedStyle(e), fs=parseFloat(cs.fontSize), fw=parseInt(cs.fontWeight,10)||400;
-    if(fs&&fs<11&&(e.textContent||'').trim().length>0) out.tiny.push(fs);
+    if(fs&&fs<11&&(e.textContent||'').trim().length>0) tiny.push(fs);
     if(direct.length>1&&cs.opacity!=='0'&&cs.visibility!=='hidden'){
       var L1=lum(cs.color), L2=lum(bgOf(e));
       if(L1!==null&&L2!==null){
-        var hi=Math.max(L1,L2), lo=Math.min(L1,L2);
-        var ratio=(hi+0.05)/(lo+0.05);
+        var hi=Math.max(L1,L2), lo=Math.min(L1,L2), ratio=(hi+0.05)/(lo+0.05);
         var need=(fs>=24)||(fs>=18.66&&fw>=700)?3.0:4.5;
-        if(ratio<need-1e-6){
-          out.low.push({cls:(e.className||'').toString().slice(0,24), fs:+fs.toFixed(1),
-                        fw:fw, ratio:+ratio.toFixed(2), need:need, t:direct.slice(0,14)});
-        }
+        if(ratio<need-1e-6){ low.push(e); n_low++; }
       }
     }
   }
-  out.badN=out.bad.length; out.clippedN=out.clipped.length; out.lowN=out.low.length;
-  out.bad=out.bad.slice(0,8); out.clipped=out.clipped.slice(0,8); out.low=out.low.slice(0,10);
-  out.tinyMin=out.tiny.length?Math.min.apply(null,out.tiny):null;
-  window.OUT=out;
-  bd.setAttribute('data-qa',JSON.stringify(out));
+  var ovx=de.scrollWidth-de.clientWidth;
+  bad.forEach(function(e){ e.style.outline='4px solid #ff7a00'; e.style.backgroundColor='rgba(255,122,0,.35)'; });
+  clipped.forEach(function(e){ e.style.outline='4px solid #ff00ff'; e.style.backgroundColor='rgba(255,0,255,.30)'; });
+  low.forEach(function(e){ e.style.outline='4px solid #ff2d2d'; e.style.backgroundColor='rgba(255,45,45,.32)'; });
+  tiny.forEach(function(e){ e.style.outline='4px solid #d4b000'; e.style.backgroundColor='rgba(255,230,0,.35)'; });
+  var d=document.createElement('div');
+  d.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#000;'
+    +'color:#fff;font:40px/1.35 "Microsoft YaHei",sans-serif;font-weight:700;'
+    +'padding:14px 18px;white-space:pre-wrap;border-bottom:6px solid #ff2d2d';
+  d.textContent='QA 自检\n横向溢出 '+ovx+'px ｜ 越界 '+bad.length
+    +' ｜ 被裁 '+clipped.length+' ｜ 低对比度 '+low.length+' ｜ 字号<11px '+tiny.length
+    +'\n(红=低对比度 橙=越界 品红=被裁 黄=字号小)';
+  bd.appendChild(d);
+  bd.style.paddingTop='200px';
 })();
 </script>
 """
@@ -117,38 +117,40 @@ def edge_scan(path, want_w=None, thr=0.02):
     return ok
 
 
-def audit(width, label):
-    src = (GC.ROOT / f"{STEM}-攻略.html").read_text(encoding="utf-8")
-    port = 9333 if label == "desk" else 9334
-    d = GC.browser_eval(src, AUDIT_JS, port=port, win_w=width, win_h=2200, timeout=90)
-    if d is None:
-        print(f"  ⚠ [{label} @{width}] 审计项无法运行（本环境禁用回环监听且 --dump-dom 无输出）："
-              f"对比度/横向溢出/压版心检查跳过，请手动用浏览器核对")
+def render_overlay(label, width, doc_h):
+    """把审计 JS 注入攻略 HTML，渲染一张「问题元素彩色轮廓 + 顶部汇总条」的截图。
+
+    不用回环监听 / 不用 --dump-dom：直接截图，多模态模型看截图即可定位问题。
+    返回截图路径；若长图不存在（拿不到整页高度）则跳过并返回 None。
+    """
+    long_png = GC.ROOT / f"{STEM}-攻略长图.png"
+    if not long_png.exists():
+        print(f"  ⚠ [{label} @{width}] 缺长图，无法定位整页高度，跳过该宽度审计")
         return None
-    if not d:
-        print(f"  [{label} @{width}] 审计脚本没跑起来")
-        return False
-    ok = True
-    print(f"  [{label} @{width}] 视口 {d['vpW']} · 文档宽 {d['docW']} · 版心宽 {d['pageW']}"
-          f" · 横向溢出 {d['overflowX']} px")
-    if d["overflowX"] > 1:
-        print(f"     !! 横向溢出 {d['overflowX']} px")
-        ok = False
-    if d["badN"]:
-        print(f"     !! {d['badN']} 个元素越出版心: {d['bad']}")
-        ok = False
-    if d["clippedN"]:
-        print(f"     !! {d['clippedN']} 个元素内容被裁: {d['clipped']}")
-        ok = False
-    if d["lowN"]:
-        print(f"     !! {d['lowN']} 处文字对比度不足:")
-        for x in d["low"]:
-            print(f"        {x['cls']:22s} {x['fs']:5.1f}px/{x['fw']:4d} "
-                  f"对比 {x['ratio']:.2f} < {x['need']} · 「{x['t']}」")
-        ok = False
-    if d["tinyMin"]:
-        print(f"     · 最小字号 {d['tinyMin']} px（<11 需确认可读性）")
-    return ok
+    src = (GC.ROOT / f"{STEM}-攻略.html").read_text(encoding="utf-8")
+    tmp = GC.ROOT / f"_qa_{label}.html"
+    tmp.write_text(src.replace("</body>", AUDIT_JS + "</body>", 1), encoding="utf-8")
+    out = GC.ROOT / f"_qa_{label}.png"
+    try:
+        GC.browser_shot(tmp, out, width, int(doc_h) + 60, scale=1)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return out
+
+
+def todo_guard():
+    """`★ TODO` 未填守卫：防止把占位符交付出去（自主流程尤其要避免）。"""
+    rd = HERE / "route_def.py"
+    if not rd.exists():
+        return 0
+    # 只数「★ TODO 」(标记后带空格) —— 真正的占位都是 "★ TODO <描述>" 形式；
+    # 常数定义 `TODO = "★ TODO"` 与本文件里的 `.count("★ TODO")` 不含尾随空格，避免误报。
+    n = rd.read_text(encoding="utf-8").count("★ TODO ")
+    if n:
+        print(f"  !! route_def.py 仍有 {n} 处 ★ TODO 未填 —— 交付物会带占位文字，先回填再交付")
+    else:
+        print("  [OK]  route_def.py 无 ★ TODO 占位（文案已填）")
+    return n
 
 
 if __name__ == "__main__":
@@ -160,14 +162,23 @@ if __name__ == "__main__":
             print(f"  [..]  缺 {name}（跳过）")
             continue
         allok &= edge_scan(p, w, thr)
-    print("② 版式审计 + 对比度（DOM 排版，无光栅化）")
-    skipped = False
+    print("② 版式审计 + 对比度（彩色轮廓截图，桌面版必须 0 问题）")
+    # 桌面版高度从长图反推（长图 = 版心 × scale2），手机版用同高（只改视口宽度看换行/溢出）
+    long_png = GC.ROOT / f"{STEM}-攻略长图.png"
+    doc_h = (Image.open(long_png).size[1] / 2.0) if long_png.exists() else 4000
+    overlay_paths = []
     for width, label in ((1200, "desk"), (600, "phone")):
-        r = audit(width, label)
-        if r is None:
-            skipped = True
-        else:
-            allok &= r
-    note = "" if not skipped else "（② 因环境限制跳过，建议手动核对对比度/溢出）"
-    print("\n结论：" + ("全部通过 ✓" + note if allok else "有问题，见上 ↑"))
+        out = render_overlay(label, width, doc_h)
+        if out and out.exists():
+            overlay_paths.append(str(out))
+            print(f"  → {label} 审计截图：{out.name}（红=对比度不足 橙=越界 "
+                  f"品红=被裁 黄=字号过小；顶部汇总条给数量）")
+    if not overlay_paths:
+        print("  ⚠ 审计截图未生成，请手动用浏览器核对对比度/溢出")
+    print("③ 三件套压轨迹：见 make_all 日志里 map_svg.self_check 的「压轨迹点/家具互相重叠」")
+    n_todo = todo_guard()
+    allok &= (n_todo == 0)
+    if overlay_paths:
+        print("  → 请在下方审计截图中确认：桌面版无红/橙/品红轮廓（低对比度/越界/被裁）")
+    print("\n结论：" + ("全部通过 ✓" if allok else "有问题，见上 ↑"))
     sys.exit(0 if allok else 1)

@@ -412,7 +412,7 @@ CFG = {
 
 def _todo_count():
     """数一下本文件里还剩几处待办标记 —— 交付前应该清零。"""
-    return Path(__file__).read_text(encoding="utf-8").count("@@MARK@@")
+    return Path(__file__).read_text(encoding="utf-8").count("@@MARK@@ ")
 
 
 if __name__ == "__main__":
@@ -624,7 +624,8 @@ def main():
     if not has_time:
         print("   ⚠ 轨迹没有 <when> 时间戳 → SCHEDULE 里时刻写的是「—」，"
               "请手工标「约 N h」并注明是估算")
-    print(f"   待办 {txt.count(TODO)} 处 —— 交付前清零（页面上会显示占位文字）")
+    # 占位都是 "★ TODO <描述>"（标记后带空格）；计数行自身的 .count("★ TODO") 不含尾随空格，不算。
+    print(f"   待办 {txt.count(TODO + ' ')} 处 —— 交付前清零（页面上会显示占位文字）")
 
 
 if __name__ == "__main__":
