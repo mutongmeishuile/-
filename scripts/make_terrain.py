@@ -727,6 +727,27 @@ def _text_size(font, txt, stroke):
     return bb[2] - bb[0], bb[3] - bb[1], bb
 
 
+# ---- 标注几何两阶段并行化（2026-10-11）----
+# 每个等级的 marching→join→rdp 相互独立且占大头（实测 ~12s/19 级），
+# 拆成「并行算几何 → 按原序串行占位」：占位逻辑一行不改，输出与纯串行完全一致。
+_W_DEM = None
+
+
+def _w_init(dem):
+    global _W_DEM
+    _W_DEM = dem
+
+
+def _w_level(lv):
+    """worker：单一计曲线等级的几何（DEM 坐标折线列表）。"""
+    out = []
+    for ch in _join(_march(_W_DEM, lv)):
+        P = _rdp(np.asarray(ch, np.float32), 0.8 * MS_STEP)
+        if len(P) >= 2:
+            out.append(P)
+    return out
+
+
 def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every=None):
     """在计曲线上断线标注高程数字。
 
@@ -773,15 +794,30 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
 
     lv0 = math.ceil(lo / every) * every
     lv1 = math.floor(hi / every) * every
-    for lv in np.arange(lv0, lv1 + 1e-6, every):
-        lv = float(lv)
+    levels = [float(v) for v in np.arange(lv0, lv1 + 1e-6, every)]
+
+    # 阶段 A：各等级几何并行算（进程池；任何异常都退回串行——结果一致，只是慢）
+    per_lv = None
+    if len(levels) >= 3:
+        try:
+            import multiprocessing as mp
+            n = min(4, mp.cpu_count() or 2)
+            if n >= 2:
+                with mp.Pool(n, initializer=_w_init, initargs=(dem,)) as pool:
+                    per_lv = pool.map(_w_level, levels, chunksize=1)
+        except Exception as e:
+            print(f"   （并行几何不可用：{type(e).__name__} —— 退回串行，结果不变）")
+            per_lv = None
+    if per_lv is None:
+        _w_init(dem)
+        per_lv = [_w_level(lv) for lv in levels]
+
+    # 阶段 B：按原序贪心占位（与旧串行版逐位一致）
+    for lv, polys in zip(levels, per_lv):
         txt = f"{int(round(lv))}"
         tw, th, _ = _text_size(f, txt, stroke)
-        for ch in _join(_march(dem, lv)):
-            P = _rdp(np.asarray(ch, np.float32), 0.8 * MS_STEP)
-            if len(P) < 2:
-                continue
-            P = np.stack([P[:, 0] * sx, P[:, 1] * sy], 1)
+        for P0 in polys:
+            P = np.stack([P0[:, 0] * sx, P0[:, 1] * sy], 1)
             dseg = np.hypot(np.diff(P[:, 0]), np.diff(P[:, 1]))
             cum = np.concatenate([[0.0], np.cumsum(dseg)])
             total = float(cum[-1])

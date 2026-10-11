@@ -166,13 +166,18 @@ if __name__ == "__main__":
     # 桌面版高度从长图反推（长图 = 版心 × scale2），手机版用同高（只改视口宽度看换行/溢出）
     long_png = GC.ROOT / f"{STEM}-攻略长图.png"
     doc_h = (Image.open(long_png).size[1] / 2.0) if long_png.exists() else 4000
-    overlay_paths = []
-    for width, label in ((1200, "desk"), (600, "phone")):
-        out = render_overlay(label, width, doc_h)
-        if out and out.exists():
-            overlay_paths.append(str(out))
-            print(f"  → {label} 审计截图：{out.name}（红=对比度不足 橙=越界 "
-                  f"品红=被裁 黄=字号过小；顶部汇总条给数量）")
+    # desk/phone 两次渲染互相独立（各自起一个无头浏览器进程），并行跑省一半时间
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futs = {width: pool.submit(render_overlay, label, width, doc_h)
+                for width, label in ((1200, "desk"), (600, "phone"))}
+        overlay_paths = []
+        for width, label in ((1200, "desk"), (600, "phone")):
+            out = futs[width].result()
+            if out and out.exists():
+                overlay_paths.append(str(out))
+                print(f"  → {label} 审计截图：{out.name}（红=对比度不足 橙=越界 "
+                      f"品红=被裁 黄=字号过小；顶部汇总条给数量）")
     if not overlay_paths:
         print("  ⚠ 审计截图未生成，请手动用浏览器核对对比度/溢出")
     print("③ 三件套压轨迹：见 make_all 日志里 map_svg.self_check 的「压轨迹点/家具互相重叠」")

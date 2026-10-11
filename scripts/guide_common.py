@@ -396,18 +396,20 @@ def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
             f"--window-size={win_w},{win_h}",
             f"--screenshot={out_path}", Path(html_path).as_uri()]
     subprocess.run(args, check=True, capture_output=True, timeout=timeout)
+    # 主进程提前返回、子进程异步写盘（本机实测：文件在完成后一次性出现，无渐进写入）。
+    # 0.15s 步进 + 连续 4 次尺寸稳定（≈0.6s 确认窗）比旧版 0.5s×2（1.0s）每张少等 ~0.4s。
     prev, stable = -1, 0
-    for _ in range(120):                       # 最多等 60s
+    for _ in range(600):                       # 最多等 90s
         if out_path.exists():
             sz = out_path.stat().st_size
             if sz == prev and sz > 0:
                 stable += 1
-                if stable >= 2:
+                if stable >= 4:
                     break
             else:
                 stable = 0
             prev = sz
-        time.sleep(0.5)
+        time.sleep(0.15)
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("浏览器截图未生成（无头浏览器可能未正常出图）")
     return Image.open(out_path).convert("RGB")
