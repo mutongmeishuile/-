@@ -38,6 +38,20 @@ C_WATER     = (166, 205, 233, 225)
 C_WATER_ED  = (116, 166, 205, 255)
 C_RIVER     = (108, 162, 208, 255)
 C_STREAM    = (138, 182, 216, 255)
+# 时令河（intermittent=yes）：冰川融水与季节性冲沟，只在暖季有水。
+# ⚠ 不能和常年河画成一样的实线 —— 徒步攻略里"线=水源"是默认读法，
+#   把夏季才有的水画成常流水，等于给出错误的水源信息（喜马拉雅北坡旱季断流很常见）。
+# 希夏邦马窗口实测：333 条 stream 里 79 条 intermittent=yes（24%）。
+C_STREAM_SEASON = (152, 192, 222, 200)
+
+# 冰川（natural=glacier + relation）：高海拔线路的核心图层，本区实测占图幅 15.2%。
+# 配色取「白 + 淡蓝阴影」（见 references/china-terrain.md §7），但**关键是边界**：
+# 雪线以上的地形底图本身就是积雪白，冰川若也画近白边界，两者就糊成一片、
+# 完全看不出冰舌范围（旧实现 C_GLACIER_ED=(238,247,253) 就是这个问题）。
+# → 填充走"近白淡蓝"（比雪原略冷一档），边界必须是**可读的冰蓝**。
+C_GLACIER    = (224, 237, 249, 150)
+C_GLACIER_ED = (118, 168, 210, 235)
+C_GLACIER_LB = (24, 92, 146, 255)      # 冰川注记：深冰蓝 + 白描边
 
 ROAD_STYLE = {
     #            (芯色,                    线宽, 描边色)
@@ -139,6 +153,43 @@ def _pts_of(e, proj, size):
     if max(xs) < 0 or min(xs) > size[0] or max(ys) < 0 or min(ys) > size[1]:
         return None
     return [(round(x, 1), round(y, 1)) for x, y in pts]
+
+
+def _ring_area(ring):
+    """鞋带公式：环的有向面积（用来在 relation 的多个 member 里挑主环）。"""
+    s = 0.0
+    for i in range(len(ring)):
+        x0, y0 = ring[i]
+        x1, y1 = ring[(i + 1) % len(ring)]
+        s += x0 * y1 - x1 * y0
+    return s / 2.0
+
+
+def _rings_of(e, proj, size):
+    """要素 → 多边形环列表（每个环是一串像素点）。
+
+    way：geometry 直接成环。
+    relation（OSM 的冰川常用 relation 打组，`out geom` 下 members 带 geometry）：
+    逐个 outer member way 成环 —— 相邻 member 各自填充后视觉上仍是一个整体。
+    """
+    rings = []
+    if e["type"] == "way":
+        pts = _pts_of(e, proj, size)
+        if pts and len(pts) > 2:
+            rings.append(pts)
+    elif e["type"] == "relation":
+        for m in e.get("members", []):
+            if m.get("type") != "way" or m.get("role") not in (None, "", "outer"):
+                continue
+            g = m.get("geometry") or []
+            pts = [proj(p["lon"], p["lat"]) for p in g if p.get("lon") is not None]
+            if len(pts) > 2:
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                if max(xs) < 0 or min(xs) > size[0] or max(ys) < 0 or min(ys) > size[1]:
+                    continue
+                rings.append([(round(x, 1), round(y, 1)) for x, y in pts])
+    return rings
 
 
 # ------------------------------------------------------------------ 注记
@@ -274,6 +325,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     def bucket(e):
         t = e.get("tags", {})
+        if e["type"] == "relation":
+            # OSM 冰川常以 relation 打组（多个 outer way 拼一条冰川）
+            if t.get("natural") == "glacier":
+                return ("glacier", None)
+            return None
         if e["type"] != "way":
             return None
         if "highway" in t:
@@ -287,26 +343,33 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             return ("water", t["waterway"])
         if t.get("natural") == "water" or t.get("landuse") == "reservoir":
             return ("waterbody", None)
+        if t.get("natural") == "glacier":
+            return ("glacier", None)
         if t.get("natural") == "wood" or t.get("landuse") == "forest":
             return ("wood", None)
         if t.get("landuse") == "meadow":
             return ("meadow", None)
         return None
 
-    # 面 → 线 → 注记（保证层次）
-    order = {"wood": 0, "meadow": 1, "waterbody": 2, "water": 3,
-             "trail": 4, "road": 5}
+    # 面 → 线 → 注记（保证层次）。冰川画在林地/草地之上、水体之下——
+    # 冰川湖（终碛阻塞湖）坐在冰川面上，必须能透出来。
+    order = {"wood": 0, "meadow": 1, "glacier": 2, "waterbody": 3, "water": 4,
+             "trail": 5, "road": 6}
     drawable = []
     for e in els:
         b = bucket(e)
         if not b:
+            continue
+        if b[0] == "glacier":
+            for ring in _rings_of(e, proj, size):
+                drawable.append((order["glacier"], "glacier", None, ring, e))
             continue
         pts = _pts_of(e, proj, size)
         if pts:
             drawable.append((order[b[0]], b[0], b[1], pts, e))
     drawable.sort(key=lambda x: x[0])
 
-    n_poly = n_line = 0
+    n_poly = n_line = n_glacier = 0
     for _, kind, sub, pts, e in drawable:
         if kind == "wood":
             d.polygon(pts, fill=C_WOOD) if len(pts) > 2 else None
@@ -320,10 +383,20 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 d.polygon(pts, fill=C_WATER)
                 d.line(pts + [pts[0]], fill=C_WATER_ED, width=W(1))
                 n_poly += 1
+        elif kind == "glacier":
+            # 冰面近白淡蓝填充 + 冰蓝边界；OSM 冰川面普遍偏旧（数字化早于近年退缩），
+            # 边界只作参考，实际冰舌以现场为准。
+            d.polygon(pts, fill=C_GLACIER)
+            d.line(pts + [pts[0]], fill=C_GLACIER_ED, width=W(1.4), joint="curve")
+            n_glacier += 1
         elif kind == "water":
             big = sub in ("river", "canal")
-            d.line(pts, fill=C_RIVER if big else C_STREAM,
-                   width=W(2) if big else W(1), joint="curve")
+            if e.get("tags", {}).get("intermittent") == "yes":
+                # 时令河：虚线、细一档。见 C_STREAM_SEASON 的说明。
+                _dashed(d, pts, C_STREAM_SEASON, W(1), 7 * S, 6 * S)
+            else:
+                d.line(pts, fill=C_RIVER if big else C_STREAM,
+                       width=W(2) if big else W(1), joint="curve")
             n_line += 1
         elif kind == "trail":
             core, w, dash, gap = TRAIL_STYLE[sub]
@@ -346,7 +419,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     f_town = _font(F(18), True)
     f_vil = _font(F(16.5), True)
     f_ham = _font(F(14.5))
-    f_peak = _font(F(15), True)
+    f_peak_hi = _font(F(16.5), True)     # ≥7000 m：8000 米级地标
+    f_peak = _font(F(15), True)          # 6500–7000 m
+    f_peak_lo = _font(F(13), True)       # <6500 m 或高程缺失：背景峰，只填空位
     f_poi = _font(F(13))
     f_water = _font(F(13.5), True)
 
@@ -391,22 +466,78 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         waters.append((cx, cy, nm))
 
+    # 冰川名：锚点取最大环的重心（relation 的多个 member 里挑面积最大的那个）
+    glaciers = []
+    for e in els:
+        t = e.get("tags", {})
+        if t.get("natural") != "glacier":
+            continue
+        nm = _clean_name(t.get("name", ""))
+        if not nm:
+            continue
+        rings = _rings_of(e, proj, size)
+        if not rings:
+            continue
+        ring = max(rings, key=lambda r: abs(_ring_area(r)))
+        glaciers.append((sum(p[0] for p in ring) / len(ring),
+                         sum(p[1] for p in ring) / len(ring), nm,
+                         abs(_ring_area(ring))))
+
     # 山峰：▲ + 名 + 高程
+    #
+    # ⚠ 分级 + 排序都是必须的，2026-10-16 希夏邦马实测：
+    #   ① 本窗口 OSM 有 191 个峰点，旧实现一律 fallback=True「实在放不下也要放」
+    #      → 画出 102 个峰名，山体区被注记糊死、等高线数字全被压住。
+    #      制图学上峰名本来就按高程分级：8000 米级是地标，6000 米以下只是背景。
+    #   ② 旧实现按 OSM 返回顺序落位，一座 4300 m 的矮峰会先占掉 7000 m 主峰
+    #      需要的空位，出现「主峰没名字、无名矮峰有名字」的倒挂 —— 必须按 ele 降序。
+    def _ele_of(s):
+        """OSM 的 ele 常带单位或空格（'7292 m'），解析失败返回 None。"""
+        try:
+            return float(str(s).replace("m", "").replace("米", "").strip())
+        except (TypeError, ValueError):
+            return None
+
     n_peak = n_skip = 0
     peaks = [(x, y, _clean_name(n), e) for x, y, n, e in peaks]
     places = [(k, x, y, _clean_name(n)) for k, x, y, n in places]
     waters = [(x, y, _clean_name(n)) for x, y, n in waters]
     pois = [(x, y, _clean_name(n), k) for x, y, n, k in pois]
+    peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
     for x, y, name, ele in peaks:
         if not name or name in skip_names:
             n_skip += 1 if name else 0
             continue
-        tri = [(x, y - 6 * S), (x - 5.4 * S, y + 3.6 * S), (x + 5.4 * S, y + 3.6 * S)]
-        d.polygon(tri, fill=(84, 60, 40), outline=(255, 255, 255))
+        ev = _ele_of(ele)
+        if ev is None:
+            f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
+        elif ev >= 7000:
+            f_peak_use, forced, tri_k, col, tcol = f_peak_hi, True, 1.0, (84, 60, 40), (48, 32, 20)
+        elif ev >= 6500:
+            f_peak_use, forced, tri_k, col, tcol = f_peak, True, 0.92, (84, 60, 40), (58, 40, 26)
+        else:
+            f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
+        tri = [(x, y - 6 * S * tri_k), (x - 5.4 * S * tri_k, y + 3.6 * S * tri_k),
+               (x + 5.4 * S * tri_k, y + 3.6 * S * tri_k)]
+        d.polygon(tri, fill=col, outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
-        if lab.place(d, txt, (x, y + 7 * S), f_peak, (58, 40, 26), anchor_center=False,
-                     stroke_w=2.1 * S, pad=2 * S):
+        if lab.place(d, txt, (x, y + 7 * S), f_peak_use, tcol, anchor_center=False,
+                     stroke_w=2.1 * S, pad=2 * S, fallback=forced):
             n_peak += 1
+
+    # 冰川名：菱形冰符号 + 深冰蓝粗体 + 白描边。冰川面上只标最大的几条
+    # （本区 382 条冰川里只有 18 条有名字），注记里不带高程 —— 冰川看的是范围与末端。
+    n_glacier_lb = 0
+    glaciers.sort(key=lambda g: g[3], reverse=True)
+    for x, y, name, _a in glaciers:
+        if name in skip_names:
+            continue
+        r = 4.6 * S
+        d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
+                  fill=(233, 244, 252), outline=C_GLACIER_LB)
+        if lab.place(d, name, (x, y + 7 * S), f_water, C_GLACIER_LB, anchor_center=False,
+                     stroke_w=2.1 * S, pad=2 * S):
+            n_glacier_lb += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
     places.sort(key=lambda p: prio.get(p[0], 9))
@@ -450,8 +581,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     if verbose:
         extra = f" · 抑制重名 {n_skip}" if n_skip else ""
-        print(f"   OSM 叠加：面 {n_poly} · 线 {n_line} · "
-              f"山峰名 {n_peak}/{len(peaks)} · 地名 {n_place}/{len(places)} · "
+        print(f"   OSM 叠加：面 {n_poly} · 线 {n_line} · 冰川面 {n_glacier} · "
+              f"山峰名 {n_peak}/{len(peaks)} · 冰川名 {n_glacier_lb}/{len(glaciers)} · "
+              f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
               f"兴趣点 {n_poi}/{len(pois)}{extra}")
 
