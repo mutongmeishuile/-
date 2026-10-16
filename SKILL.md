@@ -432,7 +432,9 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **Edge 截图不出文件** | `references/pitfalls-layout.md` 末节（--screenshot 需绝对路径） |
 | 整张图发闷发脏、平原起云、林地硬边 | `references/pitfalls-terrain.md` §4 |
 | **雪线怎么着色、用户要求"配色偏白"** | `references/pitfalls-terrain.md` §5 |
-| **用户问"多少米有雪线"** | `references/pitfalls-terrain.md` §6 |
+| **用户问"多少米有雪线"（天山以外的山脉）** | `references/pitfalls-terrain.md` §6 + **`references/china-terrain.md` §4**（全国山脉雪线/林线表） |
+| **中国区线路底图配色（沙漠/戈壁/草原/森林/盐湖怎么上色）** | **`references/china-terrain.md`** §2–3 |
+| **黄土沟壑 / 喀斯特 / 雅丹 / 滩涂怎么表现** | **`references/china-terrain.md`** §6–7 |
 | 改色 / 改窗口后哪里要跟着改 | `references/pitfalls-terrain.md` §7 |
 | 地图与右栏不等高、右栏被切一半 | `references/pitfalls-layout.md` §1 |
 | 文案折行出孤字、表格溢出 | `references/pitfalls-layout.md` §2 |
@@ -558,6 +560,7 @@ C:/Users/<用户名>/.workbuddy/skills/hiking-route-guide-poster/     ← 改这
 |---|---|
 | 高频到必须记住 / 影响流程 | 本文档（保持精简，只放骨架与最高频项） |
 | 底图 · 地形 · 配色 | `references/pitfalls-terrain.md` |
+| **中国地貌 · 分区配色 · 雪线林线 · 特有地貌 · 水体** | `references/china-terrain.md` |
 | 版式 · 排版 · CSS | `references/pitfalls-layout.md` |
 | 地图 SVG · 图例 | `references/pitfalls-map-svg.md` |
 | 轨迹解析 · 数据提取 | `references/track-prep.md` / `data-extraction.md` |
