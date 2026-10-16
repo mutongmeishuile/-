@@ -44,6 +44,20 @@ C_STREAM    = (138, 182, 216, 255)
 # 希夏邦马窗口实测：333 条 stream 里 79 条 intermittent=yes（24%）。
 C_STREAM_SEASON = (152, 192, 222, 200)
 
+# ⚠ 冰川层开关（2026-10-17 希夏邦马：默认 **关闭**）。
+# 要不要这一层，判据是「DEM 雪线白 + 等高线是否已经把冰雪范围说清楚了」：
+#   * 开：冰川面占图幅 15.2%，能把冰舌范围一眼圈出来（登山线有用）；
+#     代价是填充会**压掉冰面下的晕渲**——冰瀑、裂隙场是行军信息，被压平就成了白板。
+#   * 关（当前）：冰雪范围交给「雪线以上的积雪白 + 等高线」，冰面起伏完整保留。
+# 想恢复：DRAW_GLACIER = True（图例与图注要同步加回冰川行）。
+DRAW_GLACIER = False
+
+# 注记之间的留白（逻辑像素 × S）。2026-10-17 希夏邦马：字号收 0.85 倍后仍有挤压，
+# 把留白从 2.0 提到 **2.8** —— 在"避免重叠"这件事上，留白比缩字号更有效：
+# 字号缩 15% 只让单个注记面积降约 28%（仍可能互相贴边），
+# 而留白直接决定两个注记**能不能挨着放** —— 它才是冲突判据里的硬门槛。
+LBL_PAD = 2.8
+
 # 冰川（natural=glacier + relation）：高海拔线路的核心图层，本区实测占图幅 15.2%。
 # 配色取「白 + 淡蓝阴影」（见 references/china-terrain.md §7），但**关键是边界**：
 # 雪线以上的地形底图本身就是积雪白，冰川若也画近白边界，两者就糊成一片、
@@ -200,6 +214,7 @@ class Labeller:
         self.size = size
         self.grid = set()
         self.cell = cell
+        self.n_overlap = 0     # 「实在放不下也要放」的强制落位数（= 会与已有注记挤在一起的个数）
 
     def _mark(self, bb):
         x0, y0, x1, y1 = bb
@@ -263,6 +278,7 @@ class Labeller:
             return False
         if best is None:
             return False
+        self.n_overlap += 1            # 命中"两害相权"分支：记录一次挤放，供自检核对
         _, x, y, box = best
         d.text((x, y), text, font=font, fill=fill,
                stroke_width=stroke_w, stroke_fill=stroke)
@@ -327,7 +343,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         t = e.get("tags", {})
         if e["type"] == "relation":
             # OSM 冰川常以 relation 打组（多个 outer way 拼一条冰川）
-            if t.get("natural") == "glacier":
+            if t.get("natural") == "glacier" and DRAW_GLACIER:
                 return ("glacier", None)
             return None
         if e["type"] != "way":
@@ -343,7 +359,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             return ("water", t["waterway"])
         if t.get("natural") == "water" or t.get("landuse") == "reservoir":
             return ("waterbody", None)
-        if t.get("natural") == "glacier":
+        if t.get("natural") == "glacier" and DRAW_GLACIER:
             return ("glacier", None)
         if t.get("natural") == "wood" or t.get("landuse") == "forest":
             return ("wood", None)
@@ -413,17 +429,21 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     lab = Labeller(size, cell=14 * S)
     if seed_cells:
         lab.grid |= set(seed_cells)
-    # ⚠ 字号要"按最坏情况"定：底图会同时被 ①长图/网页按 ~0.4 倍缩小嵌入、②高清图 1:1 看。
-    #   2026-10-09 亚丁线实测反馈：11.5 px 的峰名缩进长图后完全看不见
-    #   → 整体放大约 1.35 倍、颜色加深，做到与等高线高程标注同一量级，缩图后仍可读。
-    f_town = _font(F(18), True)
-    f_vil = _font(F(16.5), True)
-    f_ham = _font(F(14.5))
-    f_peak_hi = _font(F(16.5), True)     # ≥7000 m：8000 米级地标
-    f_peak = _font(F(15), True)          # 6500–7000 m
-    f_peak_lo = _font(F(13), True)       # <6500 m 或高程缺失：背景峰，只填空位
-    f_poi = _font(F(13))
-    f_water = _font(F(13.5), True)
+    # ⚠ 字号的上下界是两头夹出来的，别只顾一头：
+    #   · 下界来自 2026-10-09 亚丁线：11.5 px 的峰名缩进长图（~0.4×）后完全看不见
+    #     → 曾整体放大约 1.35 倍、颜色加深，做到与等高线高程标注同一量级；
+    #   · 上界来自 2026-10-17 希夏邦马：本窗口 191 个峰点 + 30 个水系名 + 地名同屏，
+    #     18 px 的地名与 16.5 px 的峰名在 1504 px 逻辑画幅上互相挤压，
+    #     用户直接反馈"字体缩小、避免重叠" → 再收约 **0.85 倍**。
+    #   结论：**13–15.5 px（逻辑）** 是这一族底图的可用区间，两者都别越界。
+    f_town = _font(F(15.5), True)
+    f_vil = _font(F(14), True)
+    f_ham = _font(F(12.5))
+    f_peak_hi = _font(F(14), True)       # ≥7000 m：8000 米级地标
+    f_peak = _font(F(13), True)          # 6500–7000 m
+    f_peak_lo = _font(F(11), True)       # <6500 m 或高程缺失：背景峰，只填空位
+    f_poi = _font(F(11.5))
+    f_water = _font(F(11.5), True)
 
     peaks, places, pois, waters = [], [], [], []
     for e in els:
@@ -522,22 +542,23 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         d.polygon(tri, fill=col, outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
         if lab.place(d, txt, (x, y + 7 * S), f_peak_use, tcol, anchor_center=False,
-                     stroke_w=2.1 * S, pad=2 * S, fallback=forced):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced):
             n_peak += 1
 
     # 冰川名：菱形冰符号 + 深冰蓝粗体 + 白描边。冰川面上只标最大的几条
     # （本区 382 条冰川里只有 18 条有名字），注记里不带高程 —— 冰川看的是范围与末端。
     n_glacier_lb = 0
-    glaciers.sort(key=lambda g: g[3], reverse=True)
-    for x, y, name, _a in glaciers:
-        if name in skip_names:
-            continue
-        r = 4.6 * S
-        d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
-                  fill=(233, 244, 252), outline=C_GLACIER_LB)
-        if lab.place(d, name, (x, y + 7 * S), f_water, C_GLACIER_LB, anchor_center=False,
-                     stroke_w=2.1 * S, pad=2 * S):
-            n_glacier_lb += 1
+    if DRAW_GLACIER:
+        glaciers.sort(key=lambda g: g[3], reverse=True)
+        for x, y, name, _a in glaciers:
+            if name in skip_names:
+                continue
+            r = 4.6 * S
+            d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
+                      fill=(233, 244, 252), outline=C_GLACIER_LB)
+            if lab.place(d, name, (x, y + 7 * S), f_water, C_GLACIER_LB, anchor_center=False,
+                         stroke_w=2.1 * S, pad=LBL_PAD * S):
+                n_glacier_lb += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
     places.sort(key=lambda p: prio.get(p[0], 9))
@@ -547,10 +568,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         f = f_town if kind in ("city", "town") else (f_vil if kind == "village" else f_ham)
         col = (40, 40, 40) if kind in ("city", "town") else (62, 62, 62)
-        r = (3 if kind in ("city", "town") else 2.4) * S
+        # 点位符号跟着字号收一档（2026-10-17）：字缩 0.85 后，大圆点配小字会"头重脚轻"
+        r = (2.7 if kind in ("city", "town") else 2.2) * S
         d.ellipse([x - r, y - r, x + r, y + r], fill=(70, 70, 70), outline=(255, 255, 255))
         if lab.place(d, name, (x, y + 4 * S), f, col, anchor_center=False,
-                     stroke_w=2 * S, pad=2 * S):
+                     stroke_w=2 * S, pad=LBL_PAD * S):
             n_place += 1
 
     n_poi = 0
@@ -561,13 +583,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             d.rectangle([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S], fill=(178, 96, 72),
                         outline=(255, 255, 255))
         else:
-            r = 2.6 * S
+            r = 2.4 * S
             d.ellipse([x - r, y - r, x + r, y + r], fill=(96, 132, 96),
                       outline=(255, 255, 255))
         # 兴趣点名（观景点/民宿/寺庙）优先级最低：**不放 fallback** ——
         # 它们的价值远低于"被压住"的代价，而峰名/湖名/地名宁可轻微重叠也要显示。
         if lab.place(d, name, (x, y + 4 * S), f_poi, (58, 66, 56), anchor_center=False,
-                     stroke_w=2 * S, pad=2 * S, fallback=False):
+                     stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
             n_poi += 1
 
     # ---- 海子 / 水系名：蓝色斜体感（用深青蓝 + 白描边），动态避让已有注记 ----
@@ -576,16 +598,21 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not name or name in skip_names:
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_center=True,
-                     stroke_w=2.1 * S, pad=2 * S):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S):
             n_water += 1
 
     if verbose:
         extra = f" · 抑制重名 {n_skip}" if n_skip else ""
-        print(f"   OSM 叠加：面 {n_poly} · 线 {n_line} · 冰川面 {n_glacier} · "
-              f"山峰名 {n_peak}/{len(peaks)} · 冰川名 {n_glacier_lb}/{len(glaciers)} · "
+        gl = f" · 冰川面 {n_glacier} · 冰川名 {n_glacier_lb}/{len(glaciers)}" if DRAW_GLACIER \
+            else " · 冰川层 关"
+        # ⚠ 挤放数（n_overlap）是"有没有重叠"的**唯一可测指标**：
+        #   落位率高不代表排得好（可能全是挤出来的），必须看这个数。
+        #   2026-10-17 希夏邦马：字号 ×0.85 + 留白 2→2.8 后由 挤放 N 降到 M。
+        print(f"   OSM 叠加：面 {n_poly} · 线 {n_line}{gl} · "
+              f"山峰名 {n_peak}/{len(peaks)} · "
               f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
-              f"兴趣点 {n_poi}/{len(pois)}{extra}")
+              f"兴趣点 {n_poi}/{len(pois)} · 挤放 {lab.n_overlap}{extra}")
 
     return Image.alpha_composite(pil.convert("RGBA"), ov).convert("RGB")
 
