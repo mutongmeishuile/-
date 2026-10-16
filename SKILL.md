@@ -408,7 +408,8 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **底图的地名/山峰名/湖泊名/水系名看不见、或几乎全丢** | `references/pitfalls-terrain.md` §11（字号按"缩图后"定 + Labeller 三级兜底 + 补湖名水系名 + 禁标网格别多乘 ss） |
 | **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |
 | **冰川看不出范围 / 冰舌和雪原糊成一片** | `references/pitfalls-terrain.md` §12 ①（边界**绝不能画近白**，要冰蓝；填充透明度 ≤150 保住冰面晕渲） |
-| **峰名太多糊死山体，或"主峰没名、无名矮峰有名"** | `references/pitfalls-terrain.md` §12 ②（按 ele 降序 + 分三级，<6500 m 走 `fallback=False`） |
+| **峰名太多糊死山体，或"主峰没名、无名矮峰有名"** | `references/pitfalls-terrain.md` §12 ②（按 ele 降序 + 分三级；阈值用**本窗口分位数** `PEAK_TIER_PCT=(88,62)`，低档走 `fallback=False`） |
+| **换到新线路后主峰不突出 / 所有峰名都是小字** | `references/pitfalls-terrain.md` §12 ②（分级阈值写死过绝对米数就会这样，**必须相对**；样本 <8 自动免分级） |
 | **时令河被画成常年河（旱季断流却给了水源错觉）** | `references/pitfalls-terrain.md` §12 ③（`intermittent=yes` 走虚线 + 图例单列一行） |
 | **>2 天线路整条被画成一种颜色（图例却是彩色的）** | `references/pitfalls-map-svg.md` §10（按 `day_bounds` + `days` 颜色画 N 段） |
 | **图例里找不到图上的符号 / 图例占地过大** | `references/pitfalls-map-svg.md` §11（只列用到的 kind + 两列网格 + 复用 `mk_pin` 出样本） |
@@ -442,6 +443,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | 整张图发闷发脏、平原起云、林地硬边 | `references/pitfalls-terrain.md` §4 |
 | **雪线怎么着色、用户要求"配色偏白"** | `references/pitfalls-terrain.md` §5 |
 | **用户问"多少米有雪线"（天山以外的山脉）** | `references/pitfalls-terrain.md` §6 + **`references/china-terrain.md` §4**（全国山脉雪线/林线表） |
+| **图上写的雪线米数 ≠ `CFG["snowline_m"]`** | `references/pitfalls-terrain.md` §6（四个键要一起配：`snowline_m` / `_label` / `_note` / `_src`；只改高度不改文案是**静默错误**） |
 | **中国区线路底图配色（沙漠/戈壁/草原/森林/盐湖怎么上色）** | **`references/china-terrain.md`** §2–3 |
 | **黄土沟壑 / 喀斯特 / 雅丹 / 滩涂怎么表现** | **`references/china-terrain.md`** §6–7 |
 | 改色 / 改窗口后哪里要跟着改 | `references/pitfalls-terrain.md` §7 |
@@ -528,6 +530,11 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
       山顶是**有等高线、有渐变的雪帽**，不是一块没有线的平板
 - [ ] **等高距是自适应的**：`make_terrain.py` 打印的「等高距自适应 → 首曲线 X / 计曲线 Y，
       线覆盖 Z% ≤ 目标 30%」，Z 必须 ≤ 30%；长线窗口不许还是 20 m（会糊成一片棕）
+- [ ] **雪线四个键口径一致**：`snowline_m` / `snowline_label` / `snowline_note` / `snowline_src`
+      要么全配要么全删；日志出现「⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 6000 m」
+      **必须处理**（查表重设，或低海拔线路直接删掉雪线）
+- [ ] **峰名分级是相对的**：`OSM 叠加` 日志里有 `[p88≥Xm/p62≥Ym]`，X/Y 要符合本线海拔量级
+      （1900 m 级的线路若打出 7000 m，说明阈值被写死成绝对米数了）
 - [ ] **地形"有立体感、背光侧仍有结构"**：不是半边发白半边死黑（那是单向晕渲的锅，
       应为 MDOW 多向）；如果整张图读起来"发黄发闷"，检查等高线是不是还在用暖橙棕
 - [ ] **底图注记落位率**：`draw_osm` 打印的「山峰名 x/N」≥ 60%（正常 ~80%）；

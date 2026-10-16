@@ -777,11 +777,40 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
 # ⚠ 线路级常量：换线路必须按山脉查表重设（当前残留的是珠峰线取值）。
 #    中国各山脉现代雪线见 references/china-terrain.md §4（阿尔泰 3000–3200 / 天山 3600–4400 /
 #    祁连 4300–5240 / 喜马拉雅南坡≈4500、北坡 5900–6000 …），绝不能沿用上一座山的值。
-SNOWLINE_LEVEL = 6000.0
-SNOWLINE_LABEL = "北坡雪线 ≈6000 m"
-SNOWLINE_NOTE = "（南坡 ≈5000 m · 2026-10 联网：珠峰区域冬季雪线已达 6100 m）"
+SNOWLINE_LEVEL = 6000.0     # ← fallback 值，且**只在你确认过新线路雪线时配 CFG['snowline_m']**。
+# ⚠ 缺省文案必须带 {:.0f} 占位符（或干脆不带米数），**不能写死某座山的高度** ——
+#   否则换线路改了 CFG['snowline_m']，虚线画在新高度上，字却还写着旧米数（图文打架）。
+#   正确做法：在 route_def.CFG 里给 snowline_label / snowline_note（写清坡向与数据出处）；
+#   不配就用这里的通用模板，米数由实际 level 生成，永远与画的线一致。
+SNOWLINE_LABEL = "雪线 ≈{:.0f} m"
+SNOWLINE_NOTE = ""
 C_SNOWLINE = (26, 106, 186)
 A_SNOWLINE = 0.88
+
+
+def _snowline_texts(level):
+    """雪线注记的 (主标, 副注)。
+
+    主标：CFG['snowline_label']（含 `{}` 时按 level 格式化）→ 缺省用 SNOWLINE_LABEL 模板。
+    副注：CFG['snowline_note'] → 退到 CFG['snowline_src']（自动包括号）→ 缺省 SNOWLINE_NOTE。
+    取不到 route_def 也不报错（脚本可独立运行）。
+    """
+    cfg = {}
+    try:
+        import route_def as _RD
+        cfg = getattr(_RD, "CFG", None) or {}
+    except Exception:                                              # noqa
+        pass
+    label = cfg.get("snowline_label") or SNOWLINE_LABEL
+    try:
+        label = label.format(level) if "{" in label else label
+    except Exception:                                              # noqa
+        label = f"雪线 ≈{level:.0f} m"
+    note = cfg.get("snowline_note")
+    if note is None:
+        src = cfg.get("snowline_src")
+        note = f"（{src}）" if src else SNOWLINE_NOTE
+    return label, note
 
 
 def _snowline_from_cfg():
@@ -829,6 +858,8 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
     """
     sx, sy = scale
     S = SS
+    # 注记文案按**实际画的这条线的高度**生成，杜绝"线在新高度、字写旧米数"。
+    _lab, _note = _snowline_texts(level)
     f = _label_font(max(11, int(round(LABEL_FONT * 1.25 * S))))
     fn = _label_font(max(8, int(round(LABEL_FONT * 0.8 * S))))
     stroke = max(2, int(round(1.7 * S)))
@@ -854,8 +885,8 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
             print(f"   雪线 {level:.0f} m：窗口内无折线，跳过注记")
         return pil, set()
 
-    tw, th, _ = _text_size(f, SNOWLINE_LABEL, stroke)
-    nw, nh, _ = _text_size(fn, SNOWLINE_NOTE, 1)
+    tw, th, _ = _text_size(f, _lab, stroke)
+    nw, nh, _ = _text_size(fn, _note, 1)
     best = None
     for P0 in polys:
         P = np.stack([P0[:, 0] * sx, P0[:, 1] * sy], 1)
@@ -903,15 +934,15 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
     x, y, ang = best
     pad = stroke + 4
     tmp = Image.new("RGBA", (int(tw + 2 * pad), int(th + 2 * pad)), (0, 0, 0, 0))
-    _, _, bb = _text_size(f, SNOWLINE_LABEL, stroke)
-    ImageDraw.Draw(tmp).text((pad - bb[0], pad - bb[1]), SNOWLINE_LABEL, font=f,
+    _, _, bb = _text_size(f, _lab, stroke)
+    ImageDraw.Draw(tmp).text((pad - bb[0], pad - bb[1]), _lab, font=f,
                              fill=C_SNOWLINE + (255,), stroke_width=stroke,
                              stroke_fill=LABEL_HALO + (255,))
     tmp = tmp.rotate(-ang, resample=Image.BICUBIC, expand=True)
     layer.alpha_composite(tmp, (int(x - tmp.width / 2), int(y - tmp.height / 2)))
     # 口径小字跟在主标下方，不旋转（小字旋转后难读）
     ImageDraw.Draw(layer).text((int(x - nw / 2), int(y + th * 0.9 + 6 * S)),
-                               SNOWLINE_NOTE, font=fn, fill=C_SNOWLINE + (255,),
+                               _note, font=fn, fill=C_SNOWLINE + (255,),
                                stroke_width=max(1, int(round(1.2 * S))),
                                stroke_fill=LABEL_HALO + (255,))
     bw = max(tmp.width, nw) / 2 + 6 * S
@@ -921,8 +952,8 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
         for cy in range(int((y - bh) // cell), int((y + bh) // cell) + 1):
             grid.add((cx, cy))
     if verbose:
-        print(f"   雪线 {level:.0f} m：蓝色虚线 + 注记「{SNOWLINE_LABEL}」"
-              f"@({x:.0f},{y:.0f}) {SNOWLINE_NOTE}")
+        print(f"   雪线 {level:.0f} m：蓝色虚线 + 注记「{_lab}」"
+              f"@({x:.0f},{y:.0f}) {_note}")
     return Image.alpha_composite(pil.convert("RGBA"), layer).convert("RGB"), grid
 
 
@@ -1316,6 +1347,11 @@ def build_terrain():
 
     print("[3/6] 分层设色 + 合成 …")
     snow_m = _snowline_from_cfg()
+    if _route_cfg("snowline_m", None) is None:
+        # 不配就用残留默认值：高度大概率是错的，而图上会一本正经地画出这条线。
+        print(f"   ⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 {snow_m:.0f} m —— "
+              f"换线路必须按山脉查表重设（references/china-terrain.md §4）；"
+              f"若本线最高峰远低于雪线，删掉这个键更合适")
     rgb = hypso(dem, snowline=snow_m)
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色
     # 雪线以上按高程渐入回抬权重（600 m 内 0→0.6）：山影别把雪涂灰

@@ -58,6 +58,14 @@ DRAW_GLACIER = False
 # 而留白直接决定两个注记**能不能挨着放** —— 它才是冲突判据里的硬门槛。
 LBL_PAD = 2.8
 
+# 峰名三级的**相对**阈值 = 本窗口峰点高程的分位数。
+# ⚠ 绝不能写死绝对米数：7000/6500 是喜马拉雅的值，搬到武功山（1918 m）、亚丁（6032 m）
+#   会让**所有**峰落进最低档 → 主峰跟无名矮峰一个字号、还不保证占位，
+#   等于把 §12 ② 修好的「主峰没名字」倒挂在低海拔线路上重演一遍。
+#   相对阈值随窗口自适应：希夏邦马实测 p88≈7010 / p62≈6518，与原绝对阈值近乎等价。
+PEAK_TIER_PCT = (88, 62)
+PEAK_TIER_MIN_N = 8     # 有效高程样本少于此值就不分级（分位数不稳），一律中档保证峰名出得来
+
 # 冰川（natural=glacier + relation）：高海拔线路的核心图层，本区实测占图幅 15.2%。
 # 配色取「白 + 淡蓝阴影」（见 references/china-terrain.md §7），但**关键是边界**：
 # 雪线以上的地形底图本身就是积雪白，冰川若也画近白边界，两者就糊成一片、
@@ -207,6 +215,19 @@ def _rings_of(e, proj, size):
 
 
 # ------------------------------------------------------------------ 注记
+def _pct(vals, q):
+    """线性插值分位数（纯 Python —— 别给 draw_osm 引入 numpy，它只依赖 PIL）。"""
+    vs = sorted(vals)
+    if not vs:
+        return None
+    if len(vs) == 1:
+        return vs[0]
+    pos = (len(vs) - 1) * (q / 100.0)
+    lo = int(pos)
+    hi = min(lo + 1, len(vs) - 1)
+    return vs[lo] + (vs[hi] - vs[lo]) * (pos - lo)
+
+
 class Labeller:
     """按优先级占位放注记，重叠就跳过。cell 是占位网格边长（随超采样倍率放大）。"""
 
@@ -439,9 +460,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     f_town = _font(F(15.5), True)
     f_vil = _font(F(14), True)
     f_ham = _font(F(12.5))
-    f_peak_hi = _font(F(14), True)       # ≥7000 m：8000 米级地标
-    f_peak = _font(F(13), True)          # 6500–7000 m
-    f_peak_lo = _font(F(11), True)       # <6500 m 或高程缺失：背景峰，只填空位
+    f_peak_hi = _font(F(14), True)       # 顶级：本窗口峰点的 p88 以上
+    f_peak = _font(F(13), True)          # 中档：p62 – p88
+    f_peak_lo = _font(F(11), True)       # p62 以下 / 高程缺失：背景峰，只填空位
     f_poi = _font(F(11.5))
     f_water = _font(F(11.5), True)
 
@@ -511,6 +532,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #      制图学上峰名本来就按高程分级：8000 米级是地标，6000 米以下只是背景。
     #   ② 旧实现按 OSM 返回顺序落位，一座 4300 m 的矮峰会先占掉 7000 m 主峰
     #      需要的空位，出现「主峰没名字、无名矮峰有名字」的倒挂 —— 必须按 ele 降序。
+    #   ③ 阈值必须是**本窗口峰点高程的分位数**，不能是绝对米数（见 PEAK_TIER_PCT 注释）。
     def _ele_of(s):
         """OSM 的 ele 常带单位或空格（'7292 m'），解析失败返回 None。"""
         try:
@@ -524,6 +546,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     waters = [(x, y, _clean_name(n)) for x, y, n in waters]
     pois = [(x, y, _clean_name(n), k) for x, y, n, k in pois]
     peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
+    # 分位数按本窗口**所有有高程的峰点**算（含无名字的）——要反映"这片地形上多高算突出"，
+    # 而不是 OSM 的命名稀疏度（高峰也常有没录名字的）。
+    _ev = [v for v in (_ele_of(p[3]) for p in peaks) if v is not None]
+    if len(_ev) >= PEAK_TIER_MIN_N:
+        q_hi, q_mid = _pct(_ev, PEAK_TIER_PCT[0]), _pct(_ev, PEAK_TIER_PCT[1])
+    else:
+        q_hi = q_mid = None       # 样本太少：不做相对分级，一律中档
     for x, y, name, ele in peaks:
         if not name or name in skip_names:
             n_skip += 1 if name else 0
@@ -531,9 +560,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         ev = _ele_of(ele)
         if ev is None:
             f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
-        elif ev >= 7000:
+        elif q_hi is None:
+            # 样本不足 PEAK_TIER_MIN_N：无法可靠分级，统一中档保证有名字的峰都出得来
+            f_peak_use, forced, tri_k, col, tcol = f_peak, True, 0.92, (84, 60, 40), (58, 40, 26)
+        elif ev >= q_hi:
             f_peak_use, forced, tri_k, col, tcol = f_peak_hi, True, 1.0, (84, 60, 40), (48, 32, 20)
-        elif ev >= 6500:
+        elif ev >= q_mid:
             f_peak_use, forced, tri_k, col, tcol = f_peak, True, 0.92, (84, 60, 40), (58, 40, 26)
         else:
             f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
@@ -601,6 +633,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                      stroke_w=2.1 * S, pad=LBL_PAD * S):
             n_water += 1
 
+    _tier = (f"[p{PEAK_TIER_PCT[0]}≥{q_hi:.0f}m/p{PEAK_TIER_PCT[1]}≥{q_mid:.0f}m]"
+             if q_hi is not None else f"[样本<{PEAK_TIER_MIN_N}，未分级]")
     if verbose:
         extra = f" · 抑制重名 {n_skip}" if n_skip else ""
         gl = f" · 冰川面 {n_glacier} · 冰川名 {n_glacier_lb}/{len(glaciers)}" if DRAW_GLACIER \
@@ -609,7 +643,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   落位率高不代表排得好（可能全是挤出来的），必须看这个数。
         #   2026-10-17 希夏邦马：字号 ×0.85 + 留白 2→2.8 后由 挤放 N 降到 M。
         print(f"   OSM 叠加：面 {n_poly} · 线 {n_line}{gl} · "
-              f"山峰名 {n_peak}/{len(peaks)} · "
+              f"山峰名 {n_peak}/{len(peaks)}" + _tier + " · "
               f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
               f"兴趣点 {n_poi}/{len(pois)} · 挤放 {lab.n_overlap}{extra}")
