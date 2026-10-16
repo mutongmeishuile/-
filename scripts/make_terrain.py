@@ -473,9 +473,17 @@ def ramp_stops(dem, verbose=True):
     return stops
 
 
-def hypso(dem):
-    """高程 → RGB 分层设色（色阶按本区高程自适应，见 _RAMP 的说明）。"""
-    stops_tbl = ramp_stops(dem)
+def hypso(dem, snowline=None):
+    """高程 → RGB 分层设色。
+    区域跨越雪线 → 绝对高程地貌带（belt_stops：雪线以上积雪白，与雪线虚线严格同高程）；
+    否则 → 通用 percentile 色带（ramp_stops：色阶按本区高程分位自适应，非雪线区用）。
+    snowline=None 时自动读 route_def.CFG['snowline_m']（动态联网值）。"""
+    if snowline is None:
+        snowline = _snowline_from_cfg()
+    snowline = float(snowline)
+    stops_tbl = belt_stops(dem, snowline)
+    if stops_tbl is None:
+        stops_tbl = ramp_stops(dem)
     stops = np.array([s[0] for s in stops_tbl], float)
     cols = np.array([s[1] for s in stops_tbl], float)
     d = np.clip(dem, stops[0], stops[-1])
@@ -483,6 +491,60 @@ def hypso(dem):
     for ch in range(3):
         out[..., ch] = np.interp(d, stops, cols[:, ch])
     return out
+
+
+# ------------------------------------------------------------------ 地貌垂直带色带（绝对高程）
+# 用户要求：底图配色贴近真实地貌（草原 / 戈壁 / 森林 / 砾石 / 雪 / 冰川），过渡要自然。
+#  上面的 percentile 色带按高程**分布**拉伸，色阶位置随轨迹分布漂移 —— 表现为
+#  "雪线"这条绝对等高线与底色对不上（6000 m 处可能还是陶土色）、峰顶白块位置不定。
+# → 喜马拉雅型线路（区域跨越雪线）改走**绝对高程地貌带**，带位与雪线严格对齐：
+#   高原草原 → 高寒草原 → 草甸/砾石过渡 → 高山砾石（流石滩）→ 裸岩寒漠
+#   → 季节性积雪过渡带 → **雪线以上常年积雪白**。
+#   带位参照喜马拉雅北坡垂直带谱 + 本区 DEM 实测（4125–8047 m）。
+#   （戈壁 / 森林带在本区不存在；低海拔林区线路仍走上面的 percentile 通用色带。）
+# ⚠ 仅当区域够到雪线带（dem_max ≥ snowline−250）时启用；
+#   峨眉山（470–3085 m）/ 党岭（3200–5400 m，默认雪线 6000）等不跨雪线区域
+#   自动回退上面的 percentile 通用色带，行为不变。
+# 低海拔段（森林 / 灌丛）给绝对高程带：本窗口含南部深切河谷（DEM 实测低至 ~2900 m，
+#  吉隆沟方向是有林区），只画 4200 m 以上会把整片南谷 clip 成一块平色。
+BELT_DENSIFY_M = 100.0   # 密化步长：段间每 ~100 m 插一个中间色，过渡更自然
+
+
+def belt_stops(dem, snowline, verbose=True):
+    """按 snowline 对齐的绝对高程地貌带生成色阶表；区域够不到雪线带返回 None（调用方回退）。"""
+    dmin, dmax = float(np.nanmin(dem)), float(np.nanmax(dem))
+    if dmax < snowline - 250:
+        return None
+    s = float(snowline)
+    raw = [
+        (0,        (104, 124, 96)),    # 低地兜底：山地森林深绿
+        (2900,     (110, 132, 102)),   # 山地针叶林（南部深切河谷 / 吉隆沟方向）
+        (3400,     (122, 142, 108)),   # 针叶林 → 灌丛过渡
+        (3900,     (138, 158, 118)),   # 灌丛草甸
+        (4300,     (150, 172, 132)),   # 高原草原 / 河谷草甸（佩枯措谷地 ≈4125 m）
+        (s - 1300, (168, 184, 128)),   # 高寒草原
+        (s - 1000, (174, 176, 120)),   # 草甸 → 砾石过渡
+        (s - 700,  (148, 140, 116)),   # 高山砾石 / 流石滩
+        (s - 400,  (126, 118, 106)),   # 裸岩寒漠
+        (s - 200,  (150, 144, 134)),   # 季节性积雪带（岩雪混杂）
+        (s,        (232, 235, 240)),   # 雪线：转常年积雪白（与 paint_snowline 同高程）
+        (s + 400,  (242, 244, 249)),
+        (s + 1000, (247, 248, 252)),
+        (s + 2100, (250, 251, 254)),   # 峰顶冰雪
+    ]
+    raw = sorted(raw, key=lambda t: t[0])          # 防低雪线场景带位逆序
+    # 密化到 ~100 m 一格：线性插值本身连续，密化是防止长段出现可见的"色带纹"
+    stops = [raw[0]]
+    for (e0, c0), (e1, c1) in zip(raw, raw[1:]):
+        n = max(1, int(round((e1 - e0) / BELT_DENSIFY_M)))
+        for i in range(1, n + 1):
+            f = i / n
+            stops.append((e0 + (e1 - e0) * f,
+                          tuple(c0[k] + (c1[k] - c0[k]) * f for k in range(3))))
+    if verbose:
+        print(f"   地貌垂直带色带（绝对高程）：{dmin:.0f}–{dmax:.0f} m · "
+              f"雪线 {s:.0f} m 以上转积雪白；带位 = 森林→灌丛→草原/草甸→砾石→裸岩→季节性积雪→雪")
+    return stops
 
 
 # 晕渲调制：环境光比例越高整体越亮、对比越弱。
@@ -498,8 +560,11 @@ TINT_COOL_RGB = (0.90, 0.95, 1.04)
 TINT_WARM_RGB = (1.05, 1.00, 0.95)
 
 
-def shade_rgb(rgb, hs):
-    """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。纯 numpy，输入输出都是 float 数组。"""
+def shade_rgb(rgb, hs, snow_w=None):
+    """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。纯 numpy，输入输出都是 float 数组。
+    snow_w：雪线以上回抬权重（0–1，由高程渐入）。山影会把雪涂成灰（0.68 环境光下
+    背光面只剩 68% 亮度），"雪线之上偏白"就立不住 → 向无山影的设色按权重回抬，
+    保留一部分立体感的同时让雪面回到白色。"""
     img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
     if TINT_COOL > 0:
         t = np.clip((0.5 - hs) * 2.0, 0, 1)[..., None]        # 越暗 → 越冷
@@ -511,6 +576,9 @@ def shade_rgb(rgb, hs):
         img = img * (1 - TINT_WARM * t) + img * c * (TINT_WARM * t)
     over = img > HL_CLIP
     img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
+    if snow_w is not None:
+        w = np.asarray(snow_w, np.float32)[..., None]
+        img = img * (1 - w) + rgb * w
     return img
 
 
@@ -595,6 +663,162 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     print(f"   等高线 每 {minor:.0f} m（计曲线每 {major:.0f} m），约 {n_lv} 级，"
           f"线覆盖 {m_minor.mean()*100:.1f}% 像素")
     return rgb
+
+
+# ------------------------------------------------------------------ 雪线
+# 2026-10-16 联网核实（来源清单见 route_def.py 头部）：希夏邦马峰区域
+# **南坡雪线 ≈5000 m、北坡 ≈6000 m**（西藏在线 / 维基 / 冰川群资料口径一致；
+# 野博康加勒冰川雪线即 6000 m、末端 5530 m）。
+# 画法：在 DEM 的 6000 m 等高线上叠一条**蓝色虚线** + 沿线注记。
+# 为什么只画 6000 这一条：本线绝大多数路程位于北坡；南坡的 5000 m 只写进注记
+# 文字 —— 否则读者会在北坡地形上把随处可见的 5000 m 等高线误读成雪线。
+SNOWLINE_LEVEL = 6000.0
+SNOWLINE_LABEL = "北坡雪线 ≈6000 m"
+SNOWLINE_NOTE = "（南坡 ≈5000 m · 2026-10 联网：珠峰区域冬季雪线已达 6100 m）"
+C_SNOWLINE = (26, 106, 186)
+A_SNOWLINE = 0.88
+
+
+def _snowline_from_cfg():
+    """雪线高度优先取 route_def.CFG['snowline_m']（动态联网值），取不到回退内置默认。
+    雪线是年际变化量：换地区 / 数据更新只改 route_def，不必动渲染脚本。"""
+    try:
+        import route_def as _RD
+        cfg = getattr(_RD, "CFG", None) or {}
+        v = cfg.get("snowline_m")
+        if v:
+            return float(v)
+    except Exception:
+        pass
+    return SNOWLINE_LEVEL
+
+
+def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL):
+    """雪线：DEM level 等高线处叠蓝色虚线（arr 原地改）。返回 mask；高度不在窗口内返回 None。
+
+    与 paint_contours 同一套 band-edge 原理，但用横向条纹打掩码变成虚线，
+    并加粗一格 —— 缩图进长图后仍要看得出来。
+    """
+    below = dem_out < level
+    cross = np.zeros(dem_out.shape, bool)
+    cross[:-1, :] |= below[:-1, :] != below[1:, :]
+    cross[:, :-1] |= below[:, :-1] != below[:, 1:]
+    cross = _dilate(cross)
+    if not cross.any():
+        return None
+    stripe = (np.arange(cross.shape[1])[None, :] % 18) < 9       # 横向条纹 → 虚线
+    mask = cross & stripe
+    f = arr.astype(np.float32)
+    f[mask] = f[mask] * (1 - A_SNOWLINE) + np.asarray(C_SNOWLINE, np.float32) * A_SNOWLINE
+    np.copyto(arr, np.clip(f, 0, 255).astype(np.uint8))
+    return mask
+
+
+def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=None,
+                        verbose=True):
+    """沿雪线放一处注记：蓝字 + 纸色描边、随线旋转，下方附口径小字（不旋转）。
+
+    几何与 draw_contour_labels 同源（_march → _join → _rdp），但只标一次、
+    倾角容忍放宽到 45°（名字不像高程数字那样必须水平才读得出）。
+    返回 (pil, 占位网格) —— 网格交给 OSM 注记继续避让。
+    """
+    sx, sy = scale
+    S = SS
+    f = _label_font(max(11, int(round(LABEL_FONT * 1.25 * S))))
+    fn = _label_font(max(8, int(round(LABEL_FONT * 0.8 * S))))
+    stroke = max(2, int(round(1.7 * S)))
+    W, H = pil.size
+    cell = 14.0 * S
+    avoid_cells = set()
+    for x, y, r in (avoid or ()):
+        for cx in range(int((x - r) // cell), int((x + r) // cell) + 1):
+            for cy in range(int((y - r) // cell), int((y + r) // cell) + 1):
+                avoid_cells.add((cx, cy))
+
+    def blocked(x0, y0, x1, y1):
+        for cx in range(int(x0 // cell), int(x1 // cell) + 1):
+            for cy in range(int(y0 // cell), int(y1 // cell) + 1):
+                if (cx, cy) in avoid_cells:
+                    return True
+        return False
+
+    _w_init(dem)
+    polys = _w_level(level)
+    if not polys:
+        if verbose:
+            print(f"   雪线 {level:.0f} m：窗口内无折线，跳过注记")
+        return pil, set()
+
+    tw, th, _ = _text_size(f, SNOWLINE_LABEL, stroke)
+    nw, nh, _ = _text_size(fn, SNOWLINE_NOTE, 1)
+    best = None
+    for P0 in polys:
+        P = np.stack([P0[:, 0] * sx, P0[:, 1] * sy], 1)
+        dseg = np.hypot(np.diff(P[:, 0]), np.diff(P[:, 1]))
+        cum = np.concatenate([[0.0], np.cumsum(dseg)])
+        total = float(cum[-1])
+        need = tw + 40 * S
+        if total < need:
+            continue
+        s = need * 0.5
+        while s < total - need * 0.4:
+            i0 = int(np.searchsorted(cum, max(0.0, s - 30 * S)))
+            i1 = int(np.searchsorted(cum, min(total, s + 30 * S)))
+            if i1 - i0 < 2:
+                break
+            dx, dy = P[i1, 0] - P[i0, 0], P[i1, 1] - P[i0, 1]
+            if dx < 0:
+                dx, dy = -dx, -dy
+            ang = math.degrees(math.atan2(dy, dx))
+            if abs(ang) > 45:
+                s += 40 * S
+                continue
+            j = min(max(int(np.searchsorted(cum, s)), 1), len(P) - 1)
+            t = (s - cum[j - 1]) / max(1e-6, cum[j] - cum[j - 1])
+            x = P[j - 1, 0] + (P[j, 0] - P[j - 1, 0]) * t
+            y = P[j - 1, 1] + (P[j, 1] - P[j - 1, 1]) * t
+            hw, hh = tw / 2 + 8 * S, th / 2 + 16 * S
+            if x - hw < 4 or x + hw > W - 4 or y - hh < 4 or y + hh > H - 4:
+                s += 40 * S
+                continue
+            if blocked(x - hw, y - hh, x + hw, y + hh):
+                s += 40 * S
+                continue
+            best = (x, y, ang)
+            break
+        if best:
+            break
+
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    if not best:
+        if verbose:
+            print(f"   雪线 {level:.0f} m：没找到合适注记位（避让约束太紧），仅画虚线")
+        return Image.alpha_composite(pil.convert("RGBA"), layer).convert("RGB"), set()
+
+    x, y, ang = best
+    pad = stroke + 4
+    tmp = Image.new("RGBA", (int(tw + 2 * pad), int(th + 2 * pad)), (0, 0, 0, 0))
+    _, _, bb = _text_size(f, SNOWLINE_LABEL, stroke)
+    ImageDraw.Draw(tmp).text((pad - bb[0], pad - bb[1]), SNOWLINE_LABEL, font=f,
+                             fill=C_SNOWLINE + (255,), stroke_width=stroke,
+                             stroke_fill=LABEL_HALO + (255,))
+    tmp = tmp.rotate(-ang, resample=Image.BICUBIC, expand=True)
+    layer.alpha_composite(tmp, (int(x - tmp.width / 2), int(y - tmp.height / 2)))
+    # 口径小字跟在主标下方，不旋转（小字旋转后难读）
+    ImageDraw.Draw(layer).text((int(x - nw / 2), int(y + th * 0.9 + 6 * S)),
+                               SNOWLINE_NOTE, font=fn, fill=C_SNOWLINE + (255,),
+                               stroke_width=max(1, int(round(1.2 * S))),
+                               stroke_fill=LABEL_HALO + (255,))
+    bw = max(tmp.width, nw) / 2 + 6 * S
+    bh = tmp.height / 2 + nh + 12 * S
+    grid = set()
+    for cx in range(int((x - bw) // cell), int((x + bw) // cell) + 1):
+        for cy in range(int((y - bh) // cell), int((y + bh) // cell) + 1):
+            grid.add((cx, cy))
+    if verbose:
+        print(f"   雪线 {level:.0f} m：蓝色虚线 + 注记「{SNOWLINE_LABEL}」"
+              f"@({x:.0f},{y:.0f}) {SNOWLINE_NOTE}")
+    return Image.alpha_composite(pil.convert("RGBA"), layer).convert("RGB"), grid
 
 
 # ------------------------------------------------------------------ 等高线高程标注
@@ -986,9 +1210,12 @@ def build_terrain():
     hs = hillshade(dem, meta["z"], lat_c)
 
     print("[3/6] 分层设色 + 合成 …")
-    rgb = hypso(dem)
+    snow_m = _snowline_from_cfg()
+    rgb = hypso(dem, snowline=snow_m)
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色
-    img = shade_rgb(rgb, hs)
+    # 雪线以上按高程渐入回抬权重（600 m 内 0→0.6）：山影别把雪涂灰
+    snow_w = np.clip((dem - snow_m) / 600.0, 0.0, 1.0) * 0.6
+    img = shade_rgb(rgb, hs, snow_w=snow_w)
     img = np.clip(img, 0, 255).astype(np.uint8)
     # BICUBIC 而非 LANCZOS：LANCZOS 在陡崖等高反差处会产生振铃，被随后的 USM 放大成"颗粒噪点"。
     pil = Image.fromarray(img, "RGB").resize((RASTER_W, RASTER_H), Image.BICUBIC)
@@ -1003,13 +1230,23 @@ def build_terrain():
           f"线宽 {CONTOUR_DILATE}@{RASTER_W}px）…")
     arr = np.asarray(pil).copy()
     paint_contours(arr, dem_out, *CONTOUR_DILATE, minor=c_minor, major=c_major)
+    # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
+    scale_raster_y = RASTER_H / dh
+    snow_mask = paint_snowline(arr, dem_out, level=snow_m)
     pil = Image.fromarray(arr, "RGB")
+    snow_cells = set()
+    if snow_mask is None:
+        print(f"   雪线 {snow_m:.0f} m：不在本窗口高程范围内，跳过")
+    else:
+        pil, snow_cells = draw_snowline_label(
+            pil, dem, snow_m, (scale_raster, scale_raster_y),
+            avoid=avoid_points(meta, scale_raster, SS))
 
     print(f"[5/7] 等高线高程标注（计曲线每 {c_major:g} m）…")
-    scale_raster_y = RASTER_H / dh
     pil, seed_cells = draw_contour_labels(
         pil, dem, (scale_raster, scale_raster_y), lo, hi,
         avoid=avoid_points(meta, scale_raster, SS), every=c_major)
+    seed_cells = seed_cells | snow_cells
 
     print(f"[6/7] OSM 矢量叠加 + 落盘（超采样 {SS}× → 栅格 {RASTER_W}px / 逻辑 {LOGICAL_W}px）…")
     pil.save(OUT / "base_terrain.jpg", **JPG)

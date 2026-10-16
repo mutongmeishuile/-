@@ -34,7 +34,9 @@ BBOX = f"{LAT0},{LON0},{LAT1},{LON1}"
 
 UA = "hiking-route-guide/1.0 (offline guide map; contact: local user)"
 
-# 抓什么：路网 + 步道 + 水系 + 水体 + 林地 + 地名 + 山峰
+# 抓什么：路网 + 步道 + 水系 + 水体 + 林地 + 地名 + 山峰 + 冰川
+# 冰川（natural=glacier）单独要——希夏邦马这一带冰川是地图主角，
+# 且冰川面配「雪线 + 退缩速率」注释，数据来自联网检索（见 route_def.py 头部）。
 QUERY = f"""
 [out:json][timeout:180];
 (
@@ -45,6 +47,8 @@ QUERY = f"""
   way["natural"="wood"]({BBOX});
   way["landuse"="forest"]({BBOX});
   way["landuse"="meadow"]({BBOX});
+  way["natural"="glacier"]({BBOX});
+  relation["natural"="glacier"]({BBOX});
   node["place"~"^(city|town|village|hamlet|suburb|neighbourhood)$"]({BBOX});
   node["natural"="peak"]({BBOX});
   node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({BBOX});
@@ -126,6 +130,9 @@ def summarize(d):
             kind["林地"] += 1
         elif t.get("landuse") == "meadow":
             kind["草地"] += 1
+        elif t.get("natural") == "glacier":
+            kind["冰川"] += 1
+            names.append(("冰川", t.get("name", "(无名)"), ""))
         elif "place" in t:
             kind["地名:" + t["place"]] += 1
             names.append(("地名", t.get("name", "?"), t.get("place")))
