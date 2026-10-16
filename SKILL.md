@@ -421,6 +421,8 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **沙箱完全无外网（DEM/OSM 全超时）** | `references/self-hosted-terrain.md` §10（用 WebFetch 打 Open-Elevation 文本接口取真实 SRTM 样本，本地插值重建 DEM） |
 | 放大看不清、字糊 | `references/pitfalls-terrain.md` §2 |
 | 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3（**间隔按实测线覆盖率自适应**；顺带看那里的**配色**：别用暖橙棕） |
+| **用户说"等高线太粗 / 再细一些"** | `references/pitfalls-terrain.md` §3（首**与**计曲线都取 1 px `CONTOUR_DILATE=(0,0)`，分级交给明度；⚠ 别加密等高距——本区 20 m 已 28.6%，10 m 到 46% 必糊） |
+| **用户说"等高线颜色要和这片地接近"** | `references/pitfalls-terrain.md` §3（**派生色** `_contour_tint()`：同色相 + 降饱和 0.30 + 明度分档；暗处反转成提亮；强制最小明度差） |
 | **"比例尺越大等高线越密、地图难看"**（长线/大窗口） | `references/pitfalls-terrain.md` §3（`pick_contour_interval`：覆盖率 ≤30%，狼塔自动 20→50 m） |
 | **"如何更真实地反映地貌"**（背光侧一片黑、地形发平） | `references/pitfalls-terrain.md` §4（**MDOW 多向晕渲** + 阴阳分色）、`references/self-hosted-terrain.md` §3 |
 | **瓦片等高线太密/太淡，或用户要适配等高距** | `references/tile-basemap.md` §7（抹除+DEM 自绘管线）、§11（100/500 m 攻略适配） |

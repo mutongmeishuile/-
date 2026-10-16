@@ -112,15 +112,29 @@ UNSHARP = (3, 45, 3)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补
 JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 # 等高线线宽（按栅格像素）：3008 分辨率下的 (首,计)。计曲线是首曲线的 2 倍宽 + 更深色。
 # 注意：这里刻意画细 —— 等高距再自适应，陡坡处仍会成排，线一粗就糊成"棕色泥"。
-CONTOUR_DILATE = (0, 1)
+# ⚠ 2026-10-16 希夏邦马：计曲线从 3 px 收到 **1 px**（与首曲线同宽），两者的区分
+#   不再靠"粗细"，改由派生色的明度差承担。理由：这片图 15% 是冰川白雪、山体等高线
+#   成排出现，3 px 的计曲线在雪原上连成"灰带"，把等高线读成了一片色块而不是线。
+CONTOUR_DILATE = (0, 0)
 # 等高线配色 + alpha 融合：硬像素覆盖会留下高反差硬边，alpha 写回才像"印在纸上"。
 # ⚠ 血泪教训（2026-10-10 用户反馈"等高线的颜色也不好看"）：原配色是暖橙棕
 #   (172,155,136)/(139,111,84)，而底图分层设色本身就是"绿→土黄→陶土"的暖色带 ——
 #   暖线画在暖底上，色相差几乎为零，只剩明度差，于是整张图读起来是"发黄的旧报纸"。
 #   → 换成**中性灰棕**：亮度仍分两档（首线浅、计线深）保住层次，
 #     但把橙味抽掉，让等高线读起来是"灰笔线"，把彩度完全让给海拔色带和轨迹。
-C_MINOR, C_MAJOR = (152, 144, 132), (100, 90, 80)
-A_MINOR, A_MAJOR = 0.36, 0.70
+# ⚠ 但中性灰棕也是"全图一条色"（2026-10-16 希夏邦马，用户要求"配色与该区域渲染
+#   颜色接近"）：雪线以上是冷白、谷地是草绿、裸岩是陶土，同一条灰线压在这三种底上
+#   —— 在白雪上显得脏、在草甸上显得跳。**正解是派生色**（CONTOUR_DERIVED=True）：
+#   线色由该像素的底图色算出（同色相 + 降饱和 + 明度分档），线就永远"长在地里"。
+C_MINOR, C_MAJOR = (152, 144, 132), (100, 90, 80)     # 仅 CONTOUR_DERIVED=False 时用
+A_MINOR, A_MAJOR = 0.45, 0.82                          # 派生色的融合度（色相已贴近，可给足）
+# --- 派生色参数（首, 计）---
+CONTOUR_DERIVED   = True      # True = 随底图派生（推荐）；False = 用上面的固定灰棕（旧行为）
+CONTOUR_DARKEN    = (0.74, 0.46)   # 亮底（亮度 ≥ 阈值）处的明度系数：越高压得越狠
+CONTOUR_LIGHTEN   = (16, 38)       # 暗底处的**提亮**量：阴影里的线再压暗就成黑泥，反过来提亮
+CONTOUR_LIGHT_T   = 110.0          # 亮/暗底分界（0–255 亮度）
+CONTOUR_MIN_DELTA = (15, 34)       # 与底图的最小明度差：保证中间调处也读得出线
+CONTOUR_DESAT     = 0.30           # 线色向同明度中性灰靠的比例（彩度让给底图与轨迹）
 # 缓坡"起云"：垂直夸张会把 30 m DEM 的微起伏一起放大，按真实坡度加权渐回平地基准
 FLAT_ANGLE = 2.5
 HS_SMOOTH = 3           # 明暗柔化半径（DEM 像素）——柔和明暗 + 锐利线划 = 纸质地形图质感
@@ -642,13 +656,46 @@ def pick_contour_interval(dem_out, verbose=True):
     return fallback
 
 
+def _contour_tint(base, mode):
+    """由底图颜色**派生**等高线颜色：同色相 + 降饱和 + 明度分档（暗处自动提亮）。
+
+    base : float32 (H, W, 3)  —— 已合成好、尚未画线的底图
+    mode : 0 = 首曲线（浅），1 = 计曲线（深）
+
+    为什么不能给全图一条固定色（2026-10-16 希夏邦马实测）：
+    分层设色把本区铺成了"谷地草绿 → 灌丛黄绿 → 裸岩陶土 → 雪线以上冷白"，
+    一条中性灰棕压上去，在冷白雪原上显得脏、在草甸上显得跳 —— 因为线的色相
+    与所在区域的实际地貌色毫不相干。**线色随底图走，等高线才像"长在这片地上"**。
+
+    明度仍是唯一的分级手段（首浅计深）：
+      * 亮底（亮度 ≥ CONTOUR_LIGHT_T）：乘系数压暗 —— 雪原上压出冷灰蓝，读得出；
+      * 暗底（背光面 / 深谷阴影）：改为**提亮** —— 这里有旧方案的隐藏坑：
+        固定色在阴影里比底图还暗，一排线连起来就是"黑泥"，把晕渲的立体感吃掉；
+      * CONTOUR_MIN_DELTA 兜底：中间调单纯乘法可能只差 5–6 级明度，肉眼读不出，
+        强制拉开到最小差值，保证"处处看得到线"。
+    """
+    lum = base @ np.asarray([0.299, 0.587, 0.114], np.float32)
+    k, add, dmin = (CONTOUR_DARKEN[mode], CONTOUR_LIGHTEN[mode], CONTOUR_MIN_DELTA[mode])
+    bright = lum >= CONTOUR_LIGHT_T
+    tgt = np.where(bright, lum * k, lum + add)
+    tgt = np.where(bright, np.minimum(tgt, lum - dmin), np.maximum(tgt, lum + dmin))
+    tgt = np.clip(tgt, 6.0, 252.0)
+    col = base * (tgt / np.maximum(lum, 1.0))[:, :, None]          # 保住底图色相
+    col = col * (1 - CONTOUR_DESAT) + tgt[:, :, None] * CONTOUR_DESAT   # 彩度让给底图
+    return np.clip(col, 0, 255)
+
+
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
-                   minor=CONTOUR_MINOR, major=CONTOUR_MAJOR):
+                   minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
+                   derived=CONTOUR_DERIVED):
     """在输出分辨率上栅格化等高线并写入 RGB 数组。
 
     原理：band = floor(elev / 间隔)，相邻像素 band 不同即该处有一条等高线。
     全程 numpy 向量化（10^7 像素毫秒级），**不需要 matplotlib / GDAL / skimage**。
     计曲线是首曲线的子集（100 = 5×20），画在上层覆盖。
+
+    derived=True 时线色由底图逐像素派生（见 `_contour_tint`），
+    这是"等高线配色与该区域渲染颜色接近"的实现处。
     """
     b_minor = np.floor(dem_out / minor).astype(np.int32)
     b_major = np.floor(dem_out / major).astype(np.int32)
@@ -656,8 +703,13 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     m_major = _dilate_n(_band_edges(b_major), w_major)
     # alpha 融合写回（rgb 是 uint8，必须过 float，否则整数回绕会把线画成黑块）
     f = rgb.astype(np.float32)
-    for mask, col, a in ((m_minor, C_MINOR, A_MINOR), (m_major, C_MAJOR, A_MAJOR)):
-        f[mask] = f[mask] * (1 - a) + np.asarray(col, np.float32) * a
+    base = f.copy() if derived else None
+    for mask, mode, a in ((m_minor, 0, A_MINOR), (m_major, 1, A_MAJOR)):
+        if derived:
+            col = _contour_tint(base, mode)[mask]
+        else:
+            col = np.asarray(C_MINOR if mode == 0 else C_MAJOR, np.float32)
+        f[mask] = f[mask] * (1 - a) + col * a
     np.copyto(rgb, np.clip(f, 0, 255).astype(np.uint8))
     n_lv = int((dem_out.max() - dem_out.min()) // minor)
     print(f"   等高线 每 {minor:.0f} m（计曲线每 {major:.0f} m），约 {n_lv} 级，"
