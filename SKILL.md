@@ -428,7 +428,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **用户说"等高线太粗 / 再细一些"** | `references/pitfalls-terrain.md` §3（两个旋钮：① 线宽 `CONTOUR_DILATE=(0,0)` 首/计都 1 px，分级交给明度；② **`CFG["contour_target_cov"]` 收窄**（希夏邦马 0.30→0.26 → 20 m 退到 25 m）。⚠ **别去加密等高距**：本区 20 m 已 28.6%、10 m 到 46% 必糊；也**别改全局默认阈值**（狼塔 50 m=29.8% 会被误伤） |
 | **首曲线密到能跟计曲线搞混 / 计曲线间隔不是整数** | `references/pitfalls-terrain.md` §3（`nice_major()`：25 m 首曲线配 **100 m** 计曲线而不是 125 m） |
 | **用户说"标注字太大 / 字与字重叠"** | `references/pitfalls-terrain.md` §13 ①②（字号 ×0.85 落在 13–15.5 px 区间；**留白 `LBL_PAD` 2.0→2.8 才是治重叠的主手段**）；自检看 `· 挤放 N`（§13 ③） |
-| **用户说"去掉冰川层 / 冰川面把地形压平了"** | `references/pitfalls-terrain.md` §12 ①（`DRAW_GLACIER=False`；⚠ 要连带改图例与图注三处，否则自相矛盾） |
+| **用户说"去掉冰川层 / 冰川面把地形压平了"** | `references/pitfalls-terrain.md` §12 ①（**技能默认就不画冰川**；判据＝数有多少冰川末端伸到雪线以下（与雪线白重复就关）。要开按线路写 `CFG["glacier_layer"]=True`，⚠ 连带改图例与图注三处，否则自相矛盾） |
 | **切边扫描报警，但图其实没被裁** | `references/pitfalls-terrain.md` §13 ④（满幅底图边缘天然是地形暗部 → 阈值放宽到 0.40；先确认不是真裁再放宽） |
 | **用户说"等高线颜色要和这片地接近"** | `references/pitfalls-terrain.md` §3（**派生色** `_contour_tint()`：同色相 + 降饱和 0.30 + 明度分档；暗处反转成提亮；强制最小明度差） |
 | **"比例尺越大等高线越密、地图难看"**（长线/大窗口） | `references/pitfalls-terrain.md` §3（`pick_contour_interval`：覆盖率 ≤30%，狼塔自动 20→50 m） |
