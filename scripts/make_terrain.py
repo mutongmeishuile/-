@@ -97,9 +97,14 @@ RASTER_W = LOGICAL_W * SS
 #     小窗口仍得 20 m（保持细节），长窗口自动退到 50/100 m（保持可读）。
 CONTOUR_NICE = (10, 20, 25, 50, 100, 200, 250, 500)   # 候选等高距（米，都是好记的整数）
 CONTOUR_TARGET_COV = 0.30   # 线覆盖率上限。亚丁实测 20 m=21%（保留）；狼塔 50 m=29.8%（比 20 m 的 66% 好太多）
+# ⚠ 该阈值可**按线路覆盖**：`route_def.CFG["contour_target_cov"]`。
+#   2026-10-16 希夏邦马实测：本区 20 m 覆盖率 28.6%（虽在 30% 以内，但山体陡坡处线仍成排、
+#   雪原上偏抢眼），用户要求"再细一些" → 本线把目标收到 **0.26**，自动退到 25 m（23.8%）。
+#   ⚠ 别直接改这个全局默认：狼塔的 50 m 正好是 29.8%，阈值一收到 0.26 会被误判超限、
+#     继续退到 100 m（过疏）——**全局默认要留给"最坏情况仍可读"，收紧只在线路级做**。
 # 下面两个只作**兜底缺省值**（调用方没传间隔时用），实际间隔由 pick_contour_interval() 定。
 CONTOUR_MINOR = 20.0    # 首曲线缺省间隔
-CONTOUR_MAJOR = 100.0   # 计曲线缺省间隔（= 首曲线 × 5）
+CONTOUR_MAJOR = 100.0   # 计曲线缺省间隔（正常由 nice_major() 从首曲线推：20→100 是 ×5，25→100 是 ×4）
 AZ, ALT = 315.0, 45.0   # 主光方向：西北、高度角 45°（制图惯例）
 # 多向晕渲（MDOW，Multi-Directional Oblique Weighting）：单向光会把地貌压成"半边亮半边黑"，
 # 背光侧的冲沟/山脊全部消失。改成四向**加权**叠加 —— 主光仍取西北（符合制图惯例、保住立体感），
@@ -631,6 +636,32 @@ def contour_coverage(dem_out, interval):
     return float(e.mean())
 
 
+def _route_cfg(key, default):
+    """读 route_def.CFG 里的线路级渲染配置（取不到就回退默认，脚本可独立运行）。"""
+    try:
+        import route_def as _RD
+        cfg = getattr(_RD, "CFG", None) or {}
+        v = cfg.get(key)
+        return default if v is None else v
+    except Exception:                                              # noqa
+        return default
+
+
+def nice_major(minor, ratio=5):
+    """由首曲线间隔推**规范的计曲线间隔**：优先 minor×5，退而求其次 ×4、×3。
+
+    为什么不能死守 ×5（2026-10-16 希夏邦马实测）：本区首曲线自适应到 **25 m** 时，
+    25×5 = **125 m** 计曲线不是地形图的规范值（读数要写成"125 的倍数"），
+    而 25×4 = **100 m** 既在 `CONTOUR_NICE` 里、又是 25 的整数倍，
+    高程注记间隔也跟着回到 100 m —— 读者视角就是"每 100 m 一条粗线"，与常用地形图一致。
+    20 m → 100（×5）、25 m → 100（×4）、50 m → 250（×5）、10 m → 50（×5）都落在 NICE 里。
+    """
+    for k in (ratio, ratio - 1, ratio - 2):
+        if k >= 2 and minor * k in CONTOUR_NICE:
+            return minor * k
+    return minor * ratio
+
+
 def pick_contour_interval(dem_out, verbose=True):
     """按窗口自适应选等高距（首曲线, 计曲线, 覆盖率）。
 
@@ -638,21 +669,37 @@ def pick_contour_interval(dem_out, verbose=True):
     等高距**不能写死**。等高线疏密 ≈ 每像素真实高差 / 等高距 —— 窗口一大，
     同样的地表起伏被压进同样多的输出像素，每像素跨过的等高线成倍增加，20 m 间隔
     必然糊成一片棕。判据直接落到可测的「线覆盖率」上：从最细候选往上试，
-    第一个 ≤ CONTOUR_TARGET_COV 的胜出。
+    第一个 ≤ 目标覆盖率的胜出。
     * 小窗口（亚丁 0.19°）：20 m → 21%，保留细节；
     * 长线（狼塔 0.81°）：20 m → 66%（糊），自动退到 50 m → 30%。
-    计曲线恒取首曲线的 5 倍并加粗 —— 这是地形图的通用约定，换任何线路都成立。
+    * 高海拔雪原线（希夏邦马，2026-10-16）：20 m → 28.6% 仍在默认阈值内，
+      但陡坡线成排、雪原上偏抢眼 → 线路级把目标收到 **0.26** → 退到 25 m（23.8%）。
+
+    两级可配置（都在 `route_def.CFG`，只影响本线路，不动全局默认值）：
+      * `contour_target_cov`：本次的覆盖率上限（缺省 `CONTOUR_TARGET_COV`）；
+      * `contour_minor`：直接指定首曲线间隔，跳过自适应（缺省 None = 自适应）。
+    计曲线由 `nice_major()` 取规范值（不一定是 ×5，见该函数注释）。
     """
-    fallback = (CONTOUR_NICE[-1], CONTOUR_NICE[-1] * 5, 1.0)
+    target = float(_route_cfg("contour_target_cov", CONTOUR_TARGET_COV))
+    forced = _route_cfg("contour_minor", None)
+    if forced:
+        iv = float(forced)
+        cov = contour_coverage(dem_out, iv)
+        if verbose:
+            print(f"   等高距由线路指定 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
+                  f"线覆盖 {cov * 100:.1f}%")
+        return iv, nice_major(iv), cov
+    fallback = (CONTOUR_NICE[-1], nice_major(CONTOUR_NICE[-1]), 1.0)
     for iv in CONTOUR_NICE:
         cov = contour_coverage(dem_out, iv)
-        if cov <= CONTOUR_TARGET_COV:
+        if cov <= target:
             if verbose:
-                tag = "（缺省）" if iv == CONTOUR_MINOR else f"（{CONTOUR_MINOR:.0f} m 会糊到 " \
-                    f"{contour_coverage(dem_out, CONTOUR_MINOR) * 100:.0f}%，自动加粗）"
-                print(f"   等高距自适应 → 首曲线 {iv:g} m / 计曲线 {iv * 5:g} m，"
-                      f"线覆盖 {cov * 100:.1f}% ≤ 目标 {CONTOUR_TARGET_COV * 100:.0f}% {tag}")
-            return iv, iv * 5, cov
+                tag = "（缺省）" if iv == CONTOUR_MINOR else \
+                    f"（{CONTOUR_MINOR:.0f} m 覆盖率 " \
+                    f"{contour_coverage(dem_out, CONTOUR_MINOR) * 100:.0f}% 超出目标，自动退到 {iv:g} m）"
+                print(f"   等高距自适应 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
+                      f"线覆盖 {cov * 100:.1f}% ≤ 目标 {target * 100:.0f}% {tag}")
+            return iv, nice_major(iv), cov
     return fallback
 
 
