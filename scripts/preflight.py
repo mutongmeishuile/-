@@ -58,7 +58,7 @@ def main():
     if found:
         ok(f"找到 {found[0]}")
         if "Edge" in found[0]:
-            print("         （Edge 需 --headless=new，Chrome 用 --headless）")
+            print("         （无头模式由 guide_common.browser_shot 自动降级 --headless=new → --headless）")
     else:
         fail += bad("没找到 Chrome/Edge —— 长图渲染无从谈起")
 

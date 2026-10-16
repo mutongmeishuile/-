@@ -377,42 +377,64 @@ class Placer:
 
 
 # ------------------------------------------------------------------ 无头浏览器截图
-# 本机实测：Edge/Chrome 的 `--headless=new --screenshot` 能出图，但**主进程会提前返回
-# rc=0，真正的 PNG 由后台子进程异步写出**；`--dump-dom` 在这一版 Edge 上彻底不输出
-# （重定向到文件也是 0 字节），不能再用来量版式。所以统一改走：
+# 本机实测（2026-10-17）：Edge 升到新版后 `--headless=new --screenshot` **静默失效** ——
+# 进程 rc=0 退出，但**一个字节都不产出**（`--dump-dom` 同样 0 字节）。而旧版 `--headless`
+# 稳定出图。另外若用默认 profile，新进程会**移交给已在运行的 Edge 实例**并立刻返回，
+# 同样不产出截图。因此统一走：
+#   · 每个截图任务用**独立临时 user-data-dir**，避免移交给常驻实例；
 #   · 截图落到文件 → 轮询等文件写出并尺寸稳定（兼容异步写图）；
-#   · 版式尺寸改由像素检测 / 已知几何得到，不再依赖 dump-dom 的 data-m。
+#   · 模式按 `--headless=new` → `--headless` **依次降级**，哪个先出图就用哪个（跨机器/跨版本稳）。
+_BROWSER_MODES = ("--headless=new", "--headless")
+
+
+def _browser_profiles():
+    """给每个截图任务分配独立临时 profile 目录（避免移交给常驻 Edge 实例）。"""
+    import tempfile, shutil
+    d = Path(tempfile.gettempdir()) / f"wbshot_{os.getpid()}_{int(time.time()*1000)%100000}"
+    shutil.rmtree(d, ignore_errors=True)
+    return d
+
+
 def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
     """用无头浏览器把 HTML 截成 PNG（落 out_path），返回 Image 对象。
 
     html_path 必须是绝对路径（file:// 也行）；out_path 用绝对路径，否则某些环境下
     截图落盘位置会跑偏。结束后轮询文件直到尺寸稳定，规避"主进程已返回、子进程还没写完"。
+    模式按 `--headless=new` → `--headless` 降级，规避新版 Edge 静默不出图。
     """
     BROWSER = find_browser()
     out_path = Path(out_path)
-    args = [BROWSER, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-            "--no-sandbox", "--disable-dev-shm-usage",
-            f"--force-device-scale-factor={scale}",
-            f"--window-size={win_w},{win_h}",
-            f"--screenshot={out_path}", Path(html_path).as_uri()]
-    subprocess.run(args, check=True, capture_output=True, timeout=timeout)
-    # 主进程提前返回、子进程异步写盘（本机实测：文件在完成后一次性出现，无渐进写入）。
-    # 0.15s 步进 + 连续 4 次尺寸稳定（≈0.6s 确认窗）比旧版 0.5s×2（1.0s）每张少等 ~0.4s。
-    prev, stable = -1, 0
-    for _ in range(600):                       # 最多等 90s
-        if out_path.exists():
-            sz = out_path.stat().st_size
-            if sz == prev and sz > 0:
-                stable += 1
-                if stable >= 4:
-                    break
-            else:
-                stable = 0
-            prev = sz
-        time.sleep(0.15)
-    if not out_path.exists() or out_path.stat().st_size == 0:
-        raise RuntimeError("浏览器截图未生成（无头浏览器可能未正常出图）")
-    return Image.open(out_path).convert("RGB")
+    prof = _browser_profiles()
+    last_err = None
+    for mode in _BROWSER_MODES:
+        out_path.unlink(missing_ok=True)
+        args = [BROWSER, mode, "--disable-gpu", "--hide-scrollbars",
+                "--no-sandbox", "--disable-dev-shm-usage", "--no-first-run",
+                f"--user-data-dir={prof}",
+                f"--force-device-scale-factor={scale}",
+                f"--window-size={win_w},{win_h}",
+                f"--screenshot={out_path}", Path(html_path).as_uri()]
+        try:
+            subprocess.run(args, check=True, capture_output=True, timeout=timeout)
+        except Exception as e:                 # noqa: BLE001
+            last_err = e
+            continue
+        # 主进程提前返回、子进程异步写盘（本机实测：文件在完成后一次性出现，无渐进写入）。
+        prev, stable = -1, 0
+        for _ in range(600):                   # 最多等 90s
+            if out_path.exists():
+                sz = out_path.stat().st_size
+                if sz == prev and sz > 0:
+                    stable += 1
+                    if stable >= 4:
+                        break
+                else:
+                    stable = 0
+                prev = sz
+            time.sleep(0.15)
+        if out_path.exists() and out_path.stat().st_size > 0:
+            return Image.open(out_path).convert("RGB")
+    raise RuntimeError(f"浏览器截图未生成（试过 {_BROWSER_MODES}；最后一次异常：{last_err}）")
 
 
 def _loopback_ok(port):
@@ -508,21 +530,27 @@ def browser_eval(html_text, js, port=9333, win_w=1200, win_h=2200, timeout=60):
     else:
         src = src + f"<script>{js}{beacon}</script>"
     tmp.write_text(src, encoding="utf-8")
+    prof = _browser_profiles()
     proc = None
     try:
         # 不用 --dump-dom / --screenshot：让浏览器驻留，等信标请求真正到达本地服务后再结束。
-        proc = subprocess.Popen([BROWSER, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-                                "--no-sandbox", "--disable-dev-shm-usage",
-                                f"--force-device-scale-factor=1",
-                                f"--window-size={win_w},{win_h}", tmp.as_uri()],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        thr.join(timeout=timeout)          # 等本地服务收到信标
-        if proc.poll() is None:
-            proc.terminate()              # 浏览器驻留 → 主动结束
-            try:
-                proc.wait(timeout=8)
-            except Exception:
-                proc.kill()
+        # ⚠ 新版 Edge 的 `--headless=new` 可能静默不出图/不执行，故按模式降级重试。
+        for mode in _BROWSER_MODES:
+            proc = subprocess.Popen([BROWSER, mode, "--disable-gpu", "--hide-scrollbars",
+                                    "--no-sandbox", "--disable-dev-shm-usage", "--no-first-run",
+                                    f"--user-data-dir={prof}",
+                                    f"--force-device-scale-factor=1",
+                                    f"--window-size={win_w},{win_h}", tmp.as_uri()],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            thr.join(timeout=timeout)          # 等本地服务收到信标
+            if proc.poll() is None:
+                proc.terminate()              # 浏览器驻留 → 主动结束
+                try:
+                    proc.wait(timeout=8)
+                except Exception:
+                    proc.kill()
+            if box["data"] is not None or box["raw"] is not None:
+                break
     finally:
         if proc is not None and proc.poll() is None:
             proc.kill()

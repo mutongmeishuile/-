@@ -229,10 +229,26 @@ rows = np.where(off.sum(axis=1) > 0.5 * w)[0]
 
 ---
 
-## ⚠ Edge headless `--screenshot` 相对路径静默失败
+## ⚠ Edge headless `--screenshot` 静默失败（两种触发）
 
-`--screenshot=out/x.png` 可能不产出任何文件也不报错。**输出一律用
+**① 相对路径**：`--screenshot=out/x.png` 可能不产出任何文件也不报错。**输出一律用
 `Path(...).resolve()` 绝对路径**；截完立刻断言 `out.exists() and size>0` 再往下游走。
+
+**② `--headless=new` 模式（2026-10-17 实测，更隐蔽）**：Edge 升级后新版 headless
+**进程 rc=0 正常退出，但一个字节都不产出**（`--dump-dom` 同样 0 字节），
+连"相对路径"那条的报错都没有 —— 纯静默。同一台机器旧版 `--headless` 稳定出图。
+
+**③ 默认 profile 移交**：不给 `--user-data-dir` 时，若已有 Edge 常驻（用户开着浏览器），
+新进程会**把任务移交给常驻实例后立刻返回**，同样不产出截图。
+
+**统一修法**（已落进 `guide_common.browser_shot`）：
+1. 每个截图任务分配**独立临时 `--user-data-dir`**（`tempfile` + pid），避免移交；
+2. 模式**降级重试**：`--headless=new` 试完没出图就换 `--headless`，哪个先出图用哪个；
+3. **轮询等文件写出并尺寸稳定**（Edge 主进程会早于子进程返回，`subprocess.run` 的
+   `returncode` 不能作为"出没出图"的判据），最后断言 `exists() and size>0`。
+
+> 报错形态极具误导性：报的是**下游** `FileNotFoundError: ..._map_hi.png`（`Image.open` 处），
+> 真因在上游浏览器。看到"截图莫名不存在"先查模式与 profile，别去查渲染逻辑。
 
 ---
 

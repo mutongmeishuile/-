@@ -56,7 +56,7 @@ python scripts/tile_tint.py --selftest                 # 合成图自检，不�
 ## 环境要求
 
 - Python 3 + `numpy` + `Pillow`
-- 一个无头浏览器用于渲染长图：Edge 或 Chrome（`--headless=new`）
+- 一个无头浏览器用于渲染长图：Edge 或 Chrome（无头模式自动降级 `--headless=new` → `--headless`）
 
 > DEM 瓦片缓存在 `~/.workbuddy/cache/hiking-dem/`（**用户级、跨项目共享**，
 > 用 `HIKING_DEM_CACHE` 可改到别的盘）。瓦片按 z/x/y 命名，天生就是全局唯一的，

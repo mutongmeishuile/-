@@ -178,6 +178,7 @@ python scripts/build_base_map.py    # → out/base_map.jpg + out/base_meta.json
 python scripts/map_svg.py     # 生成 out/preview_map.html（内嵌底图）
 chrome --headless=new --window-size=1140,2900 \
        --screenshot=preview.png file:///.../preview_map.html
+# 若不出图（新版 Edge/Chrome 的 --headless=new 可能静默失效），换 --headless 再试
 # 再用 Pillow 切块看
 ```
 

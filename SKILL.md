@@ -340,7 +340,10 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 
 脚本零线路硬编码：设计宽 / 缩放 / 白名单之外全自动。要点：
 
-- `--headless=new --force-device-scale-factor=2` → 2 倍图，微信里放大看文字仍清晰；
+- `--force-device-scale-factor=2` → 2 倍图，微信里放大看文字仍清晰；
+- ⚠ **无头模式按 `--headless=new` → `--headless` 降级**（新版 Edge 的 `--headless=new`
+  可能静默不出图，rc=0 但零字节；每个任务用独立临时 `--user-data-dir` 防移交常驻实例）——
+  已封装在 `guide_common.browser_shot`，不要自己裸调浏览器；
 - **先量版式、再截一次**：注入 JS 量出 `.page` 的四边与文档总高（只排版不光栅，≈0.5 s），
   据此**恰好**开窗截一次，然后用像素复量断言量到的宽度 == 设计宽 × 倍率。
   旧做法"按窗宽反推裁剪区间"是错的 —— Windows 无头 Chrome 对窗口宽有**最小钳制**：
@@ -348,7 +351,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
   因此落在 x = 35…465，而画布只有 430 → **右侧 35 px 整条被切，每行文字末尾都缺字**，
   且 `body` 与 `.page` 同底色时肉眼看不出是裁，极易误判成"换行不对"。
 - **若量到的下边界顶到窗口底，就是窗高给小了**，必须调大重截，别静默截断；
-- Chrome 不存在时改用 `msedge.exe`（同样支持 `--headless=new`）；都没有则只交付 HTML 并说明。
+- Chrome 不存在时改用 `msedge.exe`（Chrome/Edge 都优先 `--headless=new`，不出图自动降 `--headless`）；都没有则只交付 HTML 并说明。
 
 > **手机阅读怎么办**：直接看 HTML —— 它本身是响应式的（<900px 切单栏），
 > 手机上打开满宽即可读，不需要再出一版窄长图。这也是为什么本技能把手机版长图**从流水线里彻底移除**

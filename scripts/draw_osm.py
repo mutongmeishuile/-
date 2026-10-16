@@ -46,10 +46,15 @@ C_STREAM_SEASON = (152, 192, 222, 200)
 
 # ⚠ 冰川层开关（2026-10-17 希夏邦马：默认 **关闭**）。
 # 要不要这一层，判据是「DEM 雪线白 + 等高线是否已经把冰雪范围说清楚了」：
-#   * 开：冰川面占图幅 15.2%，能把冰舌范围一眼圈出来（登山线有用）；
+#   * 开：冰川面能把冰舌范围一眼圈出来（登山线有用）；
 #     代价是填充会**压掉冰面下的晕渲**——冰瀑、裂隙场是行军信息，被压平就成了白板。
 #   * 关（当前）：冰雪范围交给「雪线以上的积雪白 + 等高线」，冰面起伏完整保留。
-# 想恢复：DRAW_GLACIER = True（图例与图注要同步加回冰川行）。
+# 判据落地成一句可测的话（2026-10-17 贡嘎）：**数一数有多少冰川的末端伸到雪线以下**。
+#   希夏邦马：冰川基本都在雪线以上 → 与雪线白重复 → 关。
+#   贡嘎：93 块冰川里 **71 块（76%）末端伸到雪线以下**（季风海洋型冰川，冰舌大幅下探，
+#         海螺沟冰川末端低到 2980 m）→ 雪线白根本盖不住它们 → **开**。
+# 所以这个开关**按线路配**：route_def.CFG["glacier_layer"] = True（见 _cfg_flag）。
+# ⚠ 开了要同步：图例加一行冰川、图注写明"浅蓝面为冰川（OSM）"。
 DRAW_GLACIER = False
 
 # 注记之间的留白（逻辑像素 × S）。2026-10-17 希夏邦马：字号收 0.85 倍后仍有挤压，
@@ -228,6 +233,20 @@ def _pct(vals, q):
     return vs[lo] + (vs[hi] - vs[lo]) * (pos - lo)
 
 
+def _cfg_flag(key, default=False):
+    """读 route_def.CFG 里的布尔开关（取不到 / 不是布尔就给默认）。
+
+    存在的意义：**按线路切换图层**不该靠改脚本常量 —— 那等于把线路差异写死进技能。
+    （同 _route_cfg，只是那个在 make_terrain 里，且偏数值。）
+    """
+    try:
+        import route_def as _RD
+        v = (getattr(_RD, "CFG", None) or {}).get(key)
+    except Exception:                                              # noqa
+        v = None
+    return default if v is None else bool(v)
+
+
 class Labeller:
     """按优先级占位放注记，重叠就跳过。cell 是占位网格边长（随超采样倍率放大）。"""
 
@@ -338,6 +357,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
       让地名/峰名主动避开等高线数字，避免两种注记叠在同一个点上。
     """
     osm_path = Path(osm_path) if osm_path else (OUT / "osm.json")
+    # 冰川层按线路开关：默认关，route_def.CFG["glacier_layer"]=True 才画（判据见常量注释）
+    draw_glacier = _cfg_flag("glacier_layer", DRAW_GLACIER)
     if not osm_path.exists():
         print(f"   跳过 OSM 叠加（未找到 {osm_path.name}，先跑 fetch_osm.py）")
         return pil
@@ -364,7 +385,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         t = e.get("tags", {})
         if e["type"] == "relation":
             # OSM 冰川常以 relation 打组（多个 outer way 拼一条冰川）
-            if t.get("natural") == "glacier" and DRAW_GLACIER:
+            if t.get("natural") == "glacier" and draw_glacier:
                 return ("glacier", None)
             return None
         if e["type"] != "way":
@@ -380,7 +401,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             return ("water", t["waterway"])
         if t.get("natural") == "water" or t.get("landuse") == "reservoir":
             return ("waterbody", None)
-        if t.get("natural") == "glacier" and DRAW_GLACIER:
+        if t.get("natural") == "glacier" and draw_glacier:
             return ("glacier", None)
         if t.get("natural") == "wood" or t.get("landuse") == "forest":
             return ("wood", None)
@@ -580,7 +601,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 冰川名：菱形冰符号 + 深冰蓝粗体 + 白描边。冰川面上只标最大的几条
     # （本区 382 条冰川里只有 18 条有名字），注记里不带高程 —— 冰川看的是范围与末端。
     n_glacier_lb = 0
-    if DRAW_GLACIER:
+    if draw_glacier:
         glaciers.sort(key=lambda g: g[3], reverse=True)
         for x, y, name, _a in glaciers:
             if name in skip_names:
@@ -637,7 +658,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
              if q_hi is not None else f"[样本<{PEAK_TIER_MIN_N}，未分级]")
     if verbose:
         extra = f" · 抑制重名 {n_skip}" if n_skip else ""
-        gl = f" · 冰川面 {n_glacier} · 冰川名 {n_glacier_lb}/{len(glaciers)}" if DRAW_GLACIER \
+        gl = f" · 冰川面 {n_glacier} · 冰川名 {n_glacier_lb}/{len(glaciers)}" if draw_glacier \
             else " · 冰川层 关"
         # ⚠ 挤放数（n_overlap）是"有没有重叠"的**唯一可测指标**：
         #   落位率高不代表排得好（可能全是挤出来的），必须看这个数。
