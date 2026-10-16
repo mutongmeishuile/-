@@ -26,6 +26,12 @@ agent_created: true
 > **只出一种长图（宽屏 ~2340）**。手机阅读直接看 HTML —— 它本身就是响应式的（<900px 切单栏）。
 > 本技能**不再生成手机版长图**（用户明确要求），旧版那条 `860 宽` 的产物与 `--split long=desk,phone`
 > 用法都已废弃，别再照抄。
+>
+> **两条默认（不写就是不生成）**：
+> 1. **手机版长图：不生成** —— 只出宽屏版（`shoot_guide.py` 单产物；`make_all.py` 无 phone 步骤）。
+>    响应式换行由 HTML 的 `@media(max-width:900px)` 负责，`qa_guide.py` 的 `600` 视口只做**审计探针**，不是产物。
+> 2. **冰川图层：不加载** —— `draw_osm.DRAW_GLACIER=False`，且 `route_def.CFG` 不写 `glacier_layer` 即为关。
+>    要开必须按线路显式写 `CFG["glacier_layer"]=True`（判据见 `references/pitfalls-terrain.md` §12 ①）。
 
 **画完之后还有五件事最容易翻车**（都别等用户来提）：步道**色相**要和等高线错开、主线路线宽与点位符号要成比例、**图例样本必须由出图参数生成**、**文字灰阶要过 4.5:1**、**地图「三件套」（图例 / 指北针 / 比例尺）必须缩小并动态避让，不许压住轨迹**。
 见 `references/legend-and-color.md` 与 `references/pitfalls-map-svg.md` §9。
