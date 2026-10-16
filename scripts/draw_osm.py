@@ -220,6 +220,22 @@ class Labeller:
 
 
 # ------------------------------------------------------------------ 主流程
+def _clean_name(s):
+    """OSM 名里常混藏文/天城文等 PIL 字体画不出的字符（会渲染成豆腐块□□□）。
+    只保留 CJK / 拉丁 / 数字 / 常见标点；整名都在可渲染集之外的直接弃用。
+    必须在收集阶段就清洗，skip_names 匹配与出图才会用同一套名字。"""
+    if not s:
+        return ""
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF) or (0xF900 <= o <= 0xFAFF) \
+           or ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ch.isdigit() \
+           or ch in " ·-—–()（）.°'’&,+/~":
+            out.append(ch)
+    return "".join(out).strip(" ·-")
+
+
 def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                  px_scale=1.0, proj_scale=None, seed_cells=None, verbose=True):
     """把 OSM 要素叠到 pil 上。
@@ -377,6 +393,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     # 山峰：▲ + 名 + 高程
     n_peak = n_skip = 0
+    peaks = [(x, y, _clean_name(n), e) for x, y, n, e in peaks]
+    places = [(k, x, y, _clean_name(n)) for k, x, y, n in places]
+    waters = [(x, y, _clean_name(n)) for x, y, n in waters]
+    pois = [(x, y, _clean_name(n), k) for x, y, n, k in pois]
     for x, y, name, ele in peaks:
         if not name or name in skip_names:
             n_skip += 1 if name else 0

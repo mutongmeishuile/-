@@ -406,6 +406,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
 | **山顶出现"没有等高线的平板/米色斑"（色带被截平 / 真峰顶被当空洞填掉）** | `references/pitfalls-terrain.md` §8（**判据必须单边偏低**，`abs()` 会把峰顶填平）+ §8b（色带取 p99.7 并把雪色端延到最高点） |
 | **底图的地名/山峰名/湖泊名/水系名看不见、或几乎全丢** | `references/pitfalls-terrain.md` §11（字号按"缩图后"定 + Labeller 三级兜底 + 补湖名水系名 + 禁标网格别多乘 ss） |
+| **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |
 | **>2 天线路整条被画成一种颜色（图例却是彩色的）** | `references/pitfalls-map-svg.md` §10（按 `day_bounds` + `days` 颜色画 N 段） |
 | **图例里找不到图上的符号 / 图例占地过大** | `references/pitfalls-map-svg.md` §11（只列用到的 kind + 两列网格 + 复用 `mk_pin` 出样本） |
 | **比例尺/家具显得"贴了张白标签"、色条戳出底衬** | `references/pitfalls-map-svg.md` §12（**色条长度不参与 FURN 缩放**，底衬=色条+内衬） |
