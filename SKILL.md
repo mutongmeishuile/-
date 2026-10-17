@@ -413,6 +413,9 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **`prep_track.py` 报 `FileNotFoundError: '线路.kml'`，但文件明明在当前目录** | 已修（`prep_track.py` 末尾 `kml.resolve()`）。子进程以 `cwd=scripts/` 跑，相对路径会指错地方；传绝对路径也能绕开 |
 | **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
+| **图上一整块区域完全没有起伏、只剩等高线（不是水体却是一个色）** | `references/pitfalls-terrain.md` **§8a / §8a-2**（先量 `fill_voids` 前后 `diff>0.5` 的像素占比，>0.5% 就要警惕：§8a = 「低于参考面 900 m」在几百 km 窗口的误判；§8a-2 = 「`dem < med−2500` 坏瓦片兜底」把高海拔窗口的低谷整片抹平） |
+| **多线路总览图上，自己的注记盖住了底图的 OSM 峰名/地名（或峰名之间叠成一团）** | `references/pitfalls-terrain.md` **§15**（把 `Labeller._mark` 的占位框落盘给上层当禁标区；峰名按 12 km 间距贪心去重，别用高程阈值） |
+| **区域/多线总览图（≥1°，几百 km）整片谷地变成没有起伏的平板、山体只剩一条"海岸线"** | `references/pitfalls-terrain.md` **§8a**（`VOID_MAD=900 m` 只适用于小窗口；大窗口 25% 真地形被当空洞填掉 → 只填 NaN + 负值夹 0） |
 | **山顶出现"没有等高线的平板/米色斑"（色带被截平 / 真峰顶被当空洞填掉）** | `references/pitfalls-terrain.md` §8（**判据必须单边偏低**，`abs()` 会把峰顶填平）+ §8b（色带取 p99.7 并把雪色端延到最高点） |
 | **底图的地名/山峰名/湖泊名/水系名看不见、或几乎全丢** | `references/pitfalls-terrain.md` §11（字号按"缩图后"定 + Labeller 三级兜底 + 补湖名水系名 + 禁标网格别多乘 ss） |
 | **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |

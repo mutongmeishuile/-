@@ -379,7 +379,12 @@ def fill_voids(dem):
     ref = np.asarray(im.resize((max(1, im.width // k), max(1, im.height // k)), Image.BOX)
                      .resize(im.size, Image.BICUBIC), np.float32)
     bad = (ref - dem) > VOID_MAD                  # 单边：只认"远低于参考面"
-    bad |= ~np.isfinite(dem) | (dem < med - 2500)  # 坏瓦片兜底
+    # ⚠ 2026-10-17 尼泊尔四线（EBC / KBC）实测：原式 `dem < med - 2500` 在**高海拔窗口会翻车**。
+    #   昆布窗口高程中位 4837 m → 阈值 2337 m，于是 1800–2337 m 的整条 Dudh Koshi 河谷
+    #   被判成坏瓦片（288,915 px = 1.58%），再被调和插值抹成一块没有起伏的死平绿面。
+    #   "坏瓦片"的真正表现是 NaN / 负高程，正常河谷（> 0 m）绝不能被牵连 ——
+    #   → 绝对下限改成"负高程"。详见 references/pitfalls-terrain.md §8a。
+    bad |= ~np.isfinite(dem) | (dem < 0)
     if not bad.any():
         print(f"   空洞判据：仅认「低于局部参考面 > {VOID_MAD:.0f} m」"
               f"（p1={p1:.0f} p99={p99:.0f}）→ 无空洞，跳过填充")
