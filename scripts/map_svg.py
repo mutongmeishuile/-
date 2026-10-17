@@ -162,7 +162,15 @@ def _legend_rows():
     for d in _CFG.get("days", []):
         rows.append((d.get("color", D1_C), d.get("tag", "D"), d.get("legend", ""),
                      d.get("dist_label", ""), 3.8, ""))
-    if _CFG.get("extra_legend_desc"):
+    # 附加行：CFG["legend_extra"] 列表优先（冰川面 / 雪线 / 步道可并存），
+    # 缺省退回旧的单行 extra_legend_* 键。
+    extra = _CFG.get("legend_extra")
+    if extra:
+        for it in extra:
+            rows.append((it.get("color", "#8C8C86"), it.get("tag", ""),
+                         it.get("desc", ""), it.get("dist_label", ""),
+                         it.get("width", 1.5), it.get("dash", ' stroke-dasharray="8 5"')))
+    elif _CFG.get("extra_legend_desc"):
         rows.append((_CFG.get("extra_legend_color", "#8C8A86"),
                      _CFG.get("extra_legend_tag", "步道"),
                      _CFG["extra_legend_desc"], "", 1.5, ' stroke-dasharray="8 5"'))
