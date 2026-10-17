@@ -494,7 +494,8 @@ if __name__ == "__main__":
     print(f"分界 @ {r['km'][r['split1']]:.2f} km")
     print(f"海拔 {ELE_MIN} ~ {ELE_MAX} m   爬升 {ASC} / 下降 {DESC}")
     print(f"POIS {len(POIS)} · MARKS {len(MARKS)} · SCHEDULE {len(SCHEDULE)}")
-    miss = [k for k in ("file_stem", "title", "sub", "days", "day_cards", "notes", "src")
+    # src 默认就是空列表（不显示溯源块），不算必填
+    miss = [k for k in ("file_stem", "title", "sub", "days", "day_cards", "notes")
             if not CFG.get(k)]
     print("CFG 必填项缺失：", miss or "无 ✓")
     print(f"待办还剩 {_todo_count()} 处 —— 交付前请清零")

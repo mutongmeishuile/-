@@ -454,6 +454,17 @@ _RAMP_ALPINE = [(0.00, (150, 172, 140)),   # 谷底灰绿
                 (0.78, (218, 199, 164)),   # 亚高山草甸
                 (0.90, (216, 186, 162)),   # 流石滩
                 (1.00, (210, 176, 158))]   # 山顶裸岩陶土
+# 沙漠 / 干旱区专用色带（`route_def.CFG["terrain_palette"] = "desert"` 时启用）。
+# ⚠ 为什么必须单独一套：沙漠线路海拔 1000–1400 m、高差不足 100 m，套 _RAMP_ALPINE
+#   会把整片沙丘涂成"谷底灰绿 → 中山草甸绿"——用户一眼就看出"这不是沙漠"。
+#   沙漠只有沙色与盐碱白两族：湖盆/盐壳最浅，沙丘随高程加深，立体感交给晕渲。
+#   参考 references/china-terrain.md §2「沙漠（沙丘）#EAD9A0」。
+_RAMP_DESERT = [(0.00, (236, 231, 219)),   # 湖盆 / 盐碱地：浅灰白
+                (0.14, (238, 227, 190)),   # 沙丘间低地：淡沙黄
+                (0.38, (232, 212, 160)),   # 沙丘主体：米黄  ≈ #EAD9A0
+                (0.64, (224, 198, 138)),   # 沙丘中上部：暖沙
+                (0.84, (214, 184, 120)),   # 沙丘脊线：深沙
+                (1.00, (204, 172, 108))]   # 最高的沙丘脊：沙棕
 SNOWLINE = 4300.0       # 本区最高点达到此高程，色带才启用雪色端
 RAMP_MIN_SPAN = 150.0   # 全域高差小于此值（平地/丘陵线路）就按中心值 ±75 m 展开，避免拉出假色阶
 
@@ -477,8 +488,13 @@ def ramp_stops(dem, verbose=True):
     if hi - lo < RAMP_MIN_SPAN:
         c = (lo + hi) / 2.0
         lo, hi = c - RAMP_MIN_SPAN / 2.0, c + RAMP_MIN_SPAN / 2.0
-    ramp = _RAMP_SNOW if hi >= SNOWLINE else _RAMP_ALPINE
-    kind = "含雪色端" if ramp is _RAMP_SNOW else "无雪·顶端=裸岩陶土"
+    palette = str(_route_cfg("terrain_palette", "") or "").strip().lower()
+    if palette == "desert":
+        ramp = _RAMP_DESERT
+        kind = "沙漠专用（沙丘米黄 / 盐碱灰白，无绿）"
+    else:
+        ramp = _RAMP_SNOW if hi >= SNOWLINE else _RAMP_ALPINE
+        kind = "含雪色端" if ramp is _RAMP_SNOW else "无雪·顶端=裸岩陶土"
     stops = []
     for f, col in ramp:
         if f <= TOP_F or dmax <= hi:
@@ -1374,13 +1390,16 @@ def build_terrain():
     LOGICAL_H = round(dh * scale_logical)
     RASTER_H = round(dh * scale_raster)
 
-    print(f"[2/6] 晕渲（GDAL Horn，多向 MDOW 主光 西北 315°/45°，z_factor {Z_FACTOR}）…")
-    hs = hillshade(dem, meta["z"], lat_c)
+    zf = float(_route_cfg("z_factor", Z_FACTOR))
+    print(f"[2/6] 晕渲（GDAL Horn，多向 MDOW 主光 西北 315°/45°，z_factor {zf:g}）…")
+    hs = hillshade(dem, meta["z"], lat_c, zf=zf)
 
     print("[3/6] 分层设色 + 合成 …")
     snow_m = _snowline_from_cfg()
-    if _route_cfg("snowline_m", None) is None:
+    if (_route_cfg("snowline_m", None) is None
+            and str(_route_cfg("terrain_palette", "") or "").strip().lower() != "desert"):
         # 不配就用残留默认值：高度大概率是错的，而图上会一本正经地画出这条线。
+        # 沙漠线路本来就没有雪线，不刷这条警告（否则每条沙线都报一次假警）。
         print(f"   ⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 {snow_m:.0f} m —— "
               f"换线路必须按山脉查表重设（references/china-terrain.md §4）；"
               f"若本线最高峰远低于雪线，删掉这个键更合适")
