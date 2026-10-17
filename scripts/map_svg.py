@@ -386,14 +386,19 @@ def build_map_overlay(mobile=False):
                  f'stroke-width="{ROUTE_W}" stroke-linecap="round" stroke-linejoin="round"/>')
 
     # 每 5 km 里程点
+    # ⚠ 三位数（105 km 等）在固定 r=7.4 的圆里必然溢出 → 用户看到「105 挤在圈里」。
+    #   按位数自适应：三位数加大半径 + 略缩字号，保证文字完整落在圆内。
     for target in range(5, int(TOTAL_KM) + 1, 5):
         i = min(range(len(KM)), key=lambda j: abs(KM[j] - target))
         x, y = XY[i]
-        rr = 7.4 * (MFS_S if mobile else 1.0)
+        z = MFS_S if mobile else 1.0
+        nd = len(str(target))
+        rr = (7.4 if nd <= 2 else 9.8) * z
+        fs = (10.0 if nd <= 2 else 8.8) * z
         o.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{rr:.1f}" fill="#FFFFFF" '
                  f'stroke="#3A4250" stroke-width="{2*M:.1f}"/>'
-                 f'<text x="{x:.1f}" y="{y+4.2*M:.1f}" text-anchor="middle" '
-                 f'font-size="{10*(MFS_S if mobile else 1.0):.0f}" font-weight="800" '
+                 f'<text x="{x:.1f}" y="{y+fs*0.38:.1f}" text-anchor="middle" '
+                 f'font-size="{fs:.1f}" font-weight="800" '
                  f'fill="#3A4250">{target}</text>')
 
     # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
