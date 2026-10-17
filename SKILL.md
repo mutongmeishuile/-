@@ -454,6 +454,8 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **Edge 截图不出文件** | `references/pitfalls-layout.md` 末节（--screenshot 需绝对路径） |
 | 整张图发闷发脏、平原起云、林地硬边 | `references/pitfalls-terrain.md` §4 |
 | **雪线怎么着色、用户要求"配色偏白"** | `references/pitfalls-terrain.md` §5 |
+| **雪线以上「又是白的又是绿的」（白绿相间断层）** | `references/pitfalls-terrain.md` §5b（`belt_stops` 的植被锚点是**绝对高程**，雪线一低就窜到雪线以上；判据＝任一锚点 > 雪线就按比例收编。**改前先跑逐米新旧色差对比确认零回归** —— 希夏邦马 6000 / 念青东 5000 本来就没这问题，别顺手改） |
+| **切边扫描对满幅地图报警，但轨迹明明没被裁** | `references/pitfalls-terrain.md` §5c（深绿林区 + 晕渲会把最低档森林深绿压到亮度 120 以下，top 冲到 44%。**别抬阈值**，走 `qa_guide` 的 `track_inside()` 轨迹完整性判据；改完必须做反向验证——裁一半的图要能被判失败） |
 | **用户问"多少米有雪线"（天山以外的山脉）** | `references/pitfalls-terrain.md` §6 + **`references/china-terrain.md` §4**（全国山脉雪线/林线表） |
 | **图上写的雪线米数 ≠ `CFG["snowline_m"]`** | `references/pitfalls-terrain.md` §6（四个键要一起配：`snowline_m` / `_label` / `_note` / `_src`；只改高度不改文案是**静默错误**） |
 | **中国区线路底图配色（沙漠/戈壁/草原/森林/盐湖怎么上色）** | **`references/china-terrain.md`** §2–3 |
@@ -550,6 +552,11 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 - [ ] **雪线四个键口径一致**：`snowline_m` / `snowline_label` / `snowline_note` / `snowline_src`
       要么全配要么全删；日志出现「⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 6000 m」
       **必须处理**（查表重设，或低海拔线路直接删掉雪线）
+- [ ] **雪线以上只有积雪白，不夹绿块**：取 DEM ≥ 雪线的像素算「绿度 = G−(R+B)/2 > 15」占比，
+      应 ≈0（等高线/JPEG 噪点级别）。出现成片绿 → `belt_stops` 的植被锚点窜到雪线以上了，
+      见 `references/pitfalls-terrain.md` §5b
+- [ ] **切边扫描超阈值时先判轨迹完整性**，别抬阈值：满幅地图看 `qa_guide` 打印的四边余量
+      （全 ≥0 = 没裁）；只有出现负余量才是真裁切（§5c）
 - [ ] **峰名分级是相对的**：`OSM 叠加` 日志里有 `[p88≥Xm/p62≥Ym]`，X/Y 要符合本线海拔量级
       （1900 m 级的线路若打出 7000 m，说明阈值被写死成绝对米数了）
 - [ ] **地形"有立体感、背光侧仍有结构"**：不是半边发白半边死黑（那是单向晕渲的锅，

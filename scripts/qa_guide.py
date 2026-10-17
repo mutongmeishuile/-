@@ -2,8 +2,11 @@
 """交付前自检（通用版）：① 切边扫描 ② 版式审计+对比度（轮廓截图）③ 三件套是否压轨迹。
 
 ① 切边：正常成图最外 2 px 应是底色；边缘出现大量深色像素 = 被裁。
-   注意：**满幅的图片型产物（高清地图）边缘天然可能压到深色地形**，阈值要单独放宽，
-   真正的判据是 1:1 目视裁切（人手确认一次即可），别拿数字当唯一证据。
+   注意：**满幅的图片型产物（高清地图）边缘天然可能压到深色地形**，阈值要单独放宽。
+   对满幅底图（`IMGS` 里 `full_bleed=True`）真正的判据是 **`track_inside()`：轨迹是否
+   完整落在画布内** —— 深色占比只作粗略提示，超了但轨迹在内就不算问题
+   （北天山 3800 m 雪线 + 深绿林区线路实测 top 冲到 44%，轨迹四边余量 104–3682 px）。
+   ⚠ 别用"继续抬阈值"来消警：那是把真裁切一起盖掉。有留白的产物（长图）仍用 0.02。
 ② 版式审计 + 对比度：本机沙箱禁回环监听（127.0.0.1 连不通），`--dump-dom` 也无输出，
    所以**不再用 DOM 取回数据**，改成「把问题元素用彩色轮廓画进页面 + 顶部固定汇总条，再截图」。
    多模态模型直接看截图即可定位（红=对比度不足 橙=越界 品红=被裁 黄=字号过小）。
@@ -27,16 +30,20 @@ CFG = getattr(RD, "CFG", {})
 STEM = CFG.get("file_stem", "线路")
 BROWSER = GC.find_browser()
 
-# (文件名, 期望宽, 边缘深色占比阈值)
+# (文件名, 期望宽, 边缘深色占比阈值, 是否满幅底图)
 # ⚠ 全线地图 0.30 → **0.40**（2026-10-17 希夏邦马）：这条是**满幅地形图**（底图铺满画幅、
 #   没有留白边框），边缘 2 px 天然压在地形上；判据 `亮度 < 120` 会把背光坡、深谷、
 #   等高线数字一起算成"深色"。实测把冰川层（近白填充 alpha 150，等于给雪区提亮）关掉后，
 #   bottom 由 22.6% 升到 33.0%、left 由 21.4% 升到 28.0% —— **不是内容被裁**
 #   （尺寸仍为底图 3008×4904、轨迹未溢出），而是那层提亮没了、地形暗部露出来。
 #   → 对满幅底图类产物，切边只能靠**尺寸与轨迹完整性**判断，深色占比只作粗略提示。
+# ⚠⚠ 2026-10-17 北天山中线：最低档「山地森林深绿」(104,124,96)（亮度 ≈115 < 120）
+#   叠加晕渲后整片露在边缘，top 冲到 **44%** 越过 0.40 —— 同样不是裁切（轨迹四边余量
+#   104–3682 px）。0.40 这个数对深绿林区线路本来就不够，**别再往上抬阈值**
+#   （那是把真问题盖掉），改成 `full_bleed=True` 走「轨迹完整性」这条真判据。
 IMGS = [
-    (f"{STEM}-攻略长图.png", None, 0.02),
-    (f"{STEM}-全线地图.jpg", None, 0.40),
+    (f"{STEM}-攻略长图.png", None, 0.02, False),
+    (f"{STEM}-全线地图.jpg", None, 0.40, True),
 ]
 
 # QA 审计的两种取回方式都不依赖回环监听（本机沙箱禁 127.0.0.1，信标/CDP 都走不通）：
@@ -105,21 +112,64 @@ AUDIT_JS = r"""
 """
 
 
-def edge_scan(path, want_w=None, thr=0.02):
+def track_inside(img_path):
+    """满幅底图的**真裁切判据**：轨迹是否完整落在画布内（带余量）。
+
+    为什么需要它：满幅地形图铺满画幅、没有留白边框，`edge_scan` 的「亮度 < 120」
+    会把背光坡、深谷、等高线数字一起算成深色 —— 北天山实测把最低档「山地森林深绿」
+    (104,124,96)（亮度 ≈115）叠加晕渲后露在边缘，top 冲到 44%，**但内容一点没裁**
+    （轨迹四边余量 104–3682 px）。深色占比对这类产物只是粗略提示，
+    真正的判据是尺寸 + 轨迹完整性（见下面 IMGS 的注释）。
+    返回 (ok, 说明)；拿不到 track_full.json / base_meta.json 时返回 (None, 原因)。
+    """
+    tf, meta_p = HERE / "out" / "track_full.json", HERE / "out" / "base_meta.json"
+    if not (tf.exists() and meta_p.exists()):
+        return None, "缺 out/track_full.json 或 base_meta.json，跳过"
+    try:
+        meta = json.loads(meta_p.read_text(encoding="utf-8"))
+        pts = json.loads(tf.read_text(encoding="utf-8"))["pts"]
+        P = GC.projector_of(meta)
+        iw, ih = Image.open(img_path).size
+        xy = np.array([P(p[0], p[1]) for p in pts], dtype=float)
+        m = [xy[:, 0].min(), iw - xy[:, 0].max(), xy[:, 1].min(), ih - xy[:, 1].max()]
+        names = ["左", "右", "上", "下"]
+        ok = all(v >= 0 for v in m)
+        return ok, "四边余量 " + " / ".join(f"{n} {v:.0f} px" for n, v in zip(names, m))
+    except Exception as e:                                     # noqa: BLE001
+        return None, f"投影核对失败：{e}"
+
+
+def edge_scan(path, want_w=None, thr=0.02, full_bleed=False):
     im = Image.open(path).convert("RGB")
     w, h = im.size
     a = np.asarray(im).astype(np.float32)
     lum = a @ (0.299, 0.587, 0.114)
     ok, msgs = True, []
+    tripped = []
     for name, band in {"left": lum[:, :2], "right": lum[:, -2:],
                        "top": lum[:2, :], "bottom": lum[-2:, :]}.items():
         frac = float((band < 120).mean())
         flag = frac > thr
-        ok &= not flag
-        msgs.append(f"{name} {frac*100:.2f}%{'' if not flag else '  <-- 疑似切边'}")
+        if flag:
+            tripped.append(name)
+        msgs.append(f"{name} {frac*100:.2f}%{'' if not flag else '  <-- 超阈值'}")
     wok = "" if want_w is None or w == want_w else f"  宽 ✗（期望 {want_w}）"
     ok &= (want_w is None or w == want_w)
     print(f"  {path.name:34s} {w}×{h}{wok}  " + " | ".join(msgs))
+    if not tripped:
+        return ok
+    # 超阈值了。满幅底图：判据是轨迹完整性，深色占比只作提示（见 IMGS 注释）。
+    if full_bleed:
+        tok, why = track_inside(path)
+        if tok is True:
+            print(f"     · 满幅底图：{why} → **轨迹完整在内，不是裁切**；"
+                  f"深色来自地形暗部（森林深绿叠加晕渲），按既定口径只作提示")
+            return ok                      # 不计入失败
+        if tok is False:
+            print(f"     · ✗ 轨迹不在画布内（{why}）→ 这是真裁切，窗口/投影要查")
+            return False
+        print(f"     · ⚠ {why} → 无法自动判定，按保守口径仍计为异常，请 1:1 目视确认无裁切")
+        return False
     return ok
 
 
@@ -162,12 +212,12 @@ def todo_guard():
 if __name__ == "__main__":
     print("① 切边扫描（最外 2 px 深色占比）")
     allok = True
-    for name, w, thr in IMGS:
+    for name, w, thr, fb in IMGS:
         p = GC.ROOT / name
         if not p.exists():
             print(f"  [..]  缺 {name}（跳过）")
             continue
-        allok &= edge_scan(p, w, thr)
+        allok &= edge_scan(p, w, thr, full_bleed=fb)
     print("② 版式审计 + 对比度（彩色轮廓截图，桌面版必须 0 问题）")
     # 桌面版高度从长图反推（长图 = 版心 × scale2），手机版用同高（只改视口宽度看换行/溢出）
     long_png = GC.ROOT / f"{STEM}-攻略长图.png"
