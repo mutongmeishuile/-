@@ -34,9 +34,13 @@ BBOX = f"{LAT0},{LON0},{LAT1},{LON1}"
 
 UA = "hiking-route-guide/1.0 (offline guide map; contact: local user)"
 
-# 抓什么：路网 + 步道 + 水系 + 水体 + 林地 + 地名 + 山峰 + 冰川
+# 抓什么：路网 + 步道 + 水系 + 水体 + 林地 + 地名 + 山峰 + 冰川 + 哑口
 # 冰川（natural=glacier）单独要——希夏邦马这一带冰川是地图主角，
 # 且冰川面配「雪线 + 退缩速率」注释，数据来自联网检索（见 route_def.py 头部）。
+# natural=saddle（哑口/垭口）2026-10-17 念青东补：非登山区（念青东、横断山腹地）
+# OSM 的 natural=peak 常常**一个都没有**，saddle 是那一带唯一稳的山口标注来源，
+# 也是"图上一个山名都没有"时少数还能挖出东西的标签。
+# place=locality 同时补上（原 place 正则里没有，小地名会被整类漏掉）。
 QUERY = f"""
 [out:json][timeout:180];
 (
@@ -49,8 +53,9 @@ QUERY = f"""
   way["landuse"="meadow"]({BBOX});
   way["natural"="glacier"]({BBOX});
   relation["natural"="glacier"]({BBOX});
-  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood)$"]({BBOX});
+  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood|locality)$"]({BBOX});
   node["natural"="peak"]({BBOX});
+  node["natural"="saddle"]({BBOX});
   node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({BBOX});
   node["amenity"="place_of_worship"]({BBOX});
 );

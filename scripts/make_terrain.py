@@ -1418,6 +1418,11 @@ def build_terrain():
             for d in GC.pois_of(_RD):
                 skip.add(d["name"])
                 skip.add(d["name"].split("·")[0].strip())
+            # 2026-10-17 念青东：音译差异会让同一个山/村在 OSM 与本线 POI 下各画一遍
+            # （OSM「巴拉拉垭口」vs 攻略「巴巴拉垭口」）。route_def 可配 OSM_SKIP
+            # 显式抑制 OSM 那一条 —— 全串精确匹配拦不住音译，只能手工列。
+            for _s in (getattr(_RD, "OSM_SKIP", []) or []):
+                skip.add(str(_s).strip())
         except Exception:                                          # noqa
             skip = set()
         pil = draw_overlay(pil, m, OUT / "osm.json", skip_names=skip,

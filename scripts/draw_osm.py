@@ -487,7 +487,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     f_poi = _font(F(11.5))
     f_water = _font(F(11.5), True)
 
-    peaks, places, pois, waters = [], [], [], []
+    peaks, places, pois, waters, saddles = [], [], [], [], []
     for e in els:
         if e["type"] != "node":
             continue
@@ -500,7 +500,16 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         if t.get("natural") == "peak":
             peaks.append((x, y, t.get("name", ""), t.get("ele", "")))
+        elif t.get("natural") == "saddle":
+            # 哑口 / 垭口（2026-10-17 念青东补）。OSM 用 natural=saddle，
+            # 也常带 mountain_pass=yes。高原线路的垭口是**关键地理标识**，
+            # 而 peak 在非登山区（念青东/横断山腹地）常常一个都没有 ——
+            # saddle 是那一带唯一稳的山口标注来源。
+            # ⚠ 与攻略自己的垭口 POI 同名时由 skip_names 去重，不会画两遍。
+            saddles.append((x, y, t.get("name", ""), t.get("ele", "")))
         elif "place" in t:
+            # place=locality（小地名）也走这支：prio 里没有 locality 会排到最后，
+            # 用 f_ham 画，无需单独分支。
             places.append((t["place"], x, y, t.get("name", "")))
         elif t.get("natural") == "water":
             waters.append((x, y, t.get("name", "")))
@@ -563,6 +572,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     n_peak = n_skip = 0
     peaks = [(x, y, _clean_name(n), e) for x, y, n, e in peaks]
+    saddles = [(x, y, _clean_name(n), e) for x, y, n, e in saddles]
     places = [(k, x, y, _clean_name(n)) for k, x, y, n in places]
     waters = [(x, y, _clean_name(n)) for x, y, n in waters]
     pois = [(x, y, _clean_name(n), k) for x, y, n, k in pois]
@@ -612,6 +622,22 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if lab.place(d, name, (x, y + 7 * S), f_water, C_GLACIER_LB, anchor_center=False,
                          stroke_w=2.1 * S, pad=LBL_PAD * S):
                 n_glacier_lb += 1
+
+    # 哑口 / 垭口：倒三角 ▽ + 名 + ele，用 warn 橙（与峰名的 ▲ 明确区分）。
+    # 画在峰名之后、地名之前 —— 垭口是"线路必经点"，重要性高于一般地名。
+    # 字号用 f_water（11.5px 加粗）而不是 peaks 循环里的 f_peak_use：
+    # 后者是循环内变量，且念青东这类 peak=1 的窗口压根不进分级逻辑。
+    n_saddle = 0
+    for x, y, name, ele in saddles:
+        if not name or name in skip_names:
+            continue
+        r = 4.2 * S
+        d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
+                  fill=(255, 244, 232), outline=(176, 96, 32))
+        txt = f"{name} {ele}m" if ele else name
+        if lab.place(d, txt, (x, y + 7 * S), f_water, (150, 78, 24), anchor_center=False,
+                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=True):
+            n_saddle += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
     places.sort(key=lambda p: prio.get(p[0], 9))
@@ -665,6 +691,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   2026-10-17 希夏邦马：字号 ×0.85 + 留白 2→2.8 后由 挤放 N 降到 M。
         print(f"   OSM 叠加：面 {n_poly} · 线 {n_line}{gl} · "
               f"山峰名 {n_peak}/{len(peaks)}" + _tier + " · "
+              f"哑口名 {n_saddle}/{len(saddles)} · "
               f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
               f"兴趣点 {n_poi}/{len(pois)} · 挤放 {lab.n_overlap}{extra}")

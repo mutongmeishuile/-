@@ -228,8 +228,9 @@ errs.append(abs(float(dem[int(y/sy), int(x/sx)]) - lv))
   way["waterway"~"^(river|stream|canal|drain)$"]({{bbox}});
   way["natural"="water"]({{bbox}});      way["landuse"="reservoir"]({{bbox}});
   way["natural"="wood"]({{bbox}});       way["landuse"="forest|meadow"]({{bbox}});
-  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood)$"]({{bbox}});
+  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood|locality)$"]({{bbox}});
   node["natural"="peak"]({{bbox}});
+  node["natural"="saddle"]({{bbox}});   # 哑口/垭口：非登山区 peak 常为 0，saddle 是唯一稳的山口来源
   node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({{bbox}});
   node["amenity"="place_of_worship"]({{bbox}});
 );
@@ -250,6 +251,7 @@ out geom;
 | **道路** | 先画深色**描边**（宽 +2 px）再画浅色芯线 —— 这是纸质地形图的标准画法，道路立刻"浮"起来 |
 | **步道** | 棕点线（`_dashed()` 自己按弧长切，PIL 没有虚线）。**故意与"攻略主线"的实线在视觉上区分开** |
 | **山峰** | ▲ 三角 + `名 + ele` 双行小字 |
+| **哑口 / 垭口** | ▽ 倒三角 + `名 + ele`，warn 橙（与 ▲ 区分）。非登山区 peak 常为 0，哑口往往是图上唯一的山名来源 |
 | **注记** | `Labeller` 类：14 px 网格占位，重叠就**跳过**。宁可少标不可糊成一片；按 city>town>suburb>village>hamlet 优先级排序后逐个尝试 |
 
 - **投影必须复用同一套**：`make_projector(z, tx0, ty0, box, scale)`，

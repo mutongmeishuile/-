@@ -416,6 +416,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **山顶出现"没有等高线的平板/米色斑"（色带被截平 / 真峰顶被当空洞填掉）** | `references/pitfalls-terrain.md` §8（**判据必须单边偏低**，`abs()` 会把峰顶填平）+ §8b（色带取 p99.7 并把雪色端延到最高点） |
 | **底图的地名/山峰名/湖泊名/水系名看不见、或几乎全丢** | `references/pitfalls-terrain.md` §11（字号按"缩图后"定 + Labeller 三级兜底 + 补湖名水系名 + 禁标网格别多乘 ss） |
 | **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |
+| **两条线的图"地名/山峰名差很多"，先怀疑技能没同步** | `references/pitfalls-terrain.md` §14。**先 `out count` 比 bbox + 比 `osm.json` 命名元素数**，多半是 OSM 数据源稀疏（非登山区 peak 常为 0），不是脚本；诊断查询**别用 overpass.osm.ch**（它没有亚洲数据，会返回假的 0） |
 | **冰川看不出范围 / 冰舌和雪原糊成一片** | `references/pitfalls-terrain.md` §12 ①（边界**绝不能画近白**，要冰蓝；填充透明度 ≤150 保住冰面晕渲） |
 | **峰名太多糊死山体，或"主峰没名、无名矮峰有名"** | `references/pitfalls-terrain.md` §12 ②（按 ele 降序 + 分三级；阈值用**本窗口分位数** `PEAK_TIER_PCT=(88,62)`，低档走 `fallback=False`） |
 | **换到新线路后主峰不突出 / 所有峰名都是小字** | `references/pitfalls-terrain.md` §12 ②（分级阈值写死过绝对米数就会这样，**必须相对**；样本 <8 自动免分级） |
