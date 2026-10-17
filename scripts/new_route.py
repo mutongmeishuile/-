@@ -253,30 +253,11 @@ def suggest_split(total_km, pois, n_days):
 
 
 def build_src(kml_name, stem, full_n, real_n, split_notes):
-    """自动写「数据说明」—— 这几段里全是能算出来的事实，不该让人抄。
+    """默认不生成「数据说明」和「底图与轨迹来源」块。
 
-    注意：这里双写花括号（`{{TOTAL_KM}}`）是为了在**生成的文件**里留下
-    `{TOTAL_KM}` —— 那是 route_def 自己的 f-string，在生成时不该被展开。
+    如需显示，把下面 return 改成三引号里的 src 列表（可参考 route_def.py.bak）。
     """
-    split_txt = "、".join(f"{km} km（{why}）" for km, why in split_notes) or "无"
-    return f'''    "src": [
-        ("数据说明", [
-            f"<span class='k'>轨迹</span>：{_q(kml_name)}，原始 {full_n} 点 → 简化 {real_n} 点，WGS84。"
-            f"里程为原始点串 haversine 累计 <b>{{TOTAL_KM}} km</b>；海拔经 11 点滑动平均，"
-            f"累计升降按 3 m 阈值滤噪，得 <b>+{{ASC}} / −{{DESC}} m</b>。",
-            "<span class='k'>海拔口径</span>：曲线用轨迹 GPS 实测（系统性偏低 20–50 m）；"
-            "印出来的海拔用 DEM 高程，与公开资料一致。",
-            f"<span class='k'>分日</span>：{split_txt}。",
-        ]),
-        ("底图与轨迹来源", [
-            "<span class='k'>底图</span>：本地自渲染 —— 地形 DEM（Terrarium / SRTM-Copernicus，"
-            "AWS Open Data，z15）晕渲 + 等高线，叠加 OpenStreetMap 矢量"
-            "（© OpenStreetMap contributors，ODbL）。非在线瓦片服务，无速率限制与版权风险。",
-            "<span class='k'>轨迹</span>：用户提供实走记录，非拟合走向。",
-            "<span class='k'>声明</span>：本图<b>不可作为导航使用</b>。导航请用本目录下的 "
-            f"<b>{_q(stem)}.gpx</b>。所有数值以现场为准。",
-        ]),
-    ],'''
+    return '    "src": [],   # 默认不显示「数据说明」和「底图与轨迹来源」块'
 
 
 # 生成的骨架。@@TOKEN@@ 由 gen() 用 .replace 填 —— 比 f-string 模板可读，

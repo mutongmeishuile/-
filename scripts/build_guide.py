@@ -13,6 +13,7 @@
     python build_guide.py            # 出 <stem>-攻略.html
 需要先跑：prep_kml_track.py（出 track_real.json / profile_real.json）→ make_terrain.py
 """
+import bisect
 import json
 import re
 
@@ -337,13 +338,88 @@ def _legend_html():
                    f'<span>{k}</span></div>' for c, t, d, k in rows)
 
 
+# ---- 累计升降（与 prep_kml_track 同口径：11 点平滑 + 3 m 阈值）----
+_CUM_KM = _CUM_ASC = _CUM_DESC = None
+
+
+def _load_cum():
+    """从 track_full.json 建前缀累计升降表（只读一次）。"""
+    global _CUM_KM, _CUM_ASC, _CUM_DESC
+    if _CUM_KM is not None:
+        return
+    try:
+        d = json.loads((GC.OUT / "track_full.json").read_text(encoding="utf-8"))
+        pts, cum = d["pts"], d["cum_m"]
+    except Exception:                                          # noqa
+        _CUM_KM, _CUM_ASC, _CUM_DESC = [], [], []
+        return
+    ele = [p[2] for p in pts]
+    n = len(ele)
+    # 11 点滑动平均（前缀和 O(n)）
+    pref = [0.0] * (n + 1)
+    for i, v in enumerate(ele):
+        pref[i + 1] = pref[i] + v
+    sm = [0.0] * n
+    for i in range(n):
+        a, b = max(0, i - 5), min(n, i + 6)
+        sm[i] = (pref[b] - pref[a]) / (b - a)
+    asc = [0.0] * n
+    desc = [0.0] * n
+    prev = sm[0]
+    ua = ud = 0.0
+    for i in range(1, n):
+        dd = sm[i] - prev
+        if abs(dd) >= 3.0:
+            if dd > 0:
+                ua += dd
+            else:
+                ud -= dd
+            prev = sm[i]
+        asc[i] = ua
+        desc[i] = ud
+    _CUM_KM = [c / 1000.0 for c in cum]
+    _CUM_ASC, _CUM_DESC = asc, desc
+
+
+def _cum_at(km):
+    _load_cum()
+    if not _CUM_KM:
+        return 0, 0
+    i = bisect.bisect_left(_CUM_KM, km)
+    i = min(i, len(_CUM_KM) - 1)
+    return int(round(_CUM_ASC[i])), int(round(_CUM_DESC[i]))
+
+
+def _parse_hhmm(s):
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})", str(s or ""))
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+
+def _fmt_dur(mins):
+    if mins is None:
+        return "—"
+    h, m = divmod(int(mins), 60)
+    return f"{h}h{m:02d}m" if h else f"{m}min"
+
+
 def schedule_rows():
     bounds = CFG.get("day_bounds", [KM[SPLIT_I]])
     out = []
+    prev_min = None
     for name, km, ele, t, note in RD.SCHEDULE:
         cls = ' class="d2"' if any(km > b for b in bounds) else ''
+        a, d = _cum_at(km)
+        cur = _parse_hhmm(t)
+        dur = "—"
+        if cur is not None and prev_min is not None:
+            delta = cur - prev_min
+            dur = "过夜" if delta < 0 else _fmt_dur(delta)
+        if cur is not None:
+            prev_min = cur
         out.append(f'<tr{cls}><td class="n">{name}</td><td class="num">{km:.2f}</td>'
-                   f'<td class="num">{int(round(ele))}</td><td class="num">{t}</td>'
+                   f'<td class="num">{int(round(ele))}</td>'
+                   f'<td class="num">+{a}</td><td class="num">{d}</td>'
+                   f'<td class="num">{t}</td><td class="num">{dur}</td>'
                    f'<td>{note}</td></tr>')
     return "".join(out)
 
@@ -361,7 +437,7 @@ def _src_html():
     for title, paras in CFG.get("src", []):
         ps = "".join(f"<p>{p}</p>" for p in paras)
         cols.append(f"<div><h3>{title}</h3>{ps}</div>")
-    return f'<div class="src">{"".join(cols)}</div>'
+    return f'<div class="src">{"".join(cols)}</div>' if cols else ""
 
 
 def build_html():
@@ -372,6 +448,8 @@ def build_html():
     prof_d = profile_svg(fs=1.0, mobile=False)
     prof_p = profile_svg(fs=2.4, mobile=True)
     days_html = "".join(day_card(*c) for c in CFG.get("day_cards", []))
+    src_html = _src_html()
+    src_section = f'<section class="panel">{src_html}</section>' if src_html else ''
     return c1 + c2, f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -415,8 +493,10 @@ def build_html():
     <div class="ph" style="margin-bottom:12px"><h2>关键点时间表</h2>
       <span class="tagn">{CFG.get("sched_tag", "时刻取自轨迹时间戳")}</span></div>
     <table class="tsc">
-      <colgroup><col style="width:22%"><col style="width:11%"><col style="width:11%"><col style="width:12%"><col></colgroup>
-      <thead><tr><th>点位</th><th>里程 km</th><th>海拔 m</th><th>时刻</th><th>说明</th></tr></thead>
+      <colgroup><col style="width:17%"><col style="width:8%"><col style="width:8%">
+        <col style="width:9%"><col style="width:9%"><col style="width:8%"><col style="width:9%"><col></colgroup>
+      <thead><tr><th>点位</th><th>里程 km</th><th>海拔 m</th>
+        <th>累计↑ m</th><th>累计↓ m</th><th>时刻</th><th>用时</th><th>说明</th></tr></thead>
       <tbody>{schedule_rows()}</tbody>
     </table>
   </section>
@@ -427,9 +507,7 @@ def build_html():
     <div class="ngrid">{_notes_html()}</div>
   </section>
 
-  <section class="panel">
-    {_src_html()}
-  </section>
+  {src_section}
 
   <div class="foot">{CFG.get("foot", "")}</div>
 </div>
