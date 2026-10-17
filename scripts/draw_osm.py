@@ -383,12 +383,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     def bucket(e):
         t = e.get("tags", {})
-        if e["type"] == "relation":
-            # OSM 冰川常以 relation 打组（多个 outer way 拼一条冰川）
-            if t.get("natural") == "glacier" and draw_glacier:
-                return ("glacier", None)
-            return None
-        if e["type"] != "way":
+        # way / relation 共用同一套标签判定；node 不参与面/线要素（node 的峰/地名/水体
+        # 在下方注记段单独处理）。relation 常为 multipolygon（大湖、冰川、林地），
+        # 绝不能整类跳过 —— 否则 relation 水体/冰川会在 bucket 阶段被直接丢弃，
+        # 地图把湖画成平地（2026-10-17 年宝玉则仙女湖踩坑）。
+        if e["type"] == "node":
             return None
         if "highway" in t:
             h = t["highway"]
@@ -421,6 +420,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if b[0] == "glacier":
             for ring in _rings_of(e, proj, size):
                 drawable.append((order["glacier"], "glacier", None, ring, e))
+            continue
+        # 面状要素（林地/草地/水体）统一走 _rings_of —— way 直接成环，
+        # relation（multipolygon，如 OSM 大湖）取 outer member 环。
+        # 否则 relation 水体没有顶层 geometry，_pts_of 返回 None 会被整片漏掉
+        # （2026-10-17 年宝玉则仙女湖踩坑）。
+        if b[0] in ("wood", "meadow", "waterbody"):
+            for ring in _rings_of(e, proj, size):
+                drawable.append((order[b[0]], b[0], b[1], ring, e))
             continue
         pts = _pts_of(e, proj, size)
         if pts:
@@ -518,17 +525,23 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         elif t.get("amenity") == "place_of_worship":
             pois.append((x, y, t.get("name", ""), "temple"))
 
-    # 湖泊（面）与河流（线）的名字：锚点取要素顶点的重心，再交给 Labeller 动态避让
+    # 湖泊（面）与河流（线）的名字：锚点取要素顶点/最大环的重心，再交给 Labeller 动态避让
     for e in els:
         t = e.get("tags", {})
         nm = t.get("name")
-        if e["type"] != "way" or not nm:
+        if not nm:
             continue
         is_lake = t.get("natural") == "water" or t.get("landuse") == "reservoir"
         is_river = bool(t.get("waterway"))
         if not (is_lake or is_river):
             continue
-        pts = _pts_of(e, proj, size)
+        # 河流（线）用 _pts_of；湖泊/水库（面，可能是 way 或 relation）用 _rings_of
+        # 取面积最大的环当锚点 —— 否则 relation 大湖（无顶层 geometry）取不到名字。
+        if is_river:
+            pts = _pts_of(e, proj, size)
+        else:
+            rings = _rings_of(e, proj, size)
+            pts = max(rings, key=lambda r: abs(_ring_area(r))) if rings else None
         if not pts:
             continue
         cx = sum(p[0] for p in pts) / len(pts)

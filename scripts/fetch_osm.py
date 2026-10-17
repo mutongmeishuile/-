@@ -41,6 +41,9 @@ UA = "hiking-route-guide/1.0 (offline guide map; contact: local user)"
 # OSM 的 natural=peak 常常**一个都没有**，saddle 是那一带唯一稳的山口标注来源，
 # 也是"图上一个山名都没有"时少数还能挖出东西的标签。
 # place=locality 同时补上（原 place 正则里没有，小地名会被整类漏掉）。
+# 水体（natural=water / landuse=reservoir）**way 与 relation 都要**：
+# OSM 上许多大湖/水库是 multipolygon relation（如年宝玉则仙女湖 relation 4491548），
+# 只抓 way 会整片漏掉 —— 2026-10-17 年宝玉则实测踩坑（地图把湖画成平地）。
 QUERY = f"""
 [out:json][timeout:180];
 (
@@ -48,6 +51,8 @@ QUERY = f"""
   way["waterway"~"^(river|stream|canal|drain)$"]({BBOX});
   way["natural"="water"]({BBOX});
   way["landuse"="reservoir"]({BBOX});
+  relation["natural"="water"]({BBOX});
+  relation["landuse"="reservoir"]({BBOX});
   way["natural"="wood"]({BBOX});
   way["landuse"="forest"]({BBOX});
   way["landuse"="meadow"]({BBOX});
@@ -131,6 +136,7 @@ def summarize(d):
             kind["水:" + t["waterway"]] += 1
         elif t.get("natural") == "water" or t.get("landuse") == "reservoir":
             kind["水体"] += 1
+            names.append(("水体", t.get("name", "(无名)"), ""))
         elif t.get("natural") == "wood" or t.get("landuse") == "forest":
             kind["林地"] += 1
         elif t.get("landuse") == "meadow":

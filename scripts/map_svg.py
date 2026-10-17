@@ -62,6 +62,49 @@ def d_of(pts):
     return "M " + " L ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in pts)
 
 
+# ---- 地图朝向：默认「一页宽、长度不限」----
+# 若线路长轴明显是横向 (E-W)，旋转 90° 让长轴转竖直、缩放填满页宽；纵向 (N-S) 线路保持正上不变。
+# 指北针随真实北向旋转（见下方 compass 绘制）。PHI=0 时本段为恒等变换（与旧版逐字节一致）。
+def _rot_pt(x, y, deg, cx, cy):
+    a = math.radians(deg)
+    dx, dy = x - cx, y - cy
+    return (cx + dx * math.cos(a) - dy * math.sin(a),
+            cy + dx * math.sin(a) + dy * math.cos(a))
+
+
+def _track_aspect():
+    lons = [p[0] for p in RD.TRACK]
+    lats = [p[1] for p in RD.TRACK]
+    midlat = (min(lats) + max(lats)) / 2
+    wm = (max(lons) - min(lons)) * 111320 * math.cos(math.radians(midlat))
+    hm = (max(lats) - min(lats)) * 110540
+    return wm, hm
+
+
+_WM, _HM = _track_aspect()
+PHI = 0
+if _WM > _HM * 1.15:                # 明显横向 → 旋转 90° 使长轴竖直
+    cx, cy = IW / 2, IH / 2
+    sx0, sy0 = P(*RD.TRACK[0])       # 让「起点」落在画布顶部
+    best_y = None
+    for _cand in (90, -90):
+        _, y = _rot_pt(sx0, sy0, _cand, cx, cy)
+        if best_y is None or y < best_y:
+            PHI, best_y = _cand, y
+
+
+def _upright_text(svg, phi):
+    """旋转地图后，把地理标注文字反向旋转回正立（仅 phi≠0 时生效）。"""
+    if phi == 0 or not svg:
+        return svg
+    import re
+    def _w(m):
+        x, y = m.group(1), m.group(2)
+        return f'<g transform="rotate({-phi:.2f} {x} {y})"><text x="{x}" y="{y}"'
+    svg = re.sub(r'<text x="([\d.]+)" y="([\d.]+)"', _w, svg)
+    return svg.replace('</text>', '</text></g>')
+
+
 # ---------------------------------------------------------------- 标注避让（动态定位）
 def _layout(x, y, dx, dy, anc, w, fs, commit=True):
     """给标注找一个位置，返回 (tx, ty, anchor, box, overlap_area)。
