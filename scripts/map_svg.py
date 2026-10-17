@@ -33,6 +33,8 @@ FURN_LG = 0.55        # 图例：566 基准宽 → 311（面积 ≈ 0.30）
 FURN_CP = 0.58        # 指北针：半径 42 → 24
 FURN_SB = 0.62        # 比例尺：只作用于字与内衬，**不作用于色条长度**（见 §12）
 
+_LG_S = FURN_LG       # 图例**实际**缩放（build_map_overlay 按高度预算/重试动态设定）
+
 EMBED_MAX = 1600      # 网页内嵌底图上限；高清地图用 embed_max=0
 PS_BASE = 0.85        # 点位符号／标注基准缩放
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
@@ -60,51 +62,68 @@ def d_of(pts):
     return "M " + " L ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in pts)
 
 
-# ---------------------------------------------------------------- 标注避让（三级降级）
-def _layout(x, y, dx, dy, anc, w, fs):
-    h = fs * 1.6
-    cand = [o * h for o in (0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6)]
-    if anc == "middle":
-        hplans = [(0, "middle"), (w / 2 + 34, "start"), (-w / 2 - 34, "end")]
-    elif dx >= 0:
-        hplans = [(dx, "start"), (-abs(dx) - 6, "end")]
-    else:
-        hplans = [(dx, "end"), (abs(dx) + 6, "start")]
+# ---------------------------------------------------------------- 标注避让（动态定位）
+def _layout(x, y, dx, dy, anc, w, fs, commit=True):
+    """给标注找一个位置，返回 (tx, ty, anchor, box, overlap_area)。
 
-    def boxof(hdx, hanc, ody):
-        tx, ty = x + hdx, y + dy + ody
-        x0, x1 = ((tx, tx + w) if hanc == "start" else
-                  (tx - w, tx) if hanc == "end" else (tx - w / 2, tx + w / 2))
+    `area == 0` = 完全不压任何已占用矩形（完美落位）；`> 0` = 压到的面积（px²）。
+    **纯函数**（除 commit 外无副作用）：调用方（build_map_overlay 的字号阶梯）
+    需要反复试探不同字号，若每次试探都往 _OCC 里登记，落选的方案会把后来的
+    标注全部挤走——2026-10-17 北天山中线实测踩过这个坑。
+
+    位置候选（"动态合理"）：
+      ① route_def 里配置的 (dx, dy, anchor) 永远排最前 —— 作者意图优先；
+      ② 其后是 8 方向 × 4 档半径的搜索，锚向随所在侧自动选（右侧 start /
+         左侧 end / 正上下 middle），半径以行高 h 为单位，最多外扩 ~2.8h。
+    ⚠ 旧实现只沿纵向往复试 0/±1h/±2h…：标注一多（本线 26 个）就互相压。
+    """
+    h = fs * 1.6
+    plans = [(dx, dy, anc)]
+    if anc == "middle":
+        plans += [(w / 2 + 34, dy, "start"), (-w / 2 - 34, dy, "end")]
+    for r in (0.7 * h, 1.4 * h, 2.1 * h, 2.8 * h):
+        for sx, sy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)):
+            a = "start" if sx > 0 else ("end" if sx < 0 else "middle")
+            plans.append((sx * r, sy * r + (h * 0.5 if sy else 0.0), a))
+
+    def boxof(ox, oy, a):
+        tx, ty = x + ox, y + oy
+        x0, x1 = ((tx, tx + w) if a == "start" else
+                  (tx - w, tx) if a == "end" else (tx - w / 2, tx + w / 2))
         return tx, ty, (x0, ty - h / 2, x1, ty + h / 2)
 
     def dist(box):
         return max(max(box[0] - x, 0, x - box[2]), max(box[1] - y, 0, y - box[3]))
 
     free, loose = None, None
-    for hdx, hanc in hplans:
-        for ody in cand:
-            tx, ty, box = boxof(hdx, hanc, ody)
-            x0, y0, x1, y1 = box
-            if x0 < _PAD or x1 > IW - _PAD or y0 < _PAD or y1 > IH - _PAD:
-                continue
-            area = sum(GC.rect_overlap_area(box, o) for o in _OCC)
-            key = (round(dist(box)), round(abs(ody)))
-            if area == 0:
-                if free is None or key < free[0]:
-                    free = (key, tx, ty, hanc, box)
-            elif loose is None or (area, *key) < loose[0]:
-                loose = ((area, *key), tx, ty, hanc, box)
+    for ox, oy, a in plans:
+        tx, ty, box = boxof(ox, oy, a)
+        x0, y0, x1, y1 = box
+        if x0 < _PAD or x1 > IW - _PAD or y0 < _PAD or y1 > IH - _PAD:
+            continue
+        area = sum(GC.rect_overlap_area(box, o) for o in _OCC)
+        if area == 0:
+            # 完美落位里也排个序：配置位 > 离点位近 > 离配置位近
+            key = (0 if (ox, oy, a) == (dx, dy, anc) else 1, round(dist(box)),
+                   round((ox - dx) ** 2 + (oy - dy) ** 2))
+            if free is None or key < free[0]:
+                free = (key, tx, ty, a, box, 0.0)
+        elif loose is None or (area, round(dist(box))) < loose[0]:
+            loose = ((area, round(dist(box))), tx, ty, a, box, area)
     best = free or loose
     if best is not None:
-        _, tx, ty, hanc, box = best
-        _OCC.append(box)
-        _LABELS.append(box)
-        return round(tx, 1), round(ty, 1), hanc, box
+        _, tx, ty, a, box, area = best
+        if commit:
+            _OCC.append(box)
+            _LABELS.append(box)
+        return round(tx, 1), round(ty, 1), a, box, area
+    # 一个候选都放不下（图太小）：退回配置位置，强行落位
     tx = min(max(x + dx, _PAD + w if dx >= 0 else _PAD), IW - _PAD)
     ty = min(max(y + dy, _PAD), IH - _PAD)
     box = (tx - w, ty - h / 2, tx + w, ty + h / 2)
-    _LABELS.append(box)
-    return round(tx, 1), round(ty, 1), anc, box
+    if commit:
+        _LABELS.append(box)
+    return round(tx, 1), round(ty, 1), anc, box, 1e18
 
 
 # ---------------------------------------------------------------- 点位符号
@@ -182,7 +201,7 @@ def _legend_rows():
 # → 不再只画分日线段，把起点/终点/营地/水源/垭口/高峰的图形样本也摆进去，
 #   但用两列网格 + 缩小系数控制面积。名称可用 CFG["legend_kind_names"] 覆盖。
 _KIND_ORDER = ["start", "end", "camp", "water", "warn", "peak_hi", "peak", "temple"]
-# ---- 图例排版常量（单位 = 1×FURN_LG，`_legend_size()` 与渲染代码共用）----
+# ---- 图例排版常量（单位 = 1×图例缩放 `_LG_S`，`_legend_size()` 与渲染代码共用）----
 LG_TITLE = 30         # 卡片顶 → 标题基线
 LG_ROW0 = 60          # 卡片顶 → 第一个分日行的基线
 LG_PITCH = 38         # 分日行行距
@@ -226,14 +245,33 @@ def _legend_symbols():
     return [(k, names.get(k, k)) for k in used]
 
 
-def _legend_size():
+def _legend_scale(map_h):
+    """图例缩放系数：默认 FURN_LG，超出「图高 42%」预算时收缩，下限 0.34。
+
+    ⚠ 2026-10-17 北天山中线：9 个日程行 + 6 类符号 → 图例基准高约 560 px，
+    固定 0.55 时高达 308 px，在 2240 px 宽的图上还算能放，但日程更多的线
+    （10+ 天）会顶到边、甚至被 placer 判为放不下而**整块丢弃**。
+    这里按可用高度预算动态缩，宽高与内部排版全部走同一个系数（_LG_S），
+    缩的是"整套"，不会出现字号和行距各缩一半的走形。
+    """
+    g = _legend_geom()
+    need = g["h"] * FURN_LG
+    budget = max(180.0, map_h * 0.42)
+    if need <= budget:
+        return FURN_LG
+    return max(0.34, FURN_LG * budget / need)
+
+
+def _legend_size(scale=None):
     """图例尺寸。⚠ 与渲染共用 `_legend_geom()` 的几何，避免"尺寸公式"和"实际排版"各走一套
     （曾经出现脚注压住最后一行符号 —— 卡片太矮，而自检看不出来）。"""
+    global _LG_S
+    _LG_S = FURN_LG if scale is None else float(scale)
     g = _legend_geom()
     if g["tail"] < LG_MIN_TAIL:                       # 开发期护栏：宁可吵，不要悄悄压字
-        print(f"   ⚠ 图例几何异常：脚注与末行间距仅 {g['tail'] * FURN_LG:.1f} px"
-              f"（应 ≥ {LG_MIN_TAIL * FURN_LG:.1f}）—— 调大 LG_BOT")
-    return (round(566 * FURN_LG), round(g["h"] * FURN_LG))
+        print(f"   ⚠ 图例几何异常：脚注与末行间距仅 {g['tail'] * _LG_S:.1f} px"
+              f"（应 ≥ {LG_MIN_TAIL * _LG_S:.1f}）—— 调大 LG_BOT")
+    return (round(566 * _LG_S), round(g["h"] * _LG_S))
 
 
 def _nice_bar_km(m_per_px, iw, target_frac=0.16):
@@ -331,8 +369,10 @@ def build_map_overlay(mobile=False):
         _OCC.append((px - _PIN_R, py - _PIN_R, px + _PIN_R, py + _PIN_R))
 
     lg_rows = _legend_rows()
-    LG_W, LG_H = _legend_size()
     lg_pad = round(12 * M)
+    # 图例动态缩小：先按图高预算算一档，放不下再逐档收缩重试（2026-10-17）
+    _lg_scale = _legend_scale(IH)
+    LG_W, LG_H = _legend_size(_lg_scale)
     # ⚠ 比例尺：色条长度**绝不能被 FURN_* 缩放**（否则"1 km"就不等于 1 km 了）。
     #   而且底衬框必须比色条宽（含内衬），否则色条会戳出框外 ——
     #   2026-10-09 实测就是"白底方框比色条窄、色条压在底图花纹上"，用户一眼看出不协调。
@@ -353,14 +393,23 @@ def build_map_overlay(mobile=False):
 
     placed = {}
     if not mobile:                              # 手机版地图过小，图例改为页内文字图例
-        got = placer.place(LG_W + 2 * lg_pad, LG_H + 2 * lg_pad,
-                           prefer=("tl", "tr", "br", "bl", "ml", "mr", "tc", "bc"))
-        if got:
-            # place() 返回 (x, y, rect)；家具占位登记的是 rect（含内衬那一圈）
-            _lg_rect = (got[0] + lg_pad, got[1] + lg_pad, got[0] + lg_pad + LG_W,
-                        got[1] + lg_pad + LG_H)
-            _OCC.append(got[2])
-            placed["lg"] = got
+        # ⚠ 图例放不下时**缩到能放下为止**，不要直接丢弃（旧行为：一次失败就整块没了，
+        #   用户看到"图例呢？"）。逐档收缩重试，_legend_size() 会同步刷新 _LG_S，
+        #   渲染代码读同一个 _LG_S，尺寸与排版永远不会打架。
+        for _mult in (1.0, 0.86, 0.74, 0.62, 0.5):
+            LG_W, LG_H = _legend_size(_lg_scale * _mult)
+            got = placer.place(LG_W + 2 * lg_pad, LG_H + 2 * lg_pad,
+                               prefer=("tl", "tr", "br", "bl", "ml", "mr", "tc", "bc"))
+            if got:
+                # place() 返回 (x, y, rect)；家具占位登记的是 rect（含内衬那一圈）
+                _lg_rect = (got[0] + lg_pad, got[1] + lg_pad, got[0] + lg_pad + LG_W,
+                            got[1] + lg_pad + LG_H)
+                _OCC.append(got[2])
+                placed["lg"] = got
+                if _mult < 1.0:
+                    print(f"   图例按 {_lg_scale * _mult:.2f} 缩放放置"
+                          f"（日程 {len(lg_rows)} 行 + 符号 {len(_legend_symbols())} 类）")
+                break
     got = placer.place(SB_W, SB_H, prefer=("bl", "br", "tl", "tr", "bc", "tc", "ml", "mr"))
     if got:
         _sb_rect = got[2]
@@ -373,7 +422,15 @@ def build_map_overlay(mobile=False):
     for d in POIS:
         o.append(mk_pin(*P(d["lon"], d["lat"]), d["kind"]))
 
-    # ---- 标注：越挤越先摆 ----
+    # ---- 标注：越挤越先摆；字号动态收缩 + 位置动态避让 ----
+    # ⚠ 2026-10-17 北天山中线（26 个标注、143 km 长线）实测：固定字号 + 只试纵向偏移时，
+    #   后摆的标注必然压先摆的。改成两级动态：
+    #   ① **字号阶梯**：从基准字号逐档缩小（1.0 → 0.6），取第一个能"零重叠"落位的档；
+    #      全都放不下时用重叠面积最小的那档（并偏向大字号）。
+    #   ② **位置搜索**：见 _layout() 的 8 方向 × 4 档半径，配置的 dx/dy 仍排首选。
+    #   灰线指引（pin → label）保留：位置外扩后没有它就读不出标注指向哪。
+    FS_LADDER = (1.0, 0.92, 0.84, 0.76, 0.68, 0.6)
+
     def _crowd(i):
         px, py = pin_xy[i]
         return min(((px - pin_xy[j][0]) ** 2 + (py - pin_xy[j][1]) ** 2) ** 0.5
@@ -384,18 +441,31 @@ def build_map_overlay(mobile=False):
         name, ele, k = d["name"], d["ele"], d["kind"]
         dx, dy, anc = d["dx"], d["dy"], d["anchor"]
         x, y = pin_xy[i]
-        # 点位字号也一并收小（用户反馈「文字再小一点儿」），描边同步收窄
-        fs = (23 if k in ("start", "end") else 21) * PS
+        base = (23 if k in ("start", "end") else 21) * PS
         col = D1_T if k == "peak_hi" else (D2_T if k in ("start", "end") else INK)
         if mobile:
-            nm = getattr(RD, "SHORT", {}).get(name, name)
-            txt, t = nm, nm
+            txt = getattr(RD, "SHORT", {}).get(name, name)
         else:
             txt = f"{name} {RD.fmt_ele(ele)} m"
+        best = None
+        for sc in FS_LADDER:
+            fs = base * sc
+            w = GC.text_w(txt, fs) + 26 * M
+            r = _layout(x, y, dx * M, dy * M, anc, w, fs * 0.86, commit=False)
+            # 优先零重叠；都不零重叠时取面积最小、并列取字号大
+            if best is None or r[4] < best[4] - 1e-6 or \
+               (abs(r[4] - best[4]) <= 1e-6 and sc > best[5]):
+                best = r + (sc,)
+            if r[4] == 0:
+                break
+        tx, ty, ta, box, area, sc = best
+        fs = base * sc
+        t = txt
+        if not mobile:
             t = (f'{name}<tspan font-size="{fs*0.78:.1f}" font-weight="700" fill="#5F6875"> '
                  f'{RD.fmt_ele(ele)} m</tspan>')
-        w = GC.text_w(txt, fs) + 26 * M
-        tx, ty, ta, box = _layout(x, y, dx * M, dy * M, anc, w, fs * 0.86)
+        _OCC.append(box)                      # 只有最终选中的方案才占位
+        _LABELS.append(box)                   # ⚠ 自检读 _LABELS：漏登记会变成"0 标注 = 0 重叠"的假通过
         LABEL_OF[name] = box
         gap = max(max(box[0] - x, 0, x - box[2]), max(box[1] - y, 0, y - box[3]))
         if gap > 34 * M:
@@ -416,7 +486,7 @@ def build_map_overlay(mobile=False):
     # ---- 落位绘制 ----
     if "lg" in placed:
         lx, ly = _lg_rect[0], _lg_rect[1]
-        S = FURN_LG
+        S = _LG_S                                # 与 _legend_size() 同一系数（动态缩小后仍一致）
         g = [f'<g class="il"><rect x="{lx}" y="{ly}" width="{LG_W}" height="{LG_H}" rx="{round(14*S)}" '
              f'fill="#FFFFFF" opacity="0.96" stroke="#D9D2C6" stroke-width="1.4"/>',
              f'<text x="{lx+18*S:.0f}" y="{ly+LG_TITLE*S:.0f}" font-size="{round(22*S)}" '
@@ -513,6 +583,13 @@ def self_check(mobile=False, placed=None):
 
     r = RD.build_route()
     XY = [P(*p) for p in r["pts"]]
+    # ⚠ 护栏：标注数必须等于 POI 数。_LABELS 漏登记时自检会报「0 标注 · 0 重叠」——
+    #   看着全绿，其实一个标注都没查（2026-10-17 北天山中线实测踩过：
+    #   _layout 改成纯函数后调用方忘了补 _LABELS.append，自检假通过了一整轮）。
+    _n_poi = len(GC.pois_of(RD))
+    if n != _n_poi:
+        print(f"      ⚠ 标注数 {n} ≠ POI 数 {_n_poi} —— 自检样本不完整，"
+              f"重叠/越界结论不可信（查 _LABELS 登记）")
     furn = {"图例": _lg_rect, "指北针": _cp_rect, "比例尺": _sb_rect}
     furn = {k: v for k, v in furn.items() if v}
     hit_track = {k: sum(1 for x, y in XY if v[0] <= x <= v[2] and v[1] <= y <= v[3])

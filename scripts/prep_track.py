@@ -9,6 +9,13 @@ KML 路径来源（按优先级）：
   1. 命令行：python prep_track.py "C:/path/线路.kml"
   2. route_def.CFG["kml"]（写在配置文件里，之后就能一条命令重跑全流程）
 
+⚠⚠ **段选择必须写进 route_def.CFG["kml_keep"]，否则每次全流程重跑都会被撤销**
+（2026-10-17 北天山中线实测踩坑）：两步路 KML 常带作者手绘的**平行备选段**
+（首尾都落在主线上）。手工跑 `parse_kml_ls.py --longest` 选好主线后，
+`make_all.py` 的 wave0 会再跑一次本脚本 —— 而它**不带 --longest**，
+于是备选段又被合回来，里程从 143.60 km 悄悄涨回 311.56 km，剖面图出现两道空白悬崖。
+→ 把选择固化到配置里：CFG["kml_keep"] = "longest"（只留最长段）或 "0,2"（按段号挑）。
+
 **为什么要有这一步**：旧流程里 ① 写到 `out/`、② 却读 `scripts/` 同目录，
 中间夹着一次"手工把文件搬过去"，既容易忘也破坏了可重复性。
 """
@@ -19,13 +26,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
-def _kml_from_cfg():
+def _cfg_get(key):
     try:
         sys.path.insert(0, str(HERE))
         import route_def as RD
-        return getattr(RD, "CFG", {}).get("kml")
+        return getattr(RD, "CFG", {}).get(key)
     except Exception:                                              # noqa
         return None
+
+
+def _kml_from_cfg():
+    return _cfg_get("kml")
 
 
 def _pick_parser(kml):
@@ -63,8 +74,25 @@ def main():
 
     parser = _pick_parser(kml)
     print(f"轨迹格式识别 → {parser}", flush=True)
+    # 段选择：命令行优先，其次 route_def.CFG["kml_keep"]（见模块 docstring 的坑）
+    keep = None
+    for a in sys.argv[2:]:
+        if a in ("--longest",) or a.startswith("--keep"):
+            keep = a
+    if keep is None:
+        ck = _cfg_get("kml_keep")
+        if ck:
+            keep = "--longest" if str(ck).strip().lower() == "longest" else f"--keep={ck}"
+    if keep and parser == "parse_kml_ls.py":
+        print(f"段选择（{keep}，来自 {'命令行' if keep in sys.argv[2:] else 'route_def.CFG[kml_keep]'}）",
+              flush=True)
     for script in (parser, "prep_kml_track.py"):
-        args = [sys.executable, str(HERE / script)] + ([str(kml)] if "parse" in script else [])
+        if "parse" in script:
+            args = [sys.executable, str(HERE / script), str(kml)]
+            if keep and script == parser:
+                args.append(keep)
+        else:
+            args = [sys.executable, str(HERE / script)]
         print(f"=== {script} ===", flush=True)
         r = subprocess.run(args, cwd=str(HERE))
         if r.returncode:

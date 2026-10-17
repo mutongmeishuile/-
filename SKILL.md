@@ -429,6 +429,8 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **Overpass 镜像全体 504/500/证书错** | `references/pitfalls-terrain.md` §9（先探活再定序，osm.ch 首选；`fetch_osm.py --soft` 可降级） |
 | **底图与攻略 POI 出现两条同地注记** | `references/pitfalls-terrain.md` §10（skip_names 要含「·」前核心地名） |
 | **同一座山在页面上有两个海拔数字** | `references/track-prep.md` §6（轨迹 GPS 偏低 20–50 m → **曲线用 GPS、印出来的数用 DEM**） |
+| **总里程比作者口述多一倍、剖面出现两道空白悬崖（`seg_id` 多个值）** | `references/track-prep.md` §8（两步路 KML 的**平行备选段**被全并：`--longest` 只留主线，**并把 `CFG["kml_keep"]` 写进 route_def**，否则 make_all wave0 会悄悄撤销） |
+| **用户说"标注字体动态缩小 / 位置动态合理 / 图例动态缩小"** | `references/pitfalls-map-svg.md` §15（字号阶梯 FS_LADDER + 8 方向×4 档半径位置搜索 + 图例 `_LG_S` 单系数动态缩放；⚠ `_layout` 试探必须纯函数，`_LABELS` 漏登记会让自检假通过） |
 | **沙箱完全无外网（DEM/OSM 全超时）** | `references/self-hosted-terrain.md` §10（用 WebFetch 打 Open-Elevation 文本接口取真实 SRTM 样本，本地插值重建 DEM） |
 | 放大看不清、字糊 | `references/pitfalls-terrain.md` §2 |
 | 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3（**间隔按实测线覆盖率自适应**；顺带看那里的**配色**：别用暖橙棕） |
@@ -526,6 +528,11 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 - [ ] 高清地图四边无内容被截（满幅图片的边缘深色占比天然偏高，**要 1:1 目视裁切确认，别只看数字**）
 - [ ] 地图与右栏**底边齐平**、右栏所有元素 `right ≤ 内容右界`（探针量，别目测）
 - [ ] 地图内标注**桌面版两两冲突 = 0**、无标注压图例（`map_svg.self_check` 的「压轨迹点」应为 0）
+- [ ] **自检的"标注数"必须等于 POI 数**（`self_check` 有护栏，不等会明确报警）。
+      `_LABELS` 漏登记时自检会打印「标注 0 条 · 重叠 0」—— **看着全绿，其实一个都没查**
+- [ ] **"标注动态缩字 / 图例动态缩小"不能只靠"没重叠"验收**：瘦高画幅上 25 个标注
+      可能全部命中档位 1.00，动态路径一次都没走到。改过 `_layout` / `FS_LADDER` /
+      `_legend_scale` 后跑一遍 `python scripts/_stress_layout.py`（退出码非 0 = 有未通过项）
 - [ ] 手机版缩略图的标注重叠若不为 0，`self_check` 会明确标成"只告警"（拥挤 ≠ 错误）；
       **但桌面版必须为 0** —— 那是出长图的那一版
 - [ ] **三件套不压轨迹、彼此不重叠**（`self_check` 的「家具互相重叠」应为 0）
