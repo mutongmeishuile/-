@@ -47,8 +47,8 @@ D1_T = _CFG.get("d1_text", "#B23A1C")
 D2_T = _CFG.get("d2_text", "#0F6E5C")
 
 PS = PS_BASE
-_PAD = 22
-_PIN_R = 24
+_PAD = 18
+_PIN_R = 18
 _OCC, _LABELS, LABEL_OF = [], [], {}
 _lg_rect = _sb_rect = _cp_rect = None
 
@@ -171,48 +171,50 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
 
 # ---------------------------------------------------------------- 点位符号
 def mk_pin(x, y, kind):
+    # 2026-10-17 用户反馈：POI 图钉在轨迹上过大，遮挡地名/道路。
+    # 统一从 r≈19–20 缩到 r≈14–15，字号同步缩小，与地名同量级。
     if kind == "start":
-        r = 19 * PS
+        r = 14 * PS
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#D93B2B" stroke="#fff" '
-                f'stroke-width="{5*PS:.1f}"/>'
-                f'<text x="{x}" y="{y+8*PS:.1f}" text-anchor="middle" font-size="{21*PS:.1f}" '
+                f'stroke-width="{4*PS:.1f}"/>'
+                f'<text x="{x}" y="{y+6*PS:.1f}" text-anchor="middle" font-size="{16*PS:.1f}" '
                 f'font-weight="800" fill="#fff">起</text>')
     if kind == "end":
-        r = 19 * PS
+        r = 14 * PS
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#0F6E5C" stroke="#fff" '
-                f'stroke-width="{5*PS:.1f}"/>'
-                f'<text x="{x}" y="{y+8*PS:.1f}" text-anchor="middle" font-size="{19*PS:.1f}" '
+                f'stroke-width="{4*PS:.1f}"/>'
+                f'<text x="{x}" y="{y+6*PS:.1f}" text-anchor="middle" font-size="{15*PS:.1f}" '
                 f'font-weight="800" fill="#fff">终</text>')
     if kind in ("peak", "peak_hi"):
         hi = kind == "peak_hi"
         col = D1_T if hi else "#4A5261"
-        r = (19 if hi else 15) * PS
-        return (f'<circle cx="{x}" cy="{y}" r="{r+5*PS:.1f}" fill="#fff" opacity="0.9"/>'
+        r = (14 if hi else 11) * PS
+        return (f'<circle cx="{x}" cy="{y}" r="{r+4*PS:.1f}" fill="#fff" opacity="0.9"/>'
                 f'<path d="M {x-r:.1f},{y+r*0.62:.1f} L {x},{y-r*0.78:.1f} '
                 f'L {x+r:.1f},{y+r*0.62:.1f} Z" fill="{col}"/>')
     if kind == "temple":
-        return (f'<circle cx="{x}" cy="{y}" r="{19*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{14.6*PS:.1f}" fill="#5A4A8A"/>'
-                f'<path d="M {x-9.5*PS:.1f},{y-1.2*PS:.1f} L {x},{y-10.4*PS:.1f} '
-                f'L {x+9.5*PS:.1f},{y-1.2*PS:.1f} Z" fill="#fff"/>'
-                f'<rect x="{x-6.2*PS:.1f}" y="{y+1.2*PS:.1f}" width="{12.4*PS:.1f}" '
-                f'height="{7.6*PS:.1f}" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#5A4A8A"/>'
+                f'<path d="M {x-7*PS:.1f},{y-0.8*PS:.1f} L {x},{y-7.8*PS:.1f} '
+                f'L {x+7*PS:.1f},{y-0.8*PS:.1f} Z" fill="#fff"/>'
+                f'<rect x="{x-4.6*PS:.1f}" y="{y+0.8*PS:.1f}" width="{9.2*PS:.1f}" '
+                f'height="{5.6*PS:.1f}" fill="#fff"/>')
     if kind == "camp":
-        return (f'<circle cx="{x}" cy="{y}" r="{20*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{15.5*PS:.1f}" fill="{D1_C}"/>'
-                f'<path d="M {x-10*PS:.1f},{y+8*PS:.1f} L {x},{y-9*PS:.1f} '
-                f'L {x+10*PS:.1f},{y+8*PS:.1f} Z" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{11.6*PS:.1f}" fill="{D1_C}"/>'
+                f'<path d="M {x-7.5*PS:.1f},{y+6*PS:.1f} L {x},{y-6.7*PS:.1f} '
+                f'L {x+7.5*PS:.1f},{y+6*PS:.1f} Z" fill="#fff"/>')
     if kind == "water":
-        return (f'<circle cx="{x}" cy="{y}" r="{19*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{14.6*PS:.1f}" fill="#0F8A9B"/>'
-                f'<path d="M {x},{y-9*PS:.1f} C {x+9*PS:.1f},{y+1*PS:.1f} '
-                f'{x+7*PS:.1f},{y+9*PS:.1f} {x},{y+9*PS:.1f} C {x-7*PS:.1f},{y+9*PS:.1f} '
-                f'{x-9*PS:.1f},{y+1*PS:.1f} {x},{y-9*PS:.1f} Z" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#0F8A9B"/>'
+                f'<path d="M {x},{y-6.6*PS:.1f} C {x+6.6*PS:.1f},{y+0.7*PS:.1f} '
+                f'{x+5.2*PS:.1f},{y+6.6*PS:.1f} {x},{y+6.6*PS:.1f} C {x-5.2*PS:.1f},{y+6.6*PS:.1f} '
+                f'{x-6.6*PS:.1f},{y+0.7*PS:.1f} {x},{y-6.6*PS:.1f} Z" fill="#fff"/>')
     if kind == "warn":
-        return (f'<circle cx="{x}" cy="{y}" r="{19*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{14.6*PS:.1f}" fill="#D0871B"/>'
-                f'<text x="{x}" y="{y+7.4*PS:.1f}" text-anchor="middle" '
-                f'font-size="{20*PS:.1f}" font-weight="900" fill="#fff">!</text>')
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#D0871B"/>'
+                f'<text x="{x}" y="{y+5.4*PS:.1f}" text-anchor="middle" '
+                f'font-size="{15*PS:.1f}" font-weight="900" fill="#fff">!</text>')
     return ""
 
 
@@ -484,7 +486,7 @@ def build_map_overlay(mobile=False):
         name, ele, k = d["name"], d["ele"], d["kind"]
         dx, dy, anc = d["dx"], d["dy"], d["anchor"]
         x, y = pin_xy[i]
-        base = (23 if k in ("start", "end") else 21) * PS
+        base = (18 if k in ("start", "end") else 16) * PS
         col = D1_T if k == "peak_hi" else (D2_T if k in ("start", "end") else INK)
         if mobile:
             txt = getattr(RD, "SHORT", {}).get(name, name)

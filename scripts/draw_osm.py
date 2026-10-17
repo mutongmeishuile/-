@@ -96,19 +96,17 @@ ROAD_STYLE = {
     "track":         ((248, 240, 224), 1.9, (176, 160, 132)),
 }
 TRAIL_STYLE = {
-    # 步道配色是这张图最容易翻车的地方，踩过两轮：
+    # 步道配色是这张图最容易翻车的地方，踩过三轮：
     #   ① 浅棕 → 直接"消失"在山体里；
-    #   ② 深棕（86,58,44）→ 虽然压得住底色，却和**计曲线**（120,94,68）同色调，
-    #      等高线一密，步道就"长"成了等高线，两者谁也认不出。用户原话："小路与整体配色接近"。
-    # 结论：**必须换色相，不是换明度**。棕色已归等高线、橙色归公路、蓝色归水系。
-    #   ③ 又一轮：改用的深紫撞上了攻略主线里的紫系（#6C4FD8）。
-    #      OSM 步道网在线路侧翼成片铺开时，一眼看去分不清"哪条是我要走的"。
-    #      攻略主线通常已占掉橙红 / 绿 / 紫三个色相，底图步道就不该再用有彩色 ——
-    #      最终定案**中性灰**：无色相即不可能撞色，且灰在暖棕地形上是天然"背景层"色。
-    "path":      ((140, 138, 134), 2.1, 8, 5),
-    "footway":   ((140, 138, 134), 2.0, 7, 5),
-    "steps":     ((140, 138, 134), 2.3, 4.5, 3),
-    "bridleway": ((152, 148, 144), 1.9, 8, 6),
+    #   ② 深棕（86,58,44）→ 与**计曲线**（120,94,68）同色调，等高线一密就"长"成等高线；
+    #   ③ 中性灰（140,138,134）→ 与底图派生等高线/灰棕山体融为一体（用户反馈）。
+    # 结论：**必须换色相，且不能撞主线**。主线已占橙红（D1/D5）、绿（D2/D6）、
+    #   蓝紫（D3/D7）、蓝（D4）；棕色归等高线。剩下的醒目色相只有**深紫/玫红系**。
+    # 选用偏红紫的深紫罗兰：在暖棕/绿色地形上反差足够，又不会被误读为主线。
+    "path":      ((128, 52, 138), 2.1, 8, 5),
+    "footway":   ((128, 52, 138), 2.0, 7, 5),
+    "steps":     ((128, 52, 138), 2.3, 4.5, 3),
+    "bridleway": ((118, 48, 128), 1.9, 8, 6),
 }
 # 步道描边：**取消**。原本纸色 (252,250,245) 是用来把深紫步道从地形里"抬"起来的，
 # 但描边比地形亮得多 → 步道网成片铺开时整片只剩白色"鬼影线"，
@@ -435,6 +433,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     drawable.sort(key=lambda x: x[0])
 
     n_poly = n_line = n_glacier = 0
+    road_refs = []          # (pts, ref, highway_class) 道路编号标注候选
     for _, kind, sub, pts, e in drawable:
         if kind == "wood":
             d.polygon(pts, fill=C_WOOD) if len(pts) > 2 else None
@@ -473,6 +472,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             d.line(pts, fill=ed, width=W(w) + W(2), joint="curve")   # 描边
             d.line(pts, fill=core, width=W(w), joint="curve")
             n_line += 1
+            # 收集带编号的道路，稍后在地名注记之后尝试标注（优先级低于地名）
+            ref = e.get("tags", {}).get("ref")
+            if ref and sub in ("motorway", "trunk", "primary", "secondary", "tertiary"):
+                road_refs.append((pts, ref, sub))
 
     # ---------------- 注记 ----------------
     lab = Labeller(size, cell=14 * S)
@@ -693,6 +696,45 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                      stroke_w=2.1 * S, pad=LBL_PAD * S):
             n_water += 1
 
+    # ---- 道路编号（ref）标注：省道/国道/县道等，沿道路中点水平放置 ----
+    n_road_ref = 0
+    if road_refs:
+        f_road_ref = _font(F(10.5), True)
+        for pts, ref, sub in road_refs:
+            if len(pts) < 2:
+                continue
+            # 计算道路在图上的长度，太短不标
+            L = 0.0
+            segs = []
+            for i in range(len(pts) - 1):
+                seg = math.hypot(pts[i + 1][0] - pts[i][0],
+                                 pts[i + 1][1] - pts[i][1])
+                segs.append(seg)
+                L += seg
+            if L < 30 * S:                 # 图上不足约 30 px 不标
+                continue
+            half = L / 2.0
+            acc = 0.0
+            mx, my = pts[0]
+            for i, seg in enumerate(segs):
+                if acc + seg >= half:
+                    t = (half - acc) / seg if seg else 0.0
+                    x0, y0 = pts[i]
+                    x1, y1 = pts[i + 1]
+                    mx = x0 + (x1 - x0) * t
+                    my = y0 + (y1 - y0) * t
+                    break
+                acc += seg
+            # ref 可能是 "S459;S460"，取第一个编号
+            ref_clean = str(ref).split(";")[0].strip()
+            if not ref_clean:
+                continue
+            # 颜色与暖沙色道路芯形成对比，深棕近黑
+            col = (88, 60, 40)
+            if lab.place(d, ref_clean, (mx, my), f_road_ref, col, anchor_center=True,
+                         stroke_w=2.0 * S, pad=LBL_PAD * S, fallback=True):
+                n_road_ref += 1
+
     _tier = (f"[p{PEAK_TIER_PCT[0]}≥{q_hi:.0f}m/p{PEAK_TIER_PCT[1]}≥{q_mid:.0f}m]"
              if q_hi is not None else f"[样本<{PEAK_TIER_MIN_N}，未分级]")
     if verbose:
@@ -707,7 +749,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
               f"哑口名 {n_saddle}/{len(saddles)} · "
               f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
-              f"兴趣点 {n_poi}/{len(pois)} · 挤放 {lab.n_overlap}{extra}")
+              f"兴趣点 {n_poi}/{len(pois)} · "
+              f"道路编号 {n_road_ref}/{len(road_refs)} · 挤放 {lab.n_overlap}{extra}")
 
     return Image.alpha_composite(pil.convert("RGBA"), ov).convert("RGB")
 
