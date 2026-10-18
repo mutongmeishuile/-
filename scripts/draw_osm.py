@@ -114,6 +114,13 @@ TRAIL_STYLE = {
 # 灰芯的虚线反而看不见（实测：白色描边成了图上最抢眼的东西）。
 # 换成中性灰芯之后，描边已经没有存在意义，直接不画。
 C_TRAIL_CASING = None
+NO_CROWD = False
+
+# ⚠ 2026-10-18 多洛米蒂 AV1：窗口内 OSM 具名要素上千（峰 494 / 地名 605 / 垭口 157），
+#   Labeller 的「实在放不下也要放」会把整张图铺满。
+#   → `route_def.CFG["label_no_crowd"] = True` 之后**只放找得到完全空位的注记**，
+#     放不下的直接丢弃 —— 宁可少标，也不许互相压。
+#     配合 prune_osm 按「离轨迹多远 + 图上间距」先裁一轮，效果最好。
 
 
 def _font(size, bold=False):
@@ -363,6 +370,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         return pil
     skip_names = set(skip_names or ())
     S = float(px_scale)
+    global NO_CROWD
+    NO_CROWD = _cfg_flag("label_no_crowd", False)
 
     def W(v):
         """线宽 → 栅格整数像素。"""
@@ -482,6 +491,37 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     lab = Labeller(size, cell=14 * S)
     if seed_cells:
         lab.grid |= set(seed_cells)
+
+    def _dedupe_by_name(cands, sep, name_idx, sort_idx=None, x_idx=0, y_idx=1):
+        """按**名字**去重：同名注记至少相距 sep（栅格 px）才允许再放一个。
+
+        为什么必须做（2026-10-18 熊野古道实测）：OSM 把同一条河拆成上百个 way，
+        每个 way 都带同一个 name —— 本窗口 1279 条具名水系要素只有 **329 个不同的名字**，
+        熊野川一条河占了 130 个 way。Labeller 只避让"空间重叠"，
+        同名标签沿河一字排开互不重叠 → 水系名落了 **1222 条**，
+        熊野川在图中被写了 20+ 遍（用户反馈"水系渲染有问题"）。
+        道路编号同病：国道 168 号被拆成几十段，ref 沿路重复。
+        地名也是：大黒谷在 2 km 内出现 4 次。
+
+        做法：按 sort_idx 指定的几何尺寸降序（大河/大湖/长路先占位），
+        同名已落位的标签距新候选小于 sep 就跳过。sep 取图幅尺度的比例，
+        长河因此仍能拿到 2–3 个标签（符合地形图惯例），短溪只留 1 个。
+        """
+        def _key(c):
+            return c[sort_idx] if sort_idx is not None else 0
+        placed, out = {}, []
+        for c in sorted(cands, key=_key, reverse=True):
+            nm = c[name_idx]
+            if not nm:
+                continue
+            cx, cy = c[x_idx], c[y_idx]
+            seen = placed.setdefault(nm, [])
+            if any(math.hypot(cx - px, cy - py) < sep for px, py in seen):
+                continue
+            seen.append((cx, cy))
+            out.append(c)
+        return out
+
     # ⚠ 字号的上下界是两头夹出来的，别只顾一头：
     #   · 下界来自 2026-10-09 亚丁线：11.5 px 的峰名缩进长图（~0.4×）后完全看不见
     #     → 曾整体放大约 1.35 倍、颜色加深，做到与等高线高程标注同一量级；
@@ -523,7 +563,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             # 用 f_ham 画，无需单独分支。
             places.append((t["place"], x, y, t.get("name", "")))
         elif t.get("natural") == "water":
-            waters.append((x, y, t.get("name", "")))
+            waters.append((x, y, t.get("name", ""), 0.0))
         elif t.get("tourism") in ("attraction", "viewpoint", "alpine_hut"):
             pois.append((x, y, t.get("name", ""), t["tourism"]))
         elif t.get("amenity") == "place_of_worship":
@@ -552,7 +592,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         cy = sum(p[1] for p in pts) / len(pts)
         if not (-40 * S < cx < size[0] + 40 * S and -40 * S < cy < size[1] + 40 * S):
             continue
-        waters.append((cx, cy, nm))
+        # size = 该段几何的尺寸（河长 / 湖面积），供下面按名去重时排序：
+        # 最长的那段先占位，避免"名字落在一条 3 个点的支流碎段上"。
+        if is_river:
+            sz = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+                     for i in range(len(pts) - 1))
+        else:
+            sz = abs(_ring_area(pts))
+        waters.append((cx, cy, nm, sz))
 
     # 冰川名：锚点取最大环的重心（relation 的多个 member 里挑面积最大的那个）
     glaciers = []
@@ -591,8 +638,23 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     peaks = [(x, y, _clean_name(n), e) for x, y, n, e in peaks]
     saddles = [(x, y, _clean_name(n), e) for x, y, n, e in saddles]
     places = [(k, x, y, _clean_name(n)) for k, x, y, n in places]
-    waters = [(x, y, _clean_name(n)) for x, y, n in waters]
+    waters = [(x, y, _clean_name(n)) for x, y, n, _sz in waters]
     pois = [(x, y, _clean_name(n), k) for x, y, n, k in pois]
+
+    # ---- 按名去重（必须在候选表收集完之后、Labeller 落位之前）----
+    # OSM 把同一条河/同一条路/同一个村拆成几十上百个要素，每个都带同一个 name ——
+    # 不去重就会沿河沿路把名字写满（见 _dedupe_by_name 的文档串）。
+    # 水系名：sep 放到 1/4 图宽 —— 熊野川纵贯全图也只会留 3–4 个名
+    waters = _dedupe_by_name(waters, max(600.0, size[0] * 0.25) * S, 2)
+    # 道路编号：同一条路拆几十段，ref 只在该路另一端才重复出现
+    road_refs = _dedupe_by_name(
+        [(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts),
+          str(ref).split(";")[0].strip(), pts)
+         for pts, ref, sub in road_refs],
+        max(500.0, size[0] * 0.22) * S, 2)
+    # 地名：村落常被录成多个相邻 node，sep 收窄到 1/8 图宽（同村只出一个名）
+    places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * S, 3, x_idx=1, y_idx=2)
+
     peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
     # 分位数按本窗口**所有有高程的峰点**算（含无名字的）——要反映"这片地形上多高算突出"，
     # 而不是 OSM 的命名稀疏度（高峰也常有没录名字的）。
@@ -622,7 +684,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         d.polygon(tri, fill=col, outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
         if lab.place(d, txt, (x, y + 7 * S), f_peak_use, tcol, anchor_center=False,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD):
             n_peak += 1
 
     # 冰川名：菱形冰符号 + 深冰蓝粗体 + 白描边。冰川面上只标最大的几条
@@ -653,7 +715,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                   fill=(255, 244, 232), outline=(176, 96, 32))
         txt = f"{name} {ele}m" if ele else name
         if lab.place(d, txt, (x, y + 7 * S), f_water, (150, 78, 24), anchor_center=False,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=True):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
             n_saddle += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
@@ -668,7 +730,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         r = (2.7 if kind in ("city", "town") else 2.2) * S
         d.ellipse([x - r, y - r, x + r, y + r], fill=(70, 70, 70), outline=(255, 255, 255))
         if lab.place(d, name, (x, y + 4 * S), f, col, anchor_center=False,
-                     stroke_w=2 * S, pad=LBL_PAD * S):
+                     stroke_w=2 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
             n_place += 1
 
     n_poi = 0
@@ -694,14 +756,15 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not name or name in skip_names:
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_center=True,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
             n_water += 1
 
     # ---- 道路编号（ref）标注：省道/国道/县道等，沿道路中点水平放置 ----
+    # road_refs 已被 _dedupe_by_name 去过重，这里是 (cx, cy, ref, pts)
     n_road_ref = 0
     if road_refs:
         f_road_ref = _font(F(10.5), True)
-        for pts, ref, sub in road_refs:
+        for _cx, _cy, ref_clean, pts in road_refs:
             if len(pts) < 2:
                 continue
             # 计算道路在图上的长度，太短不标
@@ -726,14 +789,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                     my = y0 + (y1 - y0) * t
                     break
                 acc += seg
-            # ref 可能是 "S459;S460"，取第一个编号
-            ref_clean = str(ref).split(";")[0].strip()
+            # ref 已在去重阶段 split(";") 取过首编号，这里只做空值兜底
             if not ref_clean:
                 continue
             # 颜色与暖沙色道路芯形成对比，深棕近黑
             col = (88, 60, 40)
             if lab.place(d, ref_clean, (mx, my), f_road_ref, col, anchor_center=True,
-                         stroke_w=2.0 * S, pad=LBL_PAD * S, fallback=True):
+                         stroke_w=2.0 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
                 n_road_ref += 1
 
     _tier = (f"[p{PEAK_TIER_PCT[0]}≥{q_hi:.0f}m/p{PEAK_TIER_PCT[1]}≥{q_mid:.0f}m]"
