@@ -198,31 +198,110 @@ def _ring_area(ring):
     return s / 2.0
 
 
-def _rings_of(e, proj, size):
-    """要素 → 多边形环列表（每个环是一串像素点）。
+_STITCH_STATS = {"ok": 0, "dropped": 0, "dropped_pts": 0}
 
-    way：geometry 直接成环。
-    relation（OSM 的冰川常用 relation 打组，`out geom` 下 members 带 geometry）：
-    逐个 outer member way 成环 —— 相邻 member 各自填充后视觉上仍是一个整体。
+
+def _stitch(segs, tol=1.2):
+    """把首尾相接的开放折线**缝合成闭合环**（OSM multipolygon 的标准做法）。
+
+    为什么必须缝（2026-10-18 熊野古道实测，用户指着湖问"渲染的对吗"）：
+    OSM 把一个大湖/水库的外环按「岛 / 桥 / 行政界」切成若干**开放** way，
+    relation 的 members 里每段都没首尾闭合。旧实现「每个 member 各自 polygon() 填充」，
+    而 ImageDraw.polygon 遇到开放折线会**自动把最后一个点连回第一个点** ——
+    于是每段都凭空拉出一条弦，弦与真实岸线之间被填成大块假水面。
+    实测：本窗口 14 个水体 relation 里 12 个有开放成员（共 59 段），
+    風屋貯水池 2 段（1340 + 1102 点）、合川貯水池 13 段全部开放 ——
+    图上就是「带尖刺的浅蓝珊瑚块」。
+
+    做法：贪心串接 —— 每段的首/尾与当前链的尾/首在 tol 内吻合就接上（必要时反向），
+    直到绕回起点闭合成环。**无法闭合的残链直接丢弃**，绝不再隐式闭合。
     """
+    segs = [list(s) for s in segs if len(s) >= 2]
+    used = [False] * len(segs)
     rings = []
+
+    def same(a, b):
+        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+    for i, s in enumerate(segs):
+        if used[i]:
+            continue
+        used[i] = True
+        chain = list(s)
+        progress = True
+        while progress and not (len(chain) >= 4 and same(chain[0], chain[-1])):
+            progress = False
+            for j, t in enumerate(segs):
+                if used[j]:
+                    continue
+                if same(chain[-1], t[0]):
+                    chain.extend(t[1:])
+                elif same(chain[-1], t[-1]):
+                    chain.extend(reversed(t[:-1]))
+                elif same(chain[0], t[-1]):
+                    chain[:0] = t[:-1]
+                elif same(chain[0], t[0]):
+                    chain[:0] = list(reversed(t[1:]))
+                else:
+                    continue
+                used[j] = True
+                progress = True
+                break
+        if len(chain) >= 4 and same(chain[0], chain[-1]):
+            rings.append(chain)
+            _STITCH_STATS["ok"] += 1
+        elif len(chain) >= 12:
+            # 残链：说明 member 缺失（超出下载窗口）或 OSM 数据本身断口。
+            # 宁可少画一块，也绝不用隐式闭合去糊 —— 那正是假水面的来源。
+            _STITCH_STATS["dropped"] += 1
+            _STITCH_STATS["dropped_pts"] += len(chain)
+    return rings
+
+
+def _poly_rings(e, proj, size):
+    """要素 → (外环列表, 内环列表)，环都已闭合、已裁到画布范围。
+
+    way：geometry 直接当外环。
+    relation：outer / inner 成员各自**缝合**成闭合环（见 _stitch 的踩坑说明）。
+    注意 relation 不对单个 member 做画布裁剪 —— 半张湖被裁掉会让缝合断链，
+    反而漏画整片水面；改为对缝合后的整环做一次 bbox 判断即可。
+    """
+    outers, inners = [], []
     if e["type"] == "way":
         pts = _pts_of(e, proj, size)
         if pts and len(pts) > 2:
-            rings.append(pts)
-    elif e["type"] == "relation":
-        for m in e.get("members", []):
-            if m.get("type") != "way" or m.get("role") not in (None, "", "outer"):
+            outers.append(pts)
+        return outers, inners
+    if e["type"] != "relation":
+        return outers, inners
+
+    so, si = [], []
+    for m in e.get("members", []):
+        if m.get("type") != "way":
+            continue
+        role = m.get("role") or "outer"
+        if role not in ("outer", "inner", ""):
+            continue
+        g = m.get("geometry") or []
+        pts = [proj(p["lon"], p["lat"]) for p in g if p.get("lon") is not None]
+        if len(pts) < 2:
+            continue
+        pts = [(round(x, 1), round(y, 1)) for x, y in pts]
+        (si if role == "inner" else so).append(pts)
+
+    for src, dst in ((so, outers), (si, inners)):
+        for ring in _stitch(src):
+            xs = [p[0] for p in ring]
+            ys = [p[1] for p in ring]
+            if max(xs) < 0 or min(xs) > size[0] or max(ys) < 0 or min(ys) > size[1]:
                 continue
-            g = m.get("geometry") or []
-            pts = [proj(p["lon"], p["lat"]) for p in g if p.get("lon") is not None]
-            if len(pts) > 2:
-                xs = [p[0] for p in pts]
-                ys = [p[1] for p in pts]
-                if max(xs) < 0 or min(xs) > size[0] or max(ys) < 0 or min(ys) > size[1]:
-                    continue
-                rings.append([(round(x, 1), round(y, 1)) for x, y in pts])
-    return rings
+            dst.append(ring)
+    return outers, inners
+
+
+def _rings_of(e, proj, size):
+    """只要外环的便捷入口（注记定位等场合用）。"""
+    return _poly_rings(e, proj, size)[0]
 
 
 # ------------------------------------------------------------------ 注记
@@ -421,30 +500,62 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     order = {"wood": 0, "meadow": 1, "glacier": 2, "waterbody": 3, "water": 4,
              "trail": 5, "road": 6}
     drawable = []
+    _STITCH_STATS.update(ok=0, dropped=0, dropped_pts=0)
     for e in els:
         b = bucket(e)
         if not b:
             continue
         if b[0] == "glacier":
             for ring in _rings_of(e, proj, size):
-                drawable.append((order["glacier"], "glacier", None, ring, e))
+                drawable.append((order["glacier"], "glacier", None, ring, e, ()))
             continue
-        # 面状要素（林地/草地/水体）统一走 _rings_of —— way 直接成环，
-        # relation（multipolygon，如 OSM 大湖）取 outer member 环。
+        # 面状要素（林地/草地/水体）统一走 _poly_rings —— way 直接成环，
+        # relation（multipolygon，如 OSM 大湖）把 outer 成员**缝合**成闭合环。
         # 否则 relation 水体没有顶层 geometry，_pts_of 返回 None 会被整片漏掉
-        # （2026-10-17 年宝玉则仙女湖踩坑）。
+        # （2026-10-17 年宝玉则仙女湖踩坑）；而 member 未闭合时逐段填充会拉出
+        # 横贯湖面的假弦（2026-10-18 熊野古道 風屋/合川貯水池 尖刺块）。
         if b[0] in ("wood", "meadow", "waterbody"):
-            for ring in _rings_of(e, proj, size):
-                drawable.append((order[b[0]], b[0], b[1], ring, e))
+            outs, ins = _poly_rings(e, proj, size)
+            for ring in outs:
+                drawable.append((order[b[0]], b[0], b[1], ring, e,
+                                 tuple(ins) if b[0] == "waterbody" else ()))
             continue
         pts = _pts_of(e, proj, size)
         if pts:
-            drawable.append((order[b[0]], b[0], b[1], pts, e))
+            drawable.append((order[b[0]], b[0], b[1], pts, e, ()))
     drawable.sort(key=lambda x: x[0])
+
+    # 水体带岛屿/内湖时要挖洞：PIL 的 polygon 不支持洞，用一张可复用的 L 蒙版，
+    # 每次只清/画当前要素的 bbox（整幅 3008×6244 的 L 图每次新建太慢）。
+    _hole_mask = [None]
+
+    def _fill_poly(ring, holes, color):
+        if not holes:
+            d.polygon(ring, fill=color)
+            return
+        if _hole_mask[0] is None:
+            _hole_mask[0] = Image.new("L", size, 0)
+        mk = _hole_mask[0]
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        for h in holes:
+            xs.extend(p[0] for p in h)
+            ys.extend(p[1] for p in h)
+        bb = (max(0, int(min(xs)) - 1), max(0, int(min(ys)) - 1),
+              min(size[0], int(max(xs)) + 2), min(size[1], int(max(ys)) + 2))
+        if bb[2] <= bb[0] or bb[3] <= bb[1]:
+            return
+        md = ImageDraw.Draw(mk)
+        md.rectangle(bb, fill=0)
+        md.polygon(ring, fill=255)
+        for h in holes:
+            md.polygon(h, fill=0)
+        ov.paste(Image.new("RGBA", (bb[2] - bb[0], bb[3] - bb[1]), color),
+                 bb[:2], mk.crop(bb))
 
     n_poly = n_line = n_glacier = 0
     road_refs = []          # (pts, ref, highway_class) 道路编号标注候选
-    for _, kind, sub, pts, e in drawable:
+    for _, kind, sub, pts, e, holes in drawable:
         if kind == "wood":
             d.polygon(pts, fill=C_WOOD) if len(pts) > 2 else None
             n_poly += 1
@@ -454,8 +565,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 n_poly += 1
         elif kind == "waterbody":
             if len(pts) > 2:
-                d.polygon(pts, fill=C_WATER)
-                d.line(pts + [pts[0]], fill=C_WATER_ED, width=W(1))
+                _fill_poly(pts, holes, C_WATER)
+                d.line(pts + [pts[0]], fill=C_WATER_ED, width=W(1), joint="curve")
+                for h in holes:
+                    d.line(h + [h[0]], fill=C_WATER_ED, width=W(1), joint="curve")
                 n_poly += 1
         elif kind == "glacier":
             # 冰面近白淡蓝填充 + 冰蓝边界；OSM 冰川面普遍偏旧（数字化早于近年退缩），
@@ -814,6 +927,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
               f"水系名 {n_water}/{len(waters)} · "
               f"兴趣点 {n_poi}/{len(pois)} · "
               f"道路编号 {n_road_ref}/{len(road_refs)} · 挤放 {lab.n_overlap}{extra}")
+        if _STITCH_STATS["dropped"]:
+            print(f"   ⚠ 缝合残链 {_STITCH_STATS['dropped']} 条"
+                  f"（{_STITCH_STATS['dropped_pts']} 点）已丢弃 —— "
+                  f"relation 成员未闭合且接不上，检查下载窗口是否截断了湖/冰川")
 
     return Image.alpha_composite(pil.convert("RGBA"), ov).convert("RGB")
 
