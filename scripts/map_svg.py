@@ -738,15 +738,70 @@ def _embed_jpeg(max_w=EMBED_MAX):
     return base64.b64encode(b.getvalue()).decode()
 
 
-def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX):
-    """返回 (svg 字符串, 自检信息)。embed_max=0 表示不降采样（高清地图用）。"""
+TITLE_H = 132               # 名称带高度（逻辑像素），仅独立高清图使用
+
+
+def out_size(with_title=False):
+    """输出逻辑尺寸。带名称带时高度加 TITLE_H —— render_map_hi 要按它算画布高。"""
+    return IW, IH + (TITLE_H if with_title else 0)
+
+
+def _title_band():
+    """地图名称带（2026-10-20 与贡嘎大环对齐）：整幅图**正上方**一条标题栏。
+
+    为什么放在图外而不是压在图上：满幅都是等高线与地名，任何角标都会挡东西；
+    单独一条带既给出线路名称，也顺手把里程/爬升口径写在图上，截图发出去也知道这是什么线。
+    HTML 内嵌版不要它（页面已有 <h1>），由 render_map_hi 传 with_title=True 打开。
+    """
+    t = _CFG.get("title") or _CFG.get("file_stem") or "全线地图"
+    sub = _CFG.get("title_lite") or _CFG.get("sub") or ""
+    tag = _CFG.get("badge") or _CFG.get("meta") or "全线地图"
+    tag = tag.replace("<b>", "").replace("</b>", "").replace("<em>", "").replace("</em>", "")
+    x0 = 40
+    # ⚠ 名称带底色不能用近白（#FFFDF8）：render_map_hi 的满幅校验把"整行全白"判为裁切，
+    #   一条纯白的带会直接让 16 条线路全部报错。用暖纸色，既过校验也更像地图边框。
+    o = [f'<rect x="0" y="0" width="{IW}" height="{TITLE_H}" fill="#F6F0E3"/>',
+         f'<text x="{x0}" y="30" font-size="15" font-weight="700" fill="#8A7A66" '
+         f'letter-spacing="2.5">全线地图 · {tag}</text>',
+         f'<text x="{x0 - 2}" y="82" font-size="44" font-weight="900" fill="#1F2430" '
+         f'letter-spacing="1">{_esc(t)}</text>']
+    if sub:
+        o.append(f'<text x="{x0}" y="112" font-size="16" font-weight="600" fill="#5A6270">'
+                 f'{_esc(sub)}</text>')
+    # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
+    days = _CFG.get("days", [])
+    if days:
+        bx = IW - 40 - len(days) * 34
+        for i, d in enumerate(days):
+            o.append(f'<rect x="{bx + i * 34:.0f}" y="96" width="28" height="6" rx="3" '
+                     f'fill="{d.get("color", "#888")}"/>'
+                     f'<text x="{bx + i * 34 + 14:.0f}" y="116" text-anchor="middle" '
+                     f'font-size="10" font-weight="700" fill="#8A7A66">{d.get("tag", "")}</text>')
+    o.append(f'<line x1="0" y1="{TITLE_H - 1}" x2="{IW}" y2="{TITLE_H - 1}" '
+             f'stroke="#D8CFC0" stroke-width="2"/>')
+    return "".join(o)
+
+
+def _esc(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=False):
+    """返回 (svg 字符串, 自检信息)。embed_max=0 表示不降采样（高清地图用）。
+
+    with_title=True：在整幅图上方加一条名称带（独立高清图用，HTML 内嵌版不用）。
+    """
     overlay, placed = build_map_overlay(mobile)
     img = ""
     if embed_image:
         img = (f'<image x="0" y="0" width="{IW}" height="{IH}" '
                f'href="data:image/jpeg;base64,{_embed_jpeg(embed_max)}"/>')
     cls = "mapsvg map-p" if mobile else "mapsvg map-d"
-    svg = (f'<svg class="{cls}" viewBox="0 0 {IW} {IH}" xmlns="http://www.w3.org/2000/svg" '
-           f'role="img" aria-label="{_CFG.get("aria_map", "全线地图")}">'
-           f'{img}{overlay}</svg>')
-    return svg, placed
+    band = TITLE_H if with_title else 0
+    vh = IH + band
+    head = (f'<svg class="{cls}" viewBox="0 0 {IW} {vh}" xmlns="http://www.w3.org/2000/svg" '
+            f'role="img" aria-label="{_CFG.get("aria_map", "全线地图")}">')
+    if with_title:
+        return (f'{head}{_title_band()}<g transform="translate(0,{band})">'
+                f'{img}{overlay}</g></svg>', placed)
+    return f'{head}{img}{overlay}</svg>', placed

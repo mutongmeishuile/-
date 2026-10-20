@@ -110,7 +110,9 @@ AZ, ALT = 315.0, 45.0   # 主光方向：西北、高度角 45°（制图惯例�
 # 背光侧的冲沟/山脊全部消失。改成四向**加权**叠加 —— 主光仍取西北（符合制图惯例、保住立体感），
 # 另外补上正北/正西/西南让背光面的地形结构显出来。权重和为 1。
 MDOW = ((225.0, 0.20), (270.0, 0.20), (315.0, 0.40), (360.0, 0.20))
-Z_FACTOR = 1.4          # 垂直夸张，让低山也有立体感
+# 垂直夸张：让低山也立得起来。1.4 在雪线以上大面积的地形会偏软（贡嘎实测），
+# 1.5–1.55 更接近「真山」；可按线路 CFG['z_factor'] 覆盖。
+Z_FACTOR = 1.5
 UNSHARP = (3, 45, 3)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补偿 30 m DEM 的天然柔化
 # JPEG 参数：地图全是**彩色细线 + 小字**，必须关掉默认的 4:2:0 色度抽样（subsampling=0 → 4:4:4）。
 # 4:2:0 会把色度通道砍到 1/4 分辨率，彩色线条一律发虚发彩边 —— 这是"放大看不清"的隐形主因之一。
@@ -120,6 +122,9 @@ JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 # ⚠ 2026-10-16 希夏邦马：计曲线从 3 px 收到 **1 px**（与首曲线同宽），两者的区分
 #   不再靠"粗细"，改由派生色的明度差承担。理由：这片图 15% 是冰川白雪、山体等高线
 #   成排出现，3 px 的计曲线在雪原上连成"灰带"，把等高线读成了一片色块而不是线。
+# 分层设色的量化步长（米）：同一等高带内颜色必须一致（2026-10-20 用户要求）。
+# 由 build_terrain 在选出等高距后覆写为「首曲线间隔」；0 = 关闭量化。
+TINT_BAND_M = 0.0
 CONTOUR_DILATE = (0, 0)
 # 陡坡省略阈值（tan，不是角度）：超过就不画该档等高线。理由见 paint_contours 的注释。
 # 45° = 1.0；63° = 2.0。可按线路在 route_def.CFG 覆盖。
@@ -543,6 +548,12 @@ def hypso(dem, snowline=None):
         stops_tbl = ramp_stops(dem)
     stops = np.array([s[0] for s in stops_tbl], float)
     cols = np.array([s[1] for s in stops_tbl], float)
+    # ⚠ 2026-10-20 用户要求「同一等高线内的色阶必须一致」：
+    #   连续插值会让一个等高带内部还有渐变，两条等高线之间就成了"看不出分界的糊坡"。
+    #   按**等高距**量化高程（取带中心值）后再查色，带内完全同色，带与带之间才跳一档 ——
+    #   这才是分层设色的本义。TINT_BAND_M=0 可关闭（回到连续插值）。
+    if TINT_BAND_M > 0:
+        dem = np.floor(dem / TINT_BAND_M) * TINT_BAND_M + TINT_BAND_M * 0.5
     d = np.clip(dem, stops[0], stops[-1])
     out = np.zeros(dem.shape + (3,), np.float32)
     for ch in range(3):
@@ -1456,6 +1467,14 @@ def build_terrain():
         print(f"   ⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 {snow_m:.0f} m —— "
               f"换线路必须按山脉查表重设（references/china-terrain.md §4）；"
               f"若本线最高峰远低于雪线，删掉这个键更合适")
+    global TINT_BAND_M
+    try:                       # 先粗算等高距，供"色阶按等高带量化"使用
+        _c_pre = pick_contour_interval(
+            np.asarray(Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS),
+                       dtype=np.float32), verbose=False)[0]
+        TINT_BAND_M = float(_c_pre)
+    except Exception:                                              # noqa
+        TINT_BAND_M = 0.0
     rgb = hypso(dem, snowline=snow_m)
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色
     # ⚠ 2026-10-20（贡嘎大环）重做：原来这里是「向无山影的设色回抬」（600 m 内 0→0.6），
