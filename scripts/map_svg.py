@@ -332,6 +332,50 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
     return km
 
 
+def _base_labels():
+    """底图地名注记的矢量层（2026-10-20）：draw_osm 只算位置，字在这里画。
+
+    为什么搬到这一层：
+      · 轨迹线由本模块绘制。字若"烤"在底图位图里，线一过就把地名截断（白晕尤其明显）；
+        搬到 SVG 之后**字永远压在线之上**，线从字底下穿过。
+      · 位图字放大就糊；矢量字随缩放保持锐利。
+      · 全图文字避让从此在一个坐标系里算（_OCC）。
+    坐标来自 draw_osm 的记录（栅格 px + 基线），这里除以 ss 换回逻辑像素。
+    没有 label_boxes.json（旧底图 / labels_vector=False）时返回空串，行为与旧版一致。
+    """
+    try:
+        lb = json.loads((GC.OUT / "label_boxes.json").read_text(encoding="utf-8"))
+    except Exception:                                              # noqa
+        return ""
+    if not lb.get("labels"):
+        return ""
+    ss = float(lb.get("ss", 1.0)) or 1.0
+    out = []
+    for it in lb["labels"]:
+        x, yb = it["x"] / ss, it["base"] / ss
+        fs = it["s"] / ss
+        f, st = it["f"], it["st"]
+        c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
+        c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
+        t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        out.append(f'<text x="{x:.1f}" y="{yb:.1f}" font-size="{fs:.1f}" font-weight="700" '
+                   f'fill="{c1}" stroke="{c2}" stroke-width="{it["sw"] / ss:.1f}" '
+                   f'paint-order="stroke" stroke-linejoin="round" '
+                   f'font-family="Microsoft YaHei,PingFang SC,Noto Sans CJK SC,sans-serif">{t}</text>')
+    return "".join(out)
+
+
+def _seed_label_boxes():
+    """把底图已有注记的矩形先登记进占位表，后续 POI/地名标注才会避开它们。"""
+    try:
+        lb = json.loads((GC.OUT / "label_boxes.json").read_text(encoding="utf-8"))
+        ss = float(lb.get("ss", 1.0)) or 1.0
+        for x0, y0, x1, y1 in lb.get("boxes", []):
+            _OCC.append((x0 / ss, y0 / ss, x1 / ss, y1 / ss))
+    except Exception:                                              # noqa
+        pass
+
+
 def build_map_overlay(mobile=False):
     """返回地图 SVG 的内容（不含 <svg> 外壳与底图）。"""
     global PS, _PAD, _PIN_R
@@ -341,6 +385,7 @@ def build_map_overlay(mobile=False):
     _PIN_R = 24 * M
     _PAD = 22
     _OCC.clear()
+    _seed_label_boxes()          # 底图注记先占位（必须在放任何标注之前）
     _LABELS.clear()
     LABEL_OF.clear()
     # ⚠ 三件套矩形必须在每轮开头清零：手机版**不摆图例**，若不清零，
@@ -384,6 +429,9 @@ def build_map_overlay(mobile=False):
             continue
         o.append(f'<path d="{d_of(seg)}" fill="none" stroke="{_day_cols[si]}" '
                  f'stroke-width="{ROUTE_W}" stroke-linecap="round" stroke-linejoin="round"/>')
+
+    # ---- 底图地名（矢量层）：压在轨迹之上、POI 之下 ----
+    o.append(_base_labels())
 
     # 每 5 km 里程点
     # ⚠ 三位数（105 km 等）在固定 r=7.4 的圆里必然溢出 → 用户看到「105 挤在圈里」。

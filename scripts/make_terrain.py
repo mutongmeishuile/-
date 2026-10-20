@@ -121,6 +121,10 @@ JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 #   不再靠"粗细"，改由派生色的明度差承担。理由：这片图 15% 是冰川白雪、山体等高线
 #   成排出现，3 px 的计曲线在雪原上连成"灰带"，把等高线读成了一片色块而不是线。
 CONTOUR_DILATE = (0, 0)
+# 陡坡省略阈值（tan，不是角度）：超过就不画该档等高线。理由见 paint_contours 的注释。
+# 45° = 1.0；63° = 2.0。可按线路在 route_def.CFG 覆盖。
+STEEP_SKIP_MINOR = 1.0
+STEEP_SKIP_MAJOR = 2.0
 # 等高线配色 + alpha 融合：硬像素覆盖会留下高反差硬边，alpha 写回才像"印在纸上"。
 # ⚠ 血泪教训（2026-10-10 用户反馈"等高线的颜色也不好看"）：原配色是暖橙棕
 #   (172,155,136)/(139,111,84)，而底图分层设色本身就是"绿→土黄→陶土"的暖色带 ——
@@ -139,6 +143,9 @@ CONTOUR_DARKEN    = (0.74, 0.46)   # 亮底（亮度 ≥ 阈值）处的明度�
 CONTOUR_LIGHTEN   = (16, 38)       # 暗底处的**提亮**量：阴影里的线再压暗就成黑泥，反过来提亮
 CONTOUR_LIGHT_T   = 110.0          # 亮/暗底分界（0–255 亮度）
 CONTOUR_MIN_DELTA = (15, 34)       # 与底图的最小明度差：保证中间调处也读得出线
+# 雪面（亮度 >200）的压暗系数上限：首 0.80 / 计 0.66。
+# 雪原上的线要看得见但别抢戏：原 0.74/0.46 在纯白底上是近黑硬线，一密就成网纹。
+SNOW_CONTOUR_DARKEN = (0.80, 0.66)
 CONTOUR_DESAT     = 0.30           # 线色向同明度中性灰靠的比例（彩度让给底图与轨迹）
 # 缓坡"起云"：垂直夸张会把 30 m DEM 的微起伏一起放大，按真实坡度加权渐回平地基准
 FLAT_ANGLE = 2.5
@@ -291,7 +298,14 @@ def hillshade(dem, z, lat_c, az=None, alt=ALT, zf=Z_FACTOR):
     dzdy = ((g + 2 * h + i) - (a + 2 * b + c)) / (8 * res)
     tan_slope = np.hypot(dzdx, dzdy)
     slope = np.arctan(tan_slope * zf)
-    aspect = np.arctan2(dzdy, -dzdx)
+    # 坡向（0=北，顺时针）。⚠⚠ 2026-10-20 修 bug（贡嘎大环）：原写法 arctan2(dzdy, -dzdx)
+    # 在图像坐标系（y 轴向下）里把坡向沿 45° 轴**镜像**了 —— 实测「面向西北的坡亮度 0.293、
+    # 面向东南的坡 0.787」，即主光跑到了东南 135°，与设定 NW 315° 完全相反。
+    # 后果不是"光从哪边来"这么轻：谷地两侧的受光墙与背光墙会整体对调，整条谷读成一道
+    # 亮脊（用户原话"谷底看起来更像山脊"），而且所有山体的阴坡阳坡全反。
+    # 正确写法 arctan2(-dzdx, dzdy)：
+    #   北坡(dzdy>0,dzdx=0)→0°  东坡(dzdx<0)→90°  南坡(dzdy<0)→180°  西坡(dzdx>0)→270°
+    aspect = np.arctan2(-dzdx, dzdy)
 
     def _one(az_deg):
         azr, altr = math.radians(az_deg), math.radians(alt)
@@ -583,12 +597,17 @@ def belt_stops(dem, snowline, verbose=True):
         (s + 1000, (247, 248, 252)),
         (s + 2100, (250, 251, 254)),   # 峰顶冰雪
     ]
+    # ⚠ 2026-10-17 尼泊尔四线实测：原锚点在 0–4300 m 之间只有 (104,124,96)→(150,172,132)，
+    #   每 1000 m 只差 10 来个色阶 → 「谷底在 2000–3500 m」的窗口整条河谷糊成一块死绿。
+    #   → 把 0–3700 m 拉成 深谷绿 → 针叶林 → 灌丛 → 草甸黄绿，每约 600 m 一档；
+    #     顶端留在 alpine 首锚点（s−1300）以下，雪线以上仍由 alpine 接管。
     veg = [
-        (0,    (104, 124, 96)),    # 低地兜底：山地森林深绿
-        (2900, (110, 132, 102)),   # 山地针叶林（南部深切河谷 / 吉隆沟方向）
-        (3400, (122, 142, 108)),   # 针叶林 → 灌丛过渡
-        (3900, (138, 158, 118)),   # 灌丛草甸
-        (4300, (150, 172, 132)),   # 高原草原 / 河谷草甸（佩枯措谷地 ≈4125 m）
+        (0,    (86, 102, 80)),     # 最深河谷
+        (1200, (100, 120, 88)),    # 山地常绿阔叶林
+        (2000, (118, 138, 96)),    # 针阔混交
+        (2600, (140, 154, 104)),   # 针叶林
+        (3200, (166, 170, 116)),   # 林线 → 灌丛
+        (3700, (190, 184, 130)),   # 高山草甸（黄绿）
     ]
     top = max(e for e, _ in veg)
     remapped = top > s                    # 有锚点窜到雪线以上 → 按比例收编
@@ -624,7 +643,10 @@ def belt_stops(dem, snowline, verbose=True):
 
 # 晕渲调制：环境光比例越高整体越亮、对比越弱。
 # 太高（>0.75）地形会"平"到看不见，太低（<0.4）背光面发黑、压掉等高线。
-AMBIENT, DIRECTIONAL = 0.68, 0.40
+AMBIENT, DIRECTIONAL = 0.60, 0.50
+# ⚠ 2026-10-20：0.66/0.46 → 0.60/0.50。原配比下 (amb+dir*hs) 只在 0.79–1.0 之间变化，
+#   明暗差只有 21%，整张图发灰、不立体（和坡向镜像 bug 叠在一起时几乎看不出山形）。
+#   现在 0.70–1.00，脊谷分明；再往下降环境光就会把背光面压成黑块，别低于 0.55。
 HL_CLIP, HL_KEEP = 240.0, 0.35   # 高光软限幅：超 240 只保留 35%，亮而不死白
 # 阴阳分色（瑞士晕渲的看家手法）：受光面微微偏暖、背光面微微偏冷。
 # 纯灰阶晕渲会让人误以为"纸是灰的"，加一点点色温差，山体立刻像有阳光与阴影 —— 
@@ -637,7 +659,9 @@ TINT_WARM_RGB = (1.05, 1.00, 0.95)
 
 def shade_rgb(rgb, hs, snow_w=None):
     """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。纯 numpy，输入输出都是 float 数组。
-    snow_w：雪线以上回抬权重（0–1，由高程渐入）。山影会把雪涂成灰（0.68 环境光下
+    snow_w：雪线以上**强塑形**权重（0–1，由高程渐入）。注意方向与 2026-10-20 之前相反：
+    早先是"向无山影的设色回抬"（怕雪被涂灰），结果雪线以上整体被抹平；现在改为在雪面用
+    更狠的环境光/方向光配比（0.58/0.60）塑形 —— 受光近白、背光中灰，冰面才有立体感。
     背光面只剩 68% 亮度），"雪线之上偏白"就立不住 → 向无山影的设色按权重回抬，
     保留一部分立体感的同时让雪面回到白色。"""
     img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
@@ -652,8 +676,13 @@ def shade_rgb(rgb, hs, snow_w=None):
     over = img > HL_CLIP
     img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
     if snow_w is not None:
+        # 雪面塑形（2026-10-20 贡嘎大环）：原来是"向无山影的设色回抬"，雪线以上越白越平。
+        # 改成用**更强的明暗塑形**（环境光 0.58 / 方向光 0.60，比地面的 0.60/0.50 更狠）：
+        # 受光面仍是近白，背光面压到中灰 —— 冰川的刃脊、冰瀑、雪盆才立得起来。
+        # 量测口径：同一片雪坡的"低频明暗 std"应 ≥ 35（回抬版只有 30 左右，肉眼就是白纸）。
         w = np.asarray(snow_w, np.float32)[..., None]
-        img = img * (1 - w) + rgb * w
+        shaped = np.clip(rgb * (0.58 + 0.60 * hs)[..., None], 0, 255)
+        img = img * (1 - w) + shaped * w
     return img
 
 
@@ -779,6 +808,10 @@ def _contour_tint(base, mode):
     """
     lum = base @ np.asarray([0.299, 0.587, 0.114], np.float32)
     k, add, dmin = (CONTOUR_DARKEN[mode], CONTOUR_LIGHTEN[mode], CONTOUR_MIN_DELTA[mode])
+    # 雪原减淡（2026-10-20 贡嘎大环）：亮度 >200 的像素把压暗系数往 SNOW_CONTOUR_DARKEN 收。
+    # 不加这一步，240 的雪面 ×0.46 = 110 —— 近黑线压在纯白上，25 m 间距一密就成了"布纹"。
+    snow = np.clip((lum - 200.0) / 45.0, 0.0, 1.0)
+    k = k + (SNOW_CONTOUR_DARKEN[mode] - k) * snow
     bright = lum >= CONTOUR_LIGHT_T
     tgt = np.where(bright, lum * k, lum + add)
     tgt = np.where(bright, np.minimum(tgt, lum - dmin), np.maximum(tgt, lum + dmin))
@@ -790,7 +823,7 @@ def _contour_tint(base, mode):
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
                    minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
-                   derived=CONTOUR_DERIVED):
+                   derived=CONTOUR_DERIVED, m_per_px=None):
     """在输出分辨率上栅格化等高线并写入 RGB 数组。
 
     原理：band = floor(elev / 间隔)，相邻像素 band 不同即该处有一条等高线。
@@ -804,6 +837,20 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     b_major = np.floor(dem_out / major).astype(np.int32)
     m_minor = _dilate_n(_band_edges(b_minor), w_minor)
     m_major = _dilate_n(_band_edges(b_major), w_major)
+    n_skip = 0
+    if m_per_px:
+        # ---- 陡坡省略首曲线（2026-10-20 贡嘎大环）----
+        # 25 m 等高距在 ~11 m/px 栅格上，45° 坡处相邻两线只隔 2.3 px —— 画出来不是等高线，
+        # 是"布纹"：整片雪原/陡壁变成均匀灰网纹。制图惯例本就是"陡坡处等高线自然合并"：
+        #   tan ≥ 1.0(45°) → 不画首曲线（只留计曲线，100 m 间距仍有 ~9 px）
+        #   tan ≥ 2.0(63°) → 计曲线也不画（陡崖区用断崖符号表达）
+        gy, gx = np.gradient(dem_out.astype(np.float32))
+        tan_slope = np.hypot(gx, gy) / float(m_per_px)
+        keep_minor = tan_slope < STEEP_SKIP_MINOR
+        keep_major = tan_slope < STEEP_SKIP_MAJOR
+        n_skip = int((m_minor & ~keep_minor).sum())
+        m_minor &= keep_minor
+        m_major &= keep_major
     # alpha 融合写回（rgb 是 uint8，必须过 float，否则整数回绕会把线画成黑块）
     f = rgb.astype(np.float32)
     base = f.copy() if derived else None
@@ -816,7 +863,8 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     np.copyto(rgb, np.clip(f, 0, 255).astype(np.uint8))
     n_lv = int((dem_out.max() - dem_out.min()) // minor)
     print(f"   等高线 每 {minor:.0f} m（计曲线每 {major:.0f} m），约 {n_lv} 级，"
-          f"线覆盖 {m_minor.mean()*100:.1f}% 像素")
+          f"线覆盖 {m_minor.mean()*100:.1f}% 像素"
+          + (f"，陡坡省略 {n_skip*100.0/max(1, m_minor.size):.1f}%" if n_skip else ""))
     return rgb
 
 
@@ -1410,8 +1458,11 @@ def build_terrain():
               f"若本线最高峰远低于雪线，删掉这个键更合适")
     rgb = hypso(dem, snowline=snow_m)
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色
-    # 雪线以上按高程渐入回抬权重（600 m 内 0→0.6）：山影别把雪涂灰
-    snow_w = np.clip((dem - snow_m) / 600.0, 0.0, 1.0) * 0.6
+    # ⚠ 2026-10-20（贡嘎大环）重做：原来这里是「向无山影的设色回抬」（600 m 内 0→0.6），
+    #   本意是"山影别把雪涂灰"，实际把雪线以上的晕渲压掉六成；而峰顶设色本身已接近纯白，
+    #   两者叠加 → 雪原变成"白纸 + 等高线"，贡嘎主峰群 2400 m 高差全是平的。
+    #   现在改为：**雪面用更强的明暗塑形**（见 shade_rgb 的 shaped），只保留一点点回抬。
+    snow_w = np.clip((dem - snow_m) / 500.0, 0.0, 1.0) * 0.85
     img = shade_rgb(rgb, hs, snow_w=snow_w)
     img = np.clip(img, 0, 255).astype(np.uint8)
     # BICUBIC 而非 LANCZOS：LANCZOS 在陡崖等高反差处会产生振铃，被随后的 USM 放大成"颗粒噪点"。
@@ -1426,7 +1477,9 @@ def build_terrain():
     print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
           f"线宽 {CONTOUR_DILATE}@{RASTER_W}px）…")
     arr = np.asarray(pil).copy()
-    paint_contours(arr, dem_out, *CONTOUR_DILATE, minor=c_minor, major=c_major)
+    _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
+    paint_contours(arr, dem_out, *CONTOUR_DILATE, minor=c_minor, major=c_major,
+                   m_per_px=_m_per_px)
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     scale_raster_y = RASTER_H / dh
     snow_mask = paint_snowline(arr, dem_out, level=snow_m)

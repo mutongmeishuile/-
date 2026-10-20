@@ -42,6 +42,13 @@ python scripts/make_all.py                  # ⑥ 一条命令跑全程（prep�
 python scripts/make_all.py --skip-dem       #   改配色/标注时跳过地形，单轮 ~15s
 ```
 
+出完地形**先跑一条光照自检**（坡向公式一旦写反，脚本不报错、等高线也对得上，
+只有这个统计量能抓出来 —— 详见 `references/pitfalls-terrain.md` §16）：
+
+```bash
+python scripts/check_hillshade.py           # 西北坡必须比东南坡亮 ≥0.25，退出码非 0 = 光反了
+```
+
 用在线瓦片做底图时（B 路线）多一步 —— 瓦片只留线画，底色与等高线用本地 DEM 重出：
 
 ```bash

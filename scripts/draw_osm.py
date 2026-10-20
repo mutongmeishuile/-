@@ -56,6 +56,11 @@ C_STREAM_SEASON = (152, 192, 222, 200)
 # 所以这个开关**按线路配**：route_def.CFG["glacier_layer"] = True（见 _cfg_flag）。
 # ⚠ 开了要同步：图例加一行冰川、图注写明"浅蓝面为冰川（OSM）"。
 DRAW_GLACIER = False
+# 底图注记是否走矢量层（2026-10-20，贡嘎大环）：
+#   True  = 只记录位置/字号，字由 map_svg 画成 <text> —— 轨迹线不会再压住地名、缩放不糊、
+#           全图文字的避让在一个坐标系里算（详见 references/pitfalls-map-svg.md §19）。
+#   False = 回到"把字烤进 jpg"的旧行为（CFG["labels_vector"]=False 可临时切回）。
+LABELS_VECTOR = True
 
 # 注记之间的留白（逻辑像素 × S）。2026-10-17 希夏邦马：字号收 0.85 倍后仍有挤压，
 # 把留白从 2.0 提到 **2.8** —— 在"避免重叠"这件事上，留白比缩字号更有效：
@@ -340,6 +345,9 @@ class Labeller:
         self.grid = set()
         self.cell = cell
         self.n_overlap = 0     # 「实在放不下也要放」的强制落位数（= 会与已有注记挤在一起的个数）
+        self.boxes = []          # 已落位注记的矩形（栅格 px），导出给 map_svg 避让
+        self.draw_pixels = True  # False = 只记录不画（矢量注记模式）
+        self.records = []        # 矢量注记：文本 / 左上角 / 基线 / 字号 / 颜色
 
     def _mark(self, bb):
         x0, y0, x1, y1 = bb
@@ -393,9 +401,9 @@ class Labeller:
                 continue
             hits = self._hits(box)
             if hits == 0:                                  # 完美位置
-                d.text((x, y), text, font=font, fill=fill,
-                       stroke_width=stroke_w, stroke_fill=stroke)
+                self._emit(d, text, x, y, font, fill, stroke, stroke_w)
                 self._mark(box)
+                self.boxes.append(box)
                 return True
             if best is None or hits < best[0]:             # 记下最不挤的那个
                 best = (hits, x, y, box)
@@ -405,10 +413,25 @@ class Labeller:
             return False
         self.n_overlap += 1            # 命中"两害相权"分支：记录一次挤放，供自检核对
         _, x, y, box = best
-        d.text((x, y), text, font=font, fill=fill,
-               stroke_width=stroke_w, stroke_fill=stroke)
+        self._emit(d, text, x, y, font, fill, stroke, stroke_w)
         self._mark(box)
+        self.boxes.append(box)
         return True
+
+    def _emit(self, d, text, x, y, font, fill, stroke, stroke_w):
+        """画，或只记录（矢量模式）。位图用左上角，SVG 用基线 —— 两个都存。"""
+        if self.draw_pixels:
+            d.text((x, y), text, font=font, fill=fill,
+                   stroke_width=stroke_w, stroke_fill=stroke)
+        try:
+            asc = font.getmetrics()[0]
+        except Exception:                                          # noqa
+            asc = int(getattr(font, "size", 12) * 0.8)
+        self.records.append({"t": text, "x": round(float(x), 1), "y": round(float(y), 1),
+                             "base": round(float(y + asc), 1),
+                             "s": int(getattr(font, "size", 12)),
+                             "f": list(fill), "st": list(stroke),
+                             "sw": round(float(stroke_w), 1)})
 
 
 # ------------------------------------------------------------------ 主流程
@@ -602,6 +625,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     # ---------------- 注记 ----------------
     lab = Labeller(size, cell=14 * S)
+    lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
     if seed_cells:
         lab.grid |= set(seed_cells)
 
@@ -931,6 +955,15 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             print(f"   ⚠ 缝合残链 {_STITCH_STATS['dropped']} 条"
                   f"（{_STITCH_STATS['dropped_pts']} 点）已丢弃 —— "
                   f"relation 成员未闭合且接不上，检查下载窗口是否截断了湖/冰川")
+
+    # 导出给 map_svg：占位框（避让）+ 矢量注记（画字）
+    try:
+        (OUT / "label_boxes.json").write_text(
+            json.dumps({"ss": S,
+                        "boxes": [[round(v, 1) for v in b] for b in lab.boxes],
+                        "labels": lab.records}, ensure_ascii=False), encoding="utf-8")
+    except Exception as _e:                                        # noqa
+        print(f"   ⚠ 注记导出失败：{_e}")
 
     return Image.alpha_composite(pil.convert("RGBA"), ov).convert("RGB")
 

@@ -445,6 +445,14 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **用户说"等高线颜色要和这片地接近"** | `references/pitfalls-terrain.md` §3（**派生色** `_contour_tint()`：同色相 + 降饱和 0.30 + 明度分档；暗处反转成提亮；强制最小明度差） |
 | **"比例尺越大等高线越密、地图难看"**（长线/大窗口） | `references/pitfalls-terrain.md` §3（`pick_contour_interval`：覆盖率 ≤30%，狼塔自动 20→50 m） |
 | **"如何更真实地反映地貌"**（背光侧一片黑、地形发平） | `references/pitfalls-terrain.md` §4（**MDOW 多向晕渲** + 阴阳分色）、`references/self-hosted-terrain.md` §3 |
+| **"谷底看起来像山脊" / 山体阴坡阳坡是反的** | `references/pitfalls-terrain.md` §16（坡向公式在图像坐标系被镜像；**`python scripts/check_hillshade.py` 一把判定**，退出码非 0 = 光反了） |
+| **"雪线以上一片白、主峰不立体"** | `references/pitfalls-terrain.md` §17（`snow_w` 别用"回抬"，改成雪面强塑形；验收：雪坡低频明暗 std ≥ 35） |
+| **"色阶又黄又绿又黄 / 过渡发脏"** | `references/pitfalls-terrain.md` §18（带位必须单调；混用绝对米数与雪线偏移会折返；`_ramp_check()` 自检） |
+| **"图例位置不合适 / 压在比例尺上"** | `references/pitfalls-map-svg.md` §16（位置不能写死；占位表**必须含指北针与比例尺**） |
+| **"字体大小不统一"** | `references/pitfalls-map-svg.md` §17（只留两级：地名 13 一档、POI 19/17 一档） |
+| **"轨迹/POI 标注遮住底图地名"** | `references/pitfalls-map-svg.md` §19（底图导出 `label_boxes.json` 给 SVG 避让 + `poi_label_cells` 反向预留；⚠ 字号单位要乘 `ss`） |
+| **"峰名挤成一坨 / 三连山三条名叠在一起"** | `references/pitfalls-map-svg.md` §20（邻域密度 → 字号阶梯 13/10.5/9，逐条试、绝不原地硬叠） |
+| **"标注重复 / 一山两名"** | `references/pitfalls-map-svg.md` §18（自绘地名 `route_def.PLACES` 必须进 OSM 的 skip_names，再加 `seen_names` 同名去重） |
 | **瓦片等高线太密/太淡，或用户要适配等高距** | `references/tile-basemap.md` §7（抹除+DEM 自绘管线）、§11（100/500 m 攻略适配） |
 | **等高线与地形对不上（位置错）** | `references/tile-basemap.md` §12（DEM→栅格映射核查清单） |
 | **等高线/设色后地图"一个颜色"无地形感** | `references/tile-basemap.md` §11（线画分离设色法） |
@@ -558,6 +566,14 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 - [ ] **雪线以上只有积雪白，不夹绿块**：取 DEM ≥ 雪线的像素算「绿度 = G−(R+B)/2 > 15」占比，
       应 ≈0（等高线/JPEG 噪点级别）。出现成片绿 → `belt_stops` 的植被锚点窜到雪线以上了，
       见 `references/pitfalls-terrain.md` §5b
+- [ ] **晕渲光照方向 = 西北**：`python scripts/check_hillshade.py` 必须退出码 0
+      （判据：面向西北的坡亮 ≥ 面向东南的坡 +0.25）。**这条最值得跑** ——
+      坡向公式写错时不会报错、等高线也对得上，只有这个统计量能抓出来（§16）
+- [ ] **色带单调**：`make_terrain.py` 打印「色带自检：雪线以下 G−R 单调递减」；
+      出现「⚠ 色带折返」就必须改带位（§18）
+- [ ] **雪线以上有地形**：雪线以上若占图面 >1/5，裁一片雪坡算 `GaussianBlur(5)` 后 std ≥ 35；
+      不达标说明 `snow_w` 还在"回抬"（§17）
+- [ ] **主峰群不是白纸**：1:1 放大最高峰一带，能看到刃脊/冰瀑的明暗，不只是一圈圈等高线
 - [ ] **切边扫描超阈值时先判轨迹完整性**，别抬阈值：满幅地图看 `qa_guide` 打印的四边余量
       （全 ≥0 = 没裁）；只有出现负余量才是真裁切（§5c）
 - [ ] **峰名分级是相对的**：`OSM 叠加` 日志里有 `[p88≥Xm/p62≥Ym]`，X/Y 要符合本线海拔量级
