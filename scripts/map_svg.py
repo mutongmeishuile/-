@@ -14,6 +14,7 @@
 """
 import base64
 import io
+import json
 import math
 
 import guide_common as GC
@@ -345,9 +346,17 @@ def _base_labels():
     """
     try:
         lb = json.loads((GC.OUT / "label_boxes.json").read_text(encoding="utf-8"))
-    except Exception:                                              # noqa
+    except FileNotFoundError:
+        print("   ⚠ 没有 out/label_boxes.json —— 底图地名不会出现在图上（先跑 make_terrain.py）")
+        return ""
+    except Exception as e:                                         # noqa
+        # ⚠ 2026-10-20 教训：这里原本是 `except Exception: return ""`，
+        #   把「json 没 import」这种低级错误也吞掉了 —— 15 条线路的地名整层消失，
+        #   图看着"只是有点空"，没有任何报错。异常一律说出来。
+        print(f"   ⚠ 底图地名加载失败：{type(e).__name__}: {e}")
         return ""
     if not lb.get("labels"):
+        print("   ⚠ label_boxes.json 里没有 labels 字段 —— 底图地名不会出现")
         return ""
     ss = float(lb.get("ss", 1.0)) or 1.0
     out = []
@@ -372,8 +381,10 @@ def _seed_label_boxes():
         ss = float(lb.get("ss", 1.0)) or 1.0
         for x0, y0, x1, y1 in lb.get("boxes", []):
             _OCC.append((x0 / ss, y0 / ss, x1 / ss, y1 / ss))
-    except Exception:                                              # noqa
+    except FileNotFoundError:
         pass
+    except Exception as e:                                         # noqa
+        print(f"   ⚠ 注记占位加载失败：{type(e).__name__}: {e}")
 
 
 def build_map_overlay(mobile=False):
