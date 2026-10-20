@@ -560,6 +560,10 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
       山顶是**有等高线、有渐变的雪帽**，不是一块没有线的平板
 - [ ] **等高距是自适应的**：`make_terrain.py` 打印的「等高距自适应 → 首曲线 X / 计曲线 Y，
       线覆盖 Z% ≤ 目标 30%」，Z 必须 ≤ 30%；长线窗口不许还是 20 m（会糊成一片棕）
+- [ ] **季节档 = 夏季**（技能默认）：`make_terrain.py` 日志应打印
+      `季节档 summer：雪线 X → X+350 m`。徒步季是 6–10 月，按年常态出图会把
+      夏季实走的 3800–4200 m 草坡画成雪白（见 `references/pitfalls-terrain.md` §20）。
+      反季节/沙漠线路可用 `CFG["terrain_season"]` 覆盖。
 - [ ] **雪线四个键口径一致**：`snowline_m` / `snowline_label` / `snowline_note` / `snowline_src`
       要么全配要么全删；日志出现「⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 6000 m」
       **必须处理**（查表重设，或低海拔线路直接删掉雪线）
