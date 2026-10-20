@@ -69,6 +69,9 @@ DRAW_GLACIER = False
 LABELS_VECTOR = True
 # 林地/草地是否保留半透明填充（False = 只描边，默认）。
 LANDUSE_FILL = False
+# 无名峰是否只标高程（2026-10-20 北天山：OSM 峰点 333 个，带名字的 0 个）。
+# 只标「▲ 4016」这样的读数，不编造名字 —— 一片没有地名的山至少还有高程可读。
+PEAK_UNNAMED_ELE = True
 
 # 注记之间的留白（逻辑像素 × S）。2026-10-17 希夏邦马：字号收 0.85 倍后仍有挤压，
 # 把留白从 2.0 提到 **2.8** —— 在"避免重叠"这件事上，留白比缩字号更有效：
@@ -381,7 +384,8 @@ class Labeller:
         return n
 
     def place(self, d, text, xy, font, fill, stroke=(255, 255, 255),
-              anchor_center=True, force=False, pad=2, stroke_w=1.8, fallback=True):
+              anchor_center=True, force=False, pad=2, stroke_w=1.8, fallback=True,
+              kind=""):
         """放注记。优先完全不压已有注记；**实在放不下也要放**（fallback）。
 
         ⚠ 2026-10-09 亚丁线实测：等高线高程标注会先占用网格（104 个标注 ≈ 10% 单元，
@@ -810,8 +814,20 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     else:
         q_hi = q_mid = None       # 样本太少：不做相对分级，一律中档
     for x, y, name, ele in peaks:
-        if not name or name in skip_names:
-            n_skip += 1 if name else 0
+        if not name:
+            ev0 = _ele_of(ele)
+            if PEAK_UNNAMED_ELE and ev0:
+                k = 0.72
+                d.polygon([(x, y - 6 * S * k), (x - 5.4 * S * k, y + 3.6 * S * k),
+                           (x + 5.4 * S * k, y + 3.6 * S * k)],
+                          fill=(150, 140, 124), outline=(255, 255, 255))
+                if lab.place(d, f"{ev0:.0f}", (x, y + 7 * S), f_peak_lo, (120, 106, 88),
+                             anchor_center=False, stroke_w=1.8 * S, pad=LBL_PAD * S,
+                             fallback=False, kind="peak"):
+                    n_peak += 1
+            continue
+        if name in skip_names:
+            n_skip += 1
             continue
         ev = _ele_of(ele)
         if ev is None:

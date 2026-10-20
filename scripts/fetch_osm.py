@@ -61,6 +61,15 @@ QUERY = f"""
   node["place"~"^(city|town|village|hamlet|suburb|neighbourhood|locality)$"]({BBOX});
   node["natural"="peak"]({BBOX});
   node["natural"="saddle"]({BBOX});
+  node["natural"="valley"]({BBOX});
+  node["natural"="ridge"]({BBOX});
+  node["mountain_pass"="yes"]({BBOX});
+  way["natural"="valley"]({BBOX});
+  way["natural"="ridge"]({BBOX});
+  node["tourism"="viewpoint"]({BBOX});
+  node["historic"]({BBOX});
+  way["natural"="water"]({BBOX});
+  node["natural"="saddle"]({BBOX});
   node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({BBOX});
   node["amenity"="place_of_worship"]({BBOX});
 );
