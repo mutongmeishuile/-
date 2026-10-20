@@ -1468,11 +1468,13 @@ def build_terrain():
               f"换线路必须按山脉查表重设（references/china-terrain.md §4）；"
               f"若本线最高峰远低于雪线，删掉这个键更合适")
     global TINT_BAND_M
-    try:                       # 先粗算等高距，供"色阶按等高带量化"使用
-        _c_pre = pick_contour_interval(
-            np.asarray(Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS),
-                       dtype=np.float32), verbose=False)[0]
-        TINT_BAND_M = float(_c_pre)
+    # 色阶分级步长（米）：0 = **连续渐变**（默认）。
+    # ⚠ 2026-10-20 用户先要"同一等高带内一致"、后要"过渡不能僵硬、要渐变"——
+    #   这两件事互斥：量化到 100 m 会得到一层层硬边色块（像海报化），
+    #   连续插值才是自然地貌的样子。**最终选渐变**，分级只作为可选旋钮：
+    #   CFG["tint_band_m"] = 100 可切回分层填色（分界线落在计曲线上）。
+    try:
+        TINT_BAND_M = float(_route_cfg("tint_band_m", 0.0))
     except Exception:                                              # noqa
         TINT_BAND_M = 0.0
     rgb = hypso(dem, snowline=snow_m)

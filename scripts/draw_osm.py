@@ -32,7 +32,13 @@ FONT_CANDIDATES = [
 ]
 
 # ---- 配色（浅色地形底图上取可读性优先）----
+# 林地/草地面：**只描边、不填充**（2026-10-20 用户反馈"斑块"）。
+# 半透明填充 + 羽化会把每块 OSM 面变成一坨淡色雾斑 —— 面本身碎、边界又不规则，
+# 整片山体像被抹了抹布。林地范围只是背景信息，画一圈极淡的绿虚线足够，
+# 地形与晕渲完整保留。想恢复旧观感：CFG["landuse_fill"]=True。
 C_WOOD      = (198, 220, 190, 95)
+C_WOOD_ED   = (150, 172, 136, 190)
+C_MEADOW_ED = (176, 190, 150, 150)
 C_MEADOW    = (228, 240, 210, 70)
 C_WATER     = (166, 205, 233, 225)
 C_WATER_ED  = (116, 166, 205, 255)
@@ -61,6 +67,8 @@ DRAW_GLACIER = False
 #           全图文字的避让在一个坐标系里算（详见 references/pitfalls-map-svg.md §19）。
 #   False = 回到"把字烤进 jpg"的旧行为（CFG["labels_vector"]=False 可临时切回）。
 LABELS_VECTOR = True
+# 林地/草地是否保留半透明填充（False = 只描边，默认）。
+LANDUSE_FILL = False
 
 # 注记之间的留白（逻辑像素 × S）。2026-10-17 希夏邦马：字号收 0.85 倍后仍有挤压，
 # 把留白从 2.0 提到 **2.8** —— 在"避免重叠"这件事上，留白比缩字号更有效：
@@ -575,15 +583,17 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         ov.paste(Image.new("RGBA", (bb[2] - bb[0], bb[3] - bb[1]), color),
                  bb[:2], mk.crop(bb))
 
+    land_fill = _cfg_flag("landuse_fill", LANDUSE_FILL)
     n_poly = n_line = n_glacier = 0
     road_refs = []          # (pts, ref, highway_class) 道路编号标注候选
     for _, kind, sub, pts, e, holes in drawable:
-        if kind == "wood":
-            d.polygon(pts, fill=C_WOOD) if len(pts) > 2 else None
-            n_poly += 1
-        elif kind == "meadow":
+        if kind in ("wood", "meadow"):
             if len(pts) > 2:
-                d.polygon(pts, fill=C_MEADOW)
+                if land_fill:
+                    d.polygon(pts, fill=C_WOOD if kind == "wood" else C_MEADOW)
+                else:
+                    _dashed(d, pts + [pts[0]], C_WOOD_ED if kind == "wood" else C_MEADOW_ED,
+                            W(1.0), 5.0 * S, 5.0 * S)
                 n_poly += 1
         elif kind == "waterbody":
             if len(pts) > 2:
