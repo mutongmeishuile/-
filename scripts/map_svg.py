@@ -854,8 +854,12 @@ def _legend_band_items():
         items.append(("day", col, tag, t, km, None))
     for kind, nm in _legend_symbols():
         items.append(("sym", None, "", nm, "", kind))
+    # 附加行（雪线 / 步道）说明偏长，图例带里用 CFG 给的 `short` 版，
+    # 完整口径留给 HTML 页面的文字图例（那里横排宽度够）。
+    short = {it.get("tag"): it.get("short")
+             for it in (_CFG.get("legend_extra") or []) if it.get("short")}
     for col, tag, desc, km, w, dash in extra_rows:
-        items.append(("line", col, tag, desc, "", None))
+        items.append(("line", col, tag, short.get(tag) or desc, "", None))
     return items
 
 

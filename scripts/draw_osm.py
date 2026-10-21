@@ -487,8 +487,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     NO_CROWD = _cfg_flag("label_no_crowd", False)
 
     def W(v):
-        """线宽 → 栅格整数像素。"""
-        return max(1, int(round(v * S)))
+        """线宽 → 栅格整数像素。
+
+        ⚠ 2026-10-21 用户：水系/公路线太粗。总览图 ss=4（10000 px）时，
+        5.0 的公路芯线乘 4 就是 20 px —— 比轨迹还宽。大栅格统一乘 0.55，
+        小栅格（ss=2）保持不变。
+        """
+        k = 0.55 if S >= 3 else 1.0
+        return max(1, int(round(v * S * k)))
 
     def F(v):
         """字号 → 栅格像素。"""
