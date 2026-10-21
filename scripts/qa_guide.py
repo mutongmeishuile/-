@@ -194,18 +194,34 @@ def render_overlay(label, width, doc_h):
     return out
 
 
+MARK = "★ TODO"          # 待办标记（与 new_route.TODO 同源，改一处要同步另一处）
+
+
 def todo_guard():
-    """`★ TODO` 未填守卫：防止把占位符交付出去（自主流程尤其要避免）。"""
+    """`★ TODO` 未填守卫：防止把占位符交付出去（自主流程尤其要避免）。
+
+    2026-10-22 修：判据从 `'"★ TODO '`（前引号紧贴标记）放宽为**数全部 `'★ TODO'`**。
+    旧判据只是为了省掉「排除 _todo_count 自身那行」这一步，代价是把**不以引号开头**
+    的占位整个漏掉 —— `CFG["foot"]` 的 `<b>安全提示：</b>★ TODO …` 与 notes 里的
+    `</b>，★ TODO 折算成…` 正是这个形态，结果 QA 报「无占位 ✓」而页面照印占位文字，
+    漏掉的偏偏是最要紧的安全提示。
+
+    放宽的前提：new_route 生成的骨架已把标记拆成 `"★" + " TODO"` 两段拼接，
+    故 _todo_count() 自身不再命中计数，可以放心全量统计。
+    """
     rd = HERE / "route_def.py"
     if not rd.exists():
         return 0
-    # 占位都是 "★ TODO <描述>"（开引号+标记+空格）；route_def 的 _todo_count 函数自身那行
-    # 也含 '"★ TODO '，故总数减 1 排除自身这行，得到真实占位数。
-    n = max(rd.read_text(encoding="utf-8").count('"★ TODO ') - 1, 0)
+    txt = rd.read_text(encoding="utf-8")
+    n = txt.count(MARK)
+    # 改版前的旧骨架：_todo_count() 的函数体与注释里各含一次完整标记 → 虚增 2
+    if "_todo_count" in txt and ('"%s ' % MARK) in txt:
+        print("  [..]  旧骨架（改版前生成）：_todo_count() 自身含标记字面量，"
+              "下面这个数会虚增 2 —— 真值自己减掉，或重新跑一次 new_route.py")
     if n:
-        print(f"  !! route_def.py 仍有 {n} 处 ★ TODO 未填 —— 交付物会带占位文字，先回填再交付")
+        print(f"  !! route_def.py 仍有 {n} 处 {MARK} 未填 —— 交付物会带占位文字，先回填再交付")
     else:
-        print("  [OK]  route_def.py 无 ★ TODO 占位（文案已填）")
+        print(f"  [OK]  route_def.py 无 {MARK} 占位（文案已填）")
     return n
 
 

@@ -42,7 +42,31 @@ PS_BASE = 0.66        # 点位符号／标注基准缩放（0.85 → 0.74 → 0.
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
 MFS_S = 2.8           # 手机版里程点/线宽的额外放大
 
-_CFG = getattr(RD, "CFG", {})
+class _LazyCfg:
+    """`route_def.CFG` 的惰性代理 —— **取值那一刻才去读**，不在 import 时快照。
+
+    2026-10-22：这里原先是 `_CFG = getattr(RD, "CFG", {})`，import 的那一瞬间就把
+    配置固化成普通 dict 了；而 draw_osm / make_terrain 都是运行时现取 ——
+    同一份配置在两个脚本里语义不同（详见 guide_common.cfg 的说明）。
+    改成代理后，下面 `_CFG.get(k, d)` 的写法一个字都不用改，行为就跟其它脚本一致了。
+    """
+
+    def get(self, key, default=None):
+        return GC.cfg(key, default)
+
+    def __getitem__(self, key):
+        v = GC.cfg(key, None)
+        if v is None:
+            raise KeyError(key)
+        return v
+
+    def __contains__(self, key):
+        return GC.cfg(key, None) is not None
+
+
+_CFG = _LazyCfg()
+# ⚠ 下面这 4 个仍是**模块级**求值（import 时取一次）：它们被当成"配色常量"用，
+#   语义上就是固定值，保持原样。真正需要跟着配置变的是函数内的那些 _CFG.get()。
 D1_C = _CFG.get("d1_color", "#E4572E")
 D2_C = _CFG.get("d2_color", "#1E9E76")
 D1_T = _CFG.get("d1_text", "#B23A1C")

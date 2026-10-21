@@ -46,21 +46,24 @@ def main():
                         f"换有 numpy/Pillow 的那个解释器，或装：pip install {m if m=='numpy' else 'Pillow'}")
 
     print("② 无头浏览器（渲染长图必需）")
-    cands = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        "/usr/bin/google-chrome",
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    ]
-    found = [p for p in cands if Path(p).exists()]
-    if found:
-        ok(f"找到 {found[0]}")
-        if "Edge" in found[0]:
-            print("         （无头模式由 guide_common.browser_shot 自动降级 --headless=new → --headless）")
+    # 候选清单收敛在 guide_common.BROWSER_CANDS（Windows/Linux/macOS 三平台 + PATH 兜底），
+    # 这里不再自己抄一份 —— 抄一份的后果是"预检说没有、真跑却能跑"（或反过来），
+    # 报出来的结论和实际行为对不上，比没有预检更糟。
+    #
+    # 用**局部** import 而不是放模块顶层：guide_common 依赖 numpy/Pillow，
+    # 若放顶层，依赖不齐时预检会死在第 ② 步 —— 而"依赖不齐"正是第 ① 步要报的事。
+    try:
+        import guide_common as GC
+        brw = GC.find_browser()
+    except FileNotFoundError:
+        fail += bad("没找到 Chrome/Edge —— 长图渲染无从谈起。"
+                    "装一个，或把路径加进 guide_common.BROWSER_CANDS")
+    except ImportError as e:
+        fail += bad(f"无法加载 guide_common（{e}）—— 依赖不齐，见上面 ①")
     else:
-        fail += bad("没找到 Chrome/Edge —— 长图渲染无从谈起")
+        ok(f"找到 {brw}")
+        if "dge" in brw:
+            print("         （无头模式由 guide_common.browser_shot 自动降级 --headless=new → --headless）")
 
     print("③ 路径约定（全部中间产物统一在 scripts/out/）")
     out = HERE / "out"
@@ -94,6 +97,7 @@ def main():
         ("build_route_guide.py", "没有轨迹、纯手绘的兜底方案"),
         ("new_route.py",     "开工准备：从 out/ 产物生成 route_def.py 骨架"),
         ("make_all.py",      "一条命令跑全流程（调度器）"),
+        ("selftest.py",      "改完共享代码先跑它：离线断言投影一致 / CFG 同源 / 字体统一 / TODO 守卫"),
     )
     miss_req = [f for f in REQUIRED if not (HERE / f).exists()]
     if miss_req:

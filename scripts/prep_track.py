@@ -27,10 +27,14 @@ HERE = Path(__file__).resolve().parent
 
 
 def _cfg_get(key):
+    """读 route_def.CFG —— 实现收敛到 `guide_common.cfg`（原先这里是第 3 份重复实现）。
+
+    仍然走**局部** import：本脚本是流水线第一步，不该在这里硬依赖 guide_common 的
+    numpy/Pillow（那两个只有渲染步骤才真正需要）；加载失败就当"没配"，不挡流程。
+    """
     try:
-        sys.path.insert(0, str(HERE))
-        import route_def as RD
-        return getattr(RD, "CFG", {}).get(key)
+        import guide_common as GC
+        return GC.cfg(key)
     except Exception:                                              # noqa
         return None
 

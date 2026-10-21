@@ -34,6 +34,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 TODO = "★ TODO"          # 待办标记：生成的文件里靠它计数
+TODO_A, TODO_B = "★", " TODO"   # 同一标记的两半（供生成文件里的 _todo_count 拼接，见 gen）
 
 # 分日配色（够用到 4 天；更多天会在末尾循环）。第二项是浅底上的深色文字色。
 DAY_PALETTE = [("#E4572E", "#B23A1C"), ("#1E9E76", "#0F6E5C"),
@@ -480,10 +481,13 @@ CFG = {
 
 
 def _todo_count():
-    """数一下本文件里还剩几处待办标记 —— 交付前应该清零。"""
-    # 占位都是「★ TODO」<描述>（开引号+标记+空格）；本函数计数调用里那个字面量
-    # 也含在内，故总数减 1 排除自身这行，得到真实占位数。
-    return max(Path(__file__).read_text(encoding="utf-8").count('"@@MARK@@ ') - 1, 0)
+    """数一下本文件里还剩几处待办标记 —— 交付前应该清零。
+
+    标记**拆成两段再拼接**，是为了让本函数自身不含完整标记字面量 ——
+    否则 `qa_guide.todo_guard` 数「本文件里出现几次标记」时会把这一行
+    也算成一处未填占位，永远清不掉零。
+    """
+    return Path(__file__).read_text(encoding="utf-8").count("@@MARK_A@@" + "@@MARK_B@@")
 
 
 if __name__ == "__main__":
@@ -663,7 +667,10 @@ def gen(args):
     lo, hi = (min(eles), max(eles)) if eles else (0, 1000)
 
     txt = (TEMPLATE
-           .replace("@@MARK@@", TODO)
+           # _todo_count 的标记分两半填，避免生成的文件里出现完整标记字面量
+           # （否则 qa_guide.todo_guard 会把那一行也当成一处未填占位）。
+           .replace("@@MARK_A@@", TODO_A)
+           .replace("@@MARK_B@@", TODO_B)
            .replace("@@TODO@@", TODO)
            .replace("@@TS@@", datetime.now().strftime("%Y-%m-%d %H:%M"))
            .replace("@@NAME@@", _q(name))
@@ -681,7 +688,6 @@ def gen(args):
            .replace("@@MARKS@@", "\n".join(marks))
            .replace("@@BOT_LBL@@", "\n".join(bot))
            .replace("@@SCHEDULE@@", "\n".join(sched)))
-    txt = txt.replace("@@MARK@@", TODO)          # _todo_count 里的那个标记
     return txt, pois, splits, dstats, has_time, len(pois_raw)
 
 

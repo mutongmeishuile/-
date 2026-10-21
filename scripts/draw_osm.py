@@ -19,17 +19,16 @@ import json, math, sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
+import guide_common as GC
+
 TILE = 256
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 
-FONT_CANDIDATES = [
-    "C:/Windows/Fonts/msyh.ttc",      # 微软雅黑
-    "C:/Windows/Fonts/msyhbd.ttc",
-    "C:/Windows/Fonts/simhei.ttf",
-    "/System/Library/Fonts/PingFang.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-]
+# 字体清单收敛到 guide_common.FONT_CANDIDATES（跨平台共用 + 按 (size,bold) 缓存）。
+# 原清单前四项是 msyh / msyhbd / simhei / PingFang —— 与收敛后的前四项**逐项相同**，
+# 所以这里没有字重回归，只是顺带多了 Linux 的 Noto/wqy 兜底。
+FONT_CANDIDATES = GC.FONT_CANDIDATES
 
 # ---- 配色（浅色地形底图上取可读性优先）----
 # 林地/草地面：**只描边、不填充**（2026-10-20 用户反馈"斑块"）。
@@ -139,27 +138,24 @@ NO_CROWD = False
 
 
 def _font(size, bold=False):
-    for p in FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(p, size)
-        except Exception:                                          # noqa
-            continue
-    return ImageFont.load_default()
+    """取中文字体（清单与缓存都在 guide_common，跨平台共用）。
+
+    ⚠ `bold` 这个形参**收敛前就是摆设** —— 旧实现的循环根本不看它，所有字号
+      都走同一份清单。收敛后**继续沿用**这一行为：若真按 bold 去选粗体清单，
+      OSM 全部底图标注会一次性从常规变粗体，属于视觉变更，要单独定，
+      不能夹在"消除重复代码"里悄悄改掉。
+    """
+    return GC.label_font(size)
 
 
 # ------------------------------------------------------------------ 投影
 def make_projector(z, tx0, ty0, box, scale):
-    """返回 lonlat → 输出像素 的函数。"""
-    n = TILE * 2 ** z
-    ox, oy = tx0 * TILE + box[0], ty0 * TILE + box[1]
+    """返回 lonlat → 输出像素 的函数。
 
-    def proj(lon, lat):
-        x = (lon + 180.0) / 360.0 * n
-        s = math.sin(math.radians(lat))
-        y = (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
-        return ((x - ox) * scale, (y - oy) * scale)
-
-    return proj
+    实现已委托 `GC.make_projector`（全技能唯一权威实现，见 guide_common.mercator_px
+    的说明）；保留同名函数是为了不重写调用点。
+    """
+    return GC.make_projector(z, tx0, ty0, box, scale, TILE)
 
 
 # ------------------------------------------------------------------ 线型
@@ -334,17 +330,14 @@ def _pct(vals, q):
 
 
 def _cfg_flag(key, default=False):
-    """读 route_def.CFG 里的布尔开关（取不到 / 不是布尔就给默认）。
+    """读 route_def.CFG 里的布尔开关（取不到就给默认）。
+
+    实现已收敛到 `guide_common.cfg_flag`（全技能唯一入口，见那里的说明）；
+    这里保留一层薄封装，是为了不重写已有的 8 处调用点。
 
     存在的意义：**按线路切换图层**不该靠改脚本常量 —— 那等于把线路差异写死进技能。
-    （同 _route_cfg，只是那个在 make_terrain 里，且偏数值。）
     """
-    try:
-        import route_def as _RD
-        v = (getattr(_RD, "CFG", None) or {}).get(key)
-    except Exception:                                              # noqa
-        v = None
-    return default if v is None else bool(v)
+    return GC.cfg_flag(key, default)
 
 
 class Labeller:

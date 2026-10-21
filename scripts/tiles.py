@@ -18,6 +18,8 @@ import http.client, io, math, threading, queue, time, urllib.parse
 from pathlib import Path
 from PIL import Image
 
+import guide_common as GC
+
 TILE = 256
 CACHE = Path(__file__).resolve().parent / "tilecache"
 CACHE.mkdir(parents=True, exist_ok=True)
@@ -65,18 +67,17 @@ def src():
 
 # ---------------------------------------------------------------- 投影
 def lonlat_to_px(lon, lat, z):
-    n = TILE * (2 ** z)
-    x = (lon + 180.0) / 360.0 * n
-    s = math.sin(math.radians(lat))
-    y = (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
-    return x, y
+    """经纬度 → 全球 Web Mercator 像素。
+
+    公式收敛在 `GC.mercator_px`（全技能唯一权威实现，见那里的说明）——
+    本文件原先是第 4 份抄写。
+    """
+    return GC.mercator_px(lon, lat, z, TILE)
 
 
 def px_to_lonlat(x, y, z):
-    n = TILE * (2 ** z)
-    lon = x / n * 360.0 - 180.0
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
-    return lon, lat
+    """`lonlat_to_px` 的逆。公式收敛在 `GC.mercator_ll`。"""
+    return GC.mercator_ll(x, y, z, TILE)
 
 
 # ---------------------------------------------------------------- 校验

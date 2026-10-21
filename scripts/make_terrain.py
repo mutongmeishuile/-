@@ -61,14 +61,13 @@ DEM_MAX_PX = 40_000_000
 
 
 def _window_px(z, lon0, lat0, lon1, lat1):
-    """该窗口在 z 级下的 DEM 像素数（估算，用于决定要不要降档）。"""
-    def px(lon, lat):
-        x = (lon + 180.0) / 360.0 * (TILE * 2 ** z)
-        r = math.radians(lat)
-        y = (1.0 - math.log(math.tan(r) + 1.0 / math.cos(r)) / math.pi) / 2.0 * (TILE * 2 ** z)
-        return x, y
-    x0, y0 = px(lon0, lat1)
-    x1, y1 = px(lon1, lat0)
+    """该窗口在 z 级下的 DEM 像素数（估算，用于决定要不要降档）。
+
+    投影委托 `GC.mercator_px` —— 原先这里内联了另一套写法（`tan + 1/cos` 形式，
+    数学上等价，但那是本文件里的**第 3 份**公式抄写）。
+    """
+    x0, y0 = GC.mercator_px(lon0, lat1, z, TILE)
+    x1, y1 = GC.mercator_px(lon1, lat0, z, TILE)
     return abs(x1 - x0) * abs(y1 - y0)
 
 
@@ -179,37 +178,30 @@ LABEL_FILL = (96, 84, 72)
 LABEL_HALO = (252, 250, 245)
 MS_STEP = 1              # marching squares 用的 DEM 抽稀步长（1 = 全分辨率，与栅格线严格同位）
 
-FONT_CANDIDATES = [
-    "C:/Windows/Fonts/msyhbd.ttc",
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/msyh.ttc",            # 微软雅黑 Regular：比 SimHei 细一档
-    "C:/Windows/Fonts/simhei.ttf",
-    "/System/Library/Fonts/PingFang.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-]
+# 字体清单已收敛到 guide_common.FONT_CANDIDATES（跨平台共用 + 按 (size,bold) 缓存），
+# 那份清单的取舍说明见 guide_common 里的注释。
+# ⚠ 首位是**常规**字重 msyh.ttc，不是原来的 msyhbd —— 这才真正兑现了 9a03d70
+#   「等高线字太粗、全局字体要精细」的意图（那次只改了列表第二位，首位粗体没动）。
+FONT_CANDIDATES = GC.FONT_CANDIDATES
 
 
 def _label_font(size):
-    for p in FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(p, size)
-        except Exception:                                          # noqa
-            continue
-    return ImageFont.load_default()
+    return GC.label_font(size)
 
 
 # ------------------------------------------------------------------ 投影
 def lonlat_to_px(lon, lat, z):
-    n = TILE * 2 ** z
-    x = (lon + 180.0) / 360.0 * n
-    s = math.sin(math.radians(lat))
-    y = (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
-    return x, y
+    """经纬度 → 全球 Web Mercator 像素。
+
+    公式收敛在 `GC.mercator_px`（全技能唯一权威实现，见那里的说明）；
+    保留同名函数是为了不重写调用点。
+    """
+    return GC.mercator_px(lon, lat, z, TILE)
 
 
 def px_to_lonlat(x, y, z):
-    n = TILE * 2 ** z
-    return x / n * 360.0 - 180.0, math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    """`lonlat_to_px` 的逆。公式收敛在 `GC.mercator_ll`。"""
+    return GC.mercator_ll(x, y, z, TILE)
 
 
 # ------------------------------------------------------------------ 下载
@@ -849,14 +841,12 @@ def contour_coverage(dem_out, interval):
 
 
 def _route_cfg(key, default):
-    """读 route_def.CFG 里的线路级渲染配置（取不到就回退默认，脚本可独立运行）。"""
-    try:
-        import route_def as _RD
-        cfg = getattr(_RD, "CFG", None) or {}
-        v = cfg.get(key)
-        return default if v is None else v
-    except Exception:                                              # noqa
-        return default
+    """读 route_def.CFG 里的线路级渲染配置（取不到就回退默认，脚本可独立运行）。
+
+    实现已收敛到 `guide_common.cfg`（全技能唯一入口，见那里的说明）；
+    保留这层薄封装，是为了不重写已有的十几处调用点。
+    """
+    return GC.cfg(key, default)
 
 
 def nice_major(minor, ratio=5):

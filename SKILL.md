@@ -405,98 +405,22 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 
 ## 常见坑
 
-**不要通读全表** —— 按症状查分诊表，再跳专题文件。
+**完整分诊表已下沉到 `references/triage.md`**（90 行，按症状查，**不要通读**）。
+用 `Ctrl+F` 搜症状关键词，命中了再跳专题文件。下面只留触发频率最高的 10 条入口：
 
-| 症状 / 场景 | 去哪查 |
+| 症状 | 去哪查 |
 |---|---|
-| **地图画出来是"别的山"、轨迹跑到画布外（bbox 写死）** | `guide_common.resolve_bbox()` + `assert_bbox_covers()`；本文档「生成流程 §0」的窗口段 |
-| **解析出 0 个点（选错了入口）** | 本文档「生成流程 §0」的格式判断表；`preflight.py` 会替你数 gx:coord / trkpt / LineString。KML 与 **GPX 都走 `parse_track_kml.py`**，分段式 LineString 才走 `parse_kml_ls.py`。**`prep_track.py` 现已按文件内容自动识别**，正常流程不用手工挑脚本 |
-| **长线（>100 km）渲底图特别慢 / 内存爆掉（几十分钟、十几 GB）** | `references/self-hosted-terrain.md` §2.1（`pick_dem_z()` 按窗口像素数自适应降档，z15→z13，25 分钟降到 1 分钟） |
-| **`make_all` 跑完但交付物变成"别的线路名"（route_def 被示例覆盖）** | 本文档「生成流程 §0」的开头警示；重拷脚本时**只拷通用脚本，别碰 `route_def.py`** |
-| **`prep_track.py` 报 `FileNotFoundError: '线路.kml'`，但文件明明在当前目录** | 已修（`prep_track.py` 末尾 `kml.resolve()`）。子进程以 `cwd=scripts/` 跑，相对路径会指错地方；传绝对路径也能绕开 |
-| **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
-| **图例压住了冰川/山体（用户："遮住想看的山峰了"）、或"下半幅图例占比太大、喧宾夺主"** | `references/pitfalls-map-svg.md` **§21**（满幅地形没有空白角 → `CFG["legend_outside"]=True` 走「标题带 + 地图 + 图例带」，图例带通栏密排；口径 地图≥75% / 标题≈11% / 图例≤15%） |
-| **用户说"字体统一 / 精细 / 线太粗 / 符号太大 / 地名太密太抢眼 / 要动态避让"** | `references/pitfalls-map-svg.md` **§22**（`<svg>` 根节点声明一次字体；POI 字号固定 14.4 **不乘 PS**；线宽 3.0/4.9、符号 0.66；底图地名最后统一排位 + 按"垭口>村>湖>峰"取舍 + 与 POI 同名去重） |
-| **高清地图"没有标题" / 要求扩大窗口、把周边知名山峰包进来** | `references/pitfalls-terrain.md` **§21**（`bbox` 显式给、按轨迹居中、只包必要的山；⚠ 换窗口 = `osm.json` 作废，**重抓前必须先备份**，否则全镜像失败会写空缓存覆盖） |
-| 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
-| **图上一整块区域完全没有起伏、只剩等高线（不是水体却是一个色）** | `references/pitfalls-terrain.md` **§8a / §8a-2**（先量 `fill_voids` 前后 `diff>0.5` 的像素占比，>0.5% 就要警惕：§8a = 「低于参考面 900 m」在几百 km 窗口的误判；§8a-2 = 「`dem < med−2500` 坏瓦片兜底」把高海拔窗口的低谷整片抹平） |
-| **多线路总览图上，自己的注记盖住了底图的 OSM 峰名/地名（或峰名之间叠成一团）** | `references/pitfalls-terrain.md` **§15**（把 `Labeller._mark` 的占位框落盘给上层当禁标区；峰名按 12 km 间距贪心去重，别用高程阈值） |
-| **区域/多线总览图（≥1°，几百 km）整片谷地变成没有起伏的平板、山体只剩一条"海岸线"** | `references/pitfalls-terrain.md` **§8a**（`VOID_MAD=900 m` 只适用于小窗口；大窗口 25% 真地形被当空洞填掉 → 只填 NaN + 负值夹 0） |
-| **山顶出现"没有等高线的平板/米色斑"（色带被截平 / 真峰顶被当空洞填掉）** | `references/pitfalls-terrain.md` §8（**判据必须单边偏低**，`abs()` 会把峰顶填平）+ §8b（色带取 p99.7 并把雪色端延到最高点） |
-| **底图的地名/山峰名/湖泊名/水系名看不见、或几乎全丢** | `references/pitfalls-terrain.md` §11（字号按"缩图后"定 + Labeller 三级兜底 + 补湖名水系名 + 禁标网格别多乘 ss） |
-| **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |
-| **两条线的图"地名/山峰名差很多"，先怀疑技能没同步** | `references/pitfalls-terrain.md` §14。**先 `out count` 比 bbox + 比 `osm.json` 命名元素数**，多半是 OSM 数据源稀疏（非登山区 peak 常为 0），不是脚本；诊断查询**别用 overpass.osm.ch**（它没有亚洲数据，会返回假的 0） |
-| **冰川看不出范围 / 冰舌和雪原糊成一片** | `references/pitfalls-terrain.md` §12 ①（边界**绝不能画近白**，要冰蓝；填充透明度 ≤150 保住冰面晕渲） |
-| **峰名太多糊死山体，或"主峰没名、无名矮峰有名"** | `references/pitfalls-terrain.md` §12 ②（按 ele 降序 + 分三级；阈值用**本窗口分位数** `PEAK_TIER_PCT=(88,62)`，低档走 `fallback=False`） |
-| **换到新线路后主峰不突出 / 所有峰名都是小字** | `references/pitfalls-terrain.md` §12 ②（分级阈值写死过绝对米数就会这样，**必须相对**；样本 <8 自动免分级） |
-| **时令河被画成常年河（旱季断流却给了水源错觉）** | `references/pitfalls-terrain.md` §12 ③（`intermittent=yes` 走虚线 + 图例单列一行） |
-| **>2 天线路整条被画成一种颜色（图例却是彩色的）** | `references/pitfalls-map-svg.md` §10（按 `day_bounds` + `days` 颜色画 N 段） |
-| **图例里找不到图上的符号 / 图例占地过大** | `references/pitfalls-map-svg.md` §11（只列用到的 kind + 两列网格 + 复用 `mk_pin` 出样本） |
-| **比例尺/家具显得"贴了张白标签"、色条戳出底衬** | `references/pitfalls-map-svg.md` §12（**色条长度不参与 FURN 缩放**，底衬=色条+内衬） |
-| **文字有一圈"白色阴影"/发虚** | `references/pitfalls-map-svg.md` §13（描边宽度控制在字号的 11–15%，别删） |
-| **底图"一片单色"、看不出高差（色带写死了）** | `references/pitfalls-terrain.md` §4 首条（**通用 ramp + p2–p98 拉伸**，无雪区不给雪色端） |
-| **Overpass 镜像全体 504/500/证书错** | `references/pitfalls-terrain.md` §9（先探活再定序，osm.ch 首选；`fetch_osm.py --soft` 可降级） |
-| **底图与攻略 POI 出现两条同地注记** | `references/pitfalls-terrain.md` §10（skip_names 要含「·」前核心地名） |
-| **同一座山在页面上有两个海拔数字** | `references/track-prep.md` §6（轨迹 GPS 偏低 20–50 m → **曲线用 GPS、印出来的数用 DEM**） |
-| **总里程比作者口述多一倍、剖面出现两道空白悬崖（`seg_id` 多个值）** | `references/track-prep.md` §8（两步路 KML 的**平行备选段**被全并：`--longest` 只留主线，**并把 `CFG["kml_keep"]` 写进 route_def**，否则 make_all wave0 会悄悄撤销） |
-| **用户说"标注字体动态缩小 / 位置动态合理 / 图例动态缩小"** | `references/pitfalls-map-svg.md` §15（字号阶梯 FS_LADDER + 8 方向×4 档半径位置搜索 + 图例 `_LG_S` 单系数动态缩放；⚠ `_layout` 试探必须纯函数，`_LABELS` 漏登记会让自检假通过） |
-| **沙箱完全无外网（DEM/OSM 全超时）** | `references/self-hosted-terrain.md` §10（用 WebFetch 打 Open-Elevation 文本接口取真实 SRTM 样本，本地插值重建 DEM） |
-| 放大看不清、字糊 | `references/pitfalls-terrain.md` §2 |
-| 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3（**间隔按实测线覆盖率自适应**；顺带看那里的**配色**：别用暖橙棕） |
-| **用户说"等高线太粗 / 再细一些"** | `references/pitfalls-terrain.md` §3（两个旋钮：① 线宽 `CONTOUR_DILATE=(0,0)` 首/计都 1 px，分级交给明度；② **`CFG["contour_target_cov"]` 收窄**（希夏邦马 0.30→0.26 → 20 m 退到 25 m）。⚠ **别去加密等高距**：本区 20 m 已 28.6%、10 m 到 46% 必糊；也**别改全局默认阈值**（狼塔 50 m=29.8% 会被误伤） |
-| **首曲线密到能跟计曲线搞混 / 计曲线间隔不是整数** | `references/pitfalls-terrain.md` §3（`nice_major()`：25 m 首曲线配 **100 m** 计曲线而不是 125 m） |
-| **用户说"标注字太大 / 字与字重叠"** | `references/pitfalls-terrain.md` §13 ①②（字号 ×0.85 落在 13–15.5 px 区间；**留白 `LBL_PAD` 2.0→2.8 才是治重叠的主手段**）；自检看 `· 挤放 N`（§13 ③） |
-| **用户说"去掉冰川层 / 冰川面把地形压平了"** | `references/pitfalls-terrain.md` §12 ①（**技能默认就不画冰川**；判据＝数有多少冰川末端伸到雪线以下（与雪线白重复就关）。要开按线路写 `CFG["glacier_layer"]=True`，⚠ 连带改图例与图注三处，否则自相矛盾） |
-| **切边扫描报警，但图其实没被裁** | `references/pitfalls-terrain.md` §13 ④（满幅底图边缘天然是地形暗部 → 阈值放宽到 0.40；先确认不是真裁再放宽） |
-| **用户说"等高线颜色要和这片地接近"** | `references/pitfalls-terrain.md` §3（**派生色** `_contour_tint()`：同色相 + 降饱和 0.30 + 明度分档；暗处反转成提亮；强制最小明度差） |
-| **"比例尺越大等高线越密、地图难看"**（长线/大窗口） | `references/pitfalls-terrain.md` §3（`pick_contour_interval`：覆盖率 ≤30%，狼塔自动 20→50 m） |
-| **"如何更真实地反映地貌"**（背光侧一片黑、地形发平） | `references/pitfalls-terrain.md` §4（**MDOW 多向晕渲** + 阴阳分色）、`references/self-hosted-terrain.md` §3 |
-| **"谷底看起来像山脊" / 山体阴坡阳坡是反的** | `references/pitfalls-terrain.md` §16（坡向公式在图像坐标系被镜像；**`python scripts/check_hillshade.py` 一把判定**，退出码非 0 = 光反了） |
-| **"雪线以上一片白、主峰不立体"** | `references/pitfalls-terrain.md` §17（`snow_w` 别用"回抬"，改成雪面强塑形；验收：雪坡低频明暗 std ≥ 35） |
-| **"色阶又黄又绿又黄 / 过渡发脏"** | `references/pitfalls-terrain.md` §18（带位必须单调；混用绝对米数与雪线偏移会折返；`_ramp_check()` 自检） |
-| **"图例位置不合适 / 压在比例尺上"** | `references/pitfalls-map-svg.md` §16（位置不能写死；占位表**必须含指北针与比例尺**） |
-| **"字体大小不统一"** | `references/pitfalls-map-svg.md` §17（只留两级：地名 13 一档、POI 19/17 一档） |
-| **"轨迹/POI 标注遮住底图地名"** | `references/pitfalls-map-svg.md` §19（底图导出 `label_boxes.json` 给 SVG 避让 + `poi_label_cells` 反向预留；⚠ 字号单位要乘 `ss`） |
-| **"峰名挤成一坨 / 三连山三条名叠在一起"** | `references/pitfalls-map-svg.md` §20（邻域密度 → 字号阶梯 13/10.5/9，逐条试、绝不原地硬叠） |
-| **"标注重复 / 一山两名"** | `references/pitfalls-map-svg.md` §18（自绘地名 `route_def.PLACES` 必须进 OSM 的 skip_names，再加 `seen_names` 同名去重） |
-| **瓦片等高线太密/太淡，或用户要适配等高距** | `references/tile-basemap.md` §7（抹除+DEM 自绘管线）、§11（100/500 m 攻略适配） |
-| **等高线与地形对不上（位置错）** | `references/tile-basemap.md` §12（DEM→栅格映射核查清单） |
-| **等高线/设色后地图"一个颜色"无地形感** | `references/tile-basemap.md` §11（线画分离设色法） |
-| **用户质疑等高线数值对不对** | `references/tile-basemap.md` §14（POI 对比表 + 独立峰锚定 + 口径图注） |
-| **高清图/底图细线被抹掉、发糊** | `references/tile-basemap.md` §8（两次重采样坑） |
-| **换 zoom 后轨迹漂移/缩到一角** | `references/tile-basemap.md` §9（投影一致性）+ §11.6（比例尺 z 取 meta） |
-| **地图画幅浪费、路线被挤小** | `references/tile-basemap.md` §10（bbox 贴线 + 边缘标签翻转） |
-| **单轮迭代耗时过长** | `references/tile-basemap.md` §13、`references/efficiency.md`（本技能实测：DEM ~2 min，其余全部秒级） |
-| **图像脚本突然崩（PIL/argv/IndexError）** | `references/efficiency.md` §6（本机环境三坑） |
-| **Edge 截图不出文件** | `references/pitfalls-layout.md` 末节（--screenshot 需绝对路径） |
-| 整张图发闷发脏、平原起云、林地硬边 | `references/pitfalls-terrain.md` §4 |
-| **雪线怎么着色、用户要求"配色偏白"** | `references/pitfalls-terrain.md` §5 |
-| **雪线以上「又是白的又是绿的」（白绿相间断层）** | `references/pitfalls-terrain.md` §5b（`belt_stops` 的植被锚点是**绝对高程**，雪线一低就窜到雪线以上；判据＝任一锚点 > 雪线就按比例收编。**改前先跑逐米新旧色差对比确认零回归** —— 希夏邦马 6000 / 念青东 5000 本来就没这问题，别顺手改） |
-| **切边扫描对满幅地图报警，但轨迹明明没被裁** | `references/pitfalls-terrain.md` §5c（深绿林区 + 晕渲会把最低档森林深绿压到亮度 120 以下，top 冲到 44%。**别抬阈值**，走 `qa_guide` 的 `track_inside()` 轨迹完整性判据；改完必须做反向验证——裁一半的图要能被判失败） |
-| **用户问"多少米有雪线"（天山以外的山脉）** | `references/pitfalls-terrain.md` §6 + **`references/china-terrain.md` §4**（全国山脉雪线/林线表） |
-| **图上写的雪线米数 ≠ `CFG["snowline_m"]`** | `references/pitfalls-terrain.md` §6（四个键要一起配：`snowline_m` / `_label` / `_note` / `_src`；只改高度不改文案是**静默错误**） |
-| **中国区线路底图配色（沙漠/戈壁/草原/森林/盐湖怎么上色）** | **`references/china-terrain.md`** §2–3 |
-| **黄土沟壑 / 喀斯特 / 雅丹 / 滩涂怎么表现** | **`references/china-terrain.md`** §6–7 |
-| 改色 / 改窗口后哪里要跟着改 | `references/pitfalls-terrain.md` §7 |
-| 地图与右栏不等高、右栏被切一半 | `references/pitfalls-layout.md` §1 |
-| 文案折行出孤字、表格溢出 | `references/pitfalls-layout.md` §2 |
-| 文字灰阶对比度不够 | `references/pitfalls-layout.md` §3 |
-| **某段文字只占左边一小条** | `references/pitfalls-layout.md` §5（类名撞车）|
-| **行宽太长/太短** | `references/pitfalls-layout.md` §6 |
-| 无头浏览器裁剪、版心量边 | `references/pitfalls-layout.md` §7 |
-| 符号与线层级失衡、标注悬空 | `references/pitfalls-layout.md` §8 |
-| 图例放哪、图例只有文字没图形 | `references/pitfalls-map-svg.md` §1–2 |
-| **三件套（图例/指北针/比例尺）动态避让** | `references/pitfalls-map-svg.md` §9 |
-| 剖面标签互压 | `references/pitfalls-map-svg.md` §5 |
-| 虚实线用错、步道配色撞色 | `references/pitfalls-map-svg.md` §6–7 |
-| 图例样本与出图配色不一致 | `references/pitfalls-map-svg.md` §4 |
-| **做得慢、返工多、一小时还没完** | **`references/efficiency.md`**（耗时实测 + 提速做法） |
-| **哪些步骤能并行、并行能省多少** | `references/efficiency.md` §3.7（DAG 分层 + 实测 + 别抱幻想） |
-| **`route_def.py` 的里程/爬升不知从哪来、只会手抄** | `scripts/new_route.py`（读 `out/` 三个 json 自动生成骨架，文案留 `★ TODO`） |
-| **`route_def.POIS` 写成字典就崩（`KeyError: 0`）** | `guide_common.poi()` / `pois_of()`：元组与字典都收；下游一律走它取值 |
-| **B 路线：瓦片米底没地形感、自带等高线太密/太淡** | `scripts/tile_tint.py`（瓦片只留线画 + DEM 设色打底 + 自绘等高线）+ `references/tile-basemap.md` §7/§11 |
-| **换个项目做同一片山，DEM 又要重下几万块瓦片** | 缓存已改**用户级共享** `~/.workbuddy/cache/hiking-dem/`（`HIKING_DEM_CACHE` 可覆盖）；瓦片按 z/x/y 命名，天生全局唯一 |
-| **手机版缩略图标注轻微互压，被判成"失败"** | `map_svg.self_check` 是**两档制**：手机版的「标注重叠 / 压家具」只告警；硬指标是越界 / 压轨迹 / 家具互叠 |
+| 地图画成"别的山" / 轨迹跑到画布外 | `guide_common.resolve_bbox()` + `assert_bbox_covers()`（窗口写死是根源） |
+| 解析出 0 个点 | `preflight.py` 会替你数 gx:coord / trkpt / LineString；KML 与 GPX 都走 `parse_track_kml.py` |
+| 长线（>100 km）渲底图特别慢 / 内存爆 | `references/self-hosted-terrain.md` §2.1（`pick_dem_z()` 降档，25 min → 1 min） |
+| 图例压住山体 / 占比过大 | `references/pitfalls-map-svg.md` §21（`CFG["legend_outside"]=True`） |
+| 字体要统一 / 线太粗 / 地名太密 | `references/pitfalls-map-svg.md` §22 |
+| 底图地名看不见 / 全是 □□□ | `references/pitfalls-terrain.md` §11 |
+| 整片区域没起伏 / 山顶出现平板 | `references/pitfalls-terrain.md` §8 / §8a / §8b |
+| 色阶发黄发绿 / 白绿断层 | `references/pitfalls-terrain.md` §4 / §5 / §5b / §18 |
+| 里程多一倍 / 剖面两道悬崖 | `references/track-prep.md` §8（平行备选段 + 写进 `CFG["kml_keep"]`） |
+| 做得慢 / 返工多 / 一小时还没完 | `references/efficiency.md` |
+
 
 ### 最高频的 10 条（先记住这些）
 
@@ -544,77 +468,13 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 
 ### 交付前自检清单
 
-- [ ] **地图窗口盖住轨迹**：`make_terrain.py` 打印的窗口来自 `轨迹包围盒 + 8% 留白（自动）`，
-      且 `assert_bbox_covers` 没抛错；**若显式给了 `CFG["bbox"]`**，确认窗口里有线路名提到的地标
-      （"珠峰东坡"就得看得见珠峰），且南北按轨迹居中
-- [ ] **换过窗口就一定重抓过 OSM**：`fetch_osm.py` 要素数应与新窗口匹配
-      （珠峰东坡扩窗后 128 → 1212）；**重抓前备份 `out/osm.json`**（§21.4）
-- [ ] **独立高清图有标题带**：`render_map_hi.py` 必须 `build_svg(..., with_title=True)` 且画布高用
-      `MS.out_size(True)[1]`（两处不同源会被 letterbox 出上下白边）
-- [ ] **三段式占比**（开了 `legend_outside`）：地图 ≥75% / 标题带 ≈11% / 图例带 ≤15%；
-      超了先压图例带行距与列宽，别去缩地图
-- [ ] **字体只有一处声明**：`<svg>` 根节点有 `font-family`，任何 `<text>` 不再单写 ——
-      否则独立高清图里 POI 标注会落到浏览器默认字体，和底图地名混排（§22.1）
-- [ ] **POI 标注字号 ≥ 底图地名**：POI 14.4/15.6 固定不乘 `PS`；缩符号时别把字一起缩
-      （缩到 9.6 就比地名还小、白晕吃掉笔画，看着发虚发灰）
-- [ ] **底图地名落位/丢弃数**：`底图地名：落位 N 条 · 拥挤丢弃 M 条`，M 应为个位数；
-      `make_terrain` 的 OSM 行里 `挤放 0`
-- [ ] 长图**边缘深色像素 = 0**（无裁切；`qa_guide.py` 的 `edge_scan` 自动判）
-- [ ] 高清地图四边无内容被截（满幅图片的边缘深色占比天然偏高，**要 1:1 目视裁切确认，别只看数字**）
-- [ ] 地图与右栏**底边齐平**、右栏所有元素 `right ≤ 内容右界`（探针量，别目测）
-- [ ] 地图内标注**桌面版两两冲突 = 0**、无标注压图例（`map_svg.self_check` 的「压轨迹点」应为 0）
-- [ ] **自检的"标注数"必须等于 POI 数**（`self_check` 有护栏，不等会明确报警）。
-      `_LABELS` 漏登记时自检会打印「标注 0 条 · 重叠 0」—— **看着全绿，其实一个都没查**
-- [ ] **"标注动态缩字 / 图例动态缩小"不能只靠"没重叠"验收**：瘦高画幅上 25 个标注
-      可能全部命中档位 1.00，动态路径一次都没走到。改过 `_layout` / `FS_LADDER` /
-      `_legend_scale` 后跑一遍 `python scripts/_stress_layout.py`（退出码非 0 = 有未通过项）
-- [ ] 手机版缩略图的标注重叠若不为 0，`self_check` 会明确标成"只告警"（拥挤 ≠ 错误）；
-      **但桌面版必须为 0** —— 那是出长图的那一版
-- [ ] **三件套不压轨迹、彼此不重叠**（`self_check` 的「家具互相重叠」应为 0）
-- [ ] 用 `new_route.py` 生成的 route_def：`python route_def.py` 打印的「待办还剩 N 处」**已清零**
-- [ ] **交付物文件名前缀 == `route_def.CFG["file_stem"]`**（对不上说明 `route_def.py` 被示例覆盖了）
-- [ ] 图例**每一行样本图形都显示**（不只文字）
-- [ ] 手机版无横向滚动、`g.il` 已隐藏、文字版图例正常
-- [ ] 手机版卡片副标题**没有把数值重复一遍**（`monly` 别填成值本身）
-- [ ] **底图高低海拔各裁一块 1:1 对比底色**：确认分层设色真的铺开了，
-      而不是被 clip 卡在同一档（"一片单色"是静默失败，只看整图不容易发现）
-- [ ] **最高峰没有被"填平"**：`fill_voids` 后 `max(dem)` 与 `load_dem` 打印的原始最高点一致；
-      山顶是**有等高线、有渐变的雪帽**，不是一块没有线的平板
-- [ ] **等高距是自适应的**：`make_terrain.py` 打印的「等高距自适应 → 首曲线 X / 计曲线 Y，
-      线覆盖 Z% ≤ 目标 30%」，Z 必须 ≤ 30%；长线窗口不许还是 20 m（会糊成一片棕）
-- [ ] **季节档 = 夏季**（技能默认）：`make_terrain.py` 日志应打印
-      `季节档 summer：雪线 X → X+350 m`。徒步季是 6–10 月，按年常态出图会把
-      夏季实走的 3800–4200 m 草坡画成雪白（见 `references/pitfalls-terrain.md` §20）。
-      反季节/沙漠线路可用 `CFG["terrain_season"]` 覆盖。
-- [ ] **雪线四个键口径一致**：`snowline_m` / `snowline_label` / `snowline_note` / `snowline_src`
-      要么全配要么全删；日志出现「⚠ 未配 CFG['snowline_m']，沿用脚本残留默认 6000 m」
-      **必须处理**（查表重设，或低海拔线路直接删掉雪线）
-- [ ] **雪线以上只有积雪白，不夹绿块**：取 DEM ≥ 雪线的像素算「绿度 = G−(R+B)/2 > 15」占比，
-      应 ≈0（等高线/JPEG 噪点级别）。出现成片绿 → `belt_stops` 的植被锚点窜到雪线以上了，
-      见 `references/pitfalls-terrain.md` §5b
-- [ ] **晕渲光照方向 = 西北**：`python scripts/check_hillshade.py` 必须退出码 0
-      （判据：面向西北的坡亮 ≥ 面向东南的坡 +0.25）。**这条最值得跑** ——
-      坡向公式写错时不会报错、等高线也对得上，只有这个统计量能抓出来（§16）
-- [ ] **色带单调**：`make_terrain.py` 打印「色带自检：雪线以下 G−R 单调递减」；
-      出现「⚠ 色带折返」就必须改带位（§18）
-- [ ] **雪线以上有地形**：雪线以上若占图面 >1/5，裁一片雪坡算 `GaussianBlur(5)` 后 std ≥ 35；
-      不达标说明 `snow_w` 还在"回抬"（§17）
-- [ ] **主峰群不是白纸**：1:1 放大最高峰一带，能看到刃脊/冰瀑的明暗，不只是一圈圈等高线
-- [ ] **切边扫描超阈值时先判轨迹完整性**，别抬阈值：满幅地图看 `qa_guide` 打印的四边余量
-      （全 ≥0 = 没裁）；只有出现负余量才是真裁切（§5c）
-- [ ] **峰名分级是相对的**：`OSM 叠加` 日志里有 `[p88≥Xm/p62≥Ym]`，X/Y 要符合本线海拔量级
-      （1900 m 级的线路若打出 7000 m，说明阈值被写死成绝对米数了）
-- [ ] **地形"有立体感、背光侧仍有结构"**：不是半边发白半边死黑（那是单向晕渲的锅，
-      应为 MDOW 多向）；如果整张图读起来"发黄发闷"，检查等高线是不是还在用暖橙棕
-- [ ] **底图注记落位率**：`draw_osm` 打印的「山峰名 x/N」≥ 60%（正常 ~80%）；
-      湖名/水系名也有（不只是峰名）
-- [ ] **图例覆盖图上所有符号**：图上出现的每种 kind 都能在图例里找到样本，
-      且图例没有溢出卡片（`_legend_size` 已含符号区行数）
-- [ ] **比例尺色条完整落在底衬框内**（框宽 = 色条 + 两侧内衬；色条长度不参与 `FURN_*` 缩放）
-- [ ] **文字描边宽度 ≈ 字号的 11–15%**：`< 10%` 在深色晕渲上读不出、`> 20%` 会糊成白阴影
-- [ ] `make_terrain.py` 打印的 `抑制重名 N` 不为 0（为 0 = 重名注记还在图上）
-- [ ] GPX 回读断言的 `trkpt` 数 == `track_full.json` 点数
-- [ ] 所有数值口径统一（海拔取整一致、里程累计口径说明）
+**完整清单在 `references/checklist.md`**（74 行）。核心就三件事：
+
+1. **图面** —— 轨迹完整在画布内、三件套不压轨迹、图例不压山体；
+2. **数字** —— 里程 / 累计爬升 / 海拔三个口径全篇一致（同一座山不能出现两个海拔）；
+3. **文案** —— 没有 `★ TODO` 占位、没有"示意 / 模拟"字样。`python scripts/qa_guide.py`
+   的 ③ 会数占位；注意它连 `</b>★ TODO …` 这种**不以引号开头**的也算
+   （2026-10-22 修：旧判据只数 `'"★ TODO '`，把 `CFG["foot"]` 的安全提示漏掉了）。
 
 ### 交付后：把经验回写进本技能
 
@@ -662,7 +522,20 @@ C:/Users/<用户名>/.workbuddy/skills/hiking-route-guide-poster/     ← 改这
 
 ### 自测：怎么验证技能改完还能跑（`_selftest_*` 目录的做法）
 
-改完脚本一定要做一次**全新目录自测**，别在已有产物上"看起来能跑"就收工：
+**改了共享代码先跑这条**（几十秒，不联网 / 不下 DEM / 不启浏览器）：
+
+```bash
+python scripts/selftest.py        # 退出码 0 = 全部通过；加 -v 看逐条判据
+```
+
+断言的都是那种"错了不会报错、只会画错"的项目：① 6 处墨卡托抄写仍**逐位一致**
+（投影错位是本技能记录过的最惨翻车，而它不抛异常）；② 投影往返；③ 里程守恒；
+④ 简化容差的纬度自适应；⑤ 4 套 CFG 入口同源、且 map_svg 那份已改惰性；
+⑥ 字体统一；⑦ `</b>★ TODO …` 这类不以引号开头的占位数得到。
+改完 `guide_common.py` 尤其该先跑它 —— 那里一处改动会同时影响
+底图栅格、OSM 叠加、地图 SVG 三层。
+
+**要验证端到端能出图**，再做一次全新目录自测，别在已有产物上"看起来能跑"就收工：
 
 ```bash
 # 1) 造一个干净目录：只放脚本 + KML + 一个只有 "kml" 字段的最简 route_def

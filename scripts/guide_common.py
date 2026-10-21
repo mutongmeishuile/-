@@ -84,6 +84,108 @@ def find_browser():
         "找不到无头浏览器（Chrome / Edge）。装一个，或把路径加进 guide_common.BROWSER_CANDS。")
 
 
+# ------------------------------------------------------------------ 中文字体
+# 2026-10-22：这份清单原先在 draw_osm.py 与 make_terrain.py **各抄一份**
+# （make_terrain 那份还把 msyh.ttc 连写了两遍）。收敛到这里共用一份。
+#
+# ⚠ 首位是 msyh.ttc **常规**字重，不是粗体。用户 2026-10-21 反馈「等高线字太粗太大、
+#   全局字体要精细」；提交 9a03d70 的说明写的是「首选 msyh.ttc 常规」，
+#   但那次 diff 只往列表**第二位**插了一行，首位 msyhbd.ttc（粗体）没动 ——
+#   装了微软雅黑的机器上第一位永远命中，等于这次改动从没生效过。这次才真正兑现。
+FONT_CANDIDATES = [
+    "C:/Windows/Fonts/msyh.ttc",            # 微软雅黑 Regular（首选）
+    "C:/Windows/Fonts/msyhbd.ttc",          # 微软雅黑 Bold
+    "C:/Windows/Fonts/simhei.ttf",          # 黑体：老 Windows 兜底（只有粗体）
+    "/System/Library/Fonts/PingFang.ttc",   # macOS
+    "/Library/Fonts/Arial Unicode.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",   # Linux
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+]
+FONT_CANDIDATES_BOLD = [                    # 粗体优先：标题带 / 数据块 / 峰名
+    "C:/Windows/Fonts/msyhbd.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+] + FONT_CANDIDATES
+
+_font_cache = {}
+
+
+def label_font(size, bold=False, candidates=None):
+    """取一个能画汉字的 PIL 字体；全平台都找不到就退 PIL 默认（会缺字，但不崩）。
+
+    按 (size, bold, 清单名) 缓存 —— 大栅格上这函数会被调上万次，
+    每次都 `ImageFont.truetype` 一遍（磁盘 IO + 解析字体表）是纯浪费。
+
+    `candidates` 缺省用 `FONT_CANDIDATES`（常规优先）；`bold=True` 用粗体清单。
+    """
+    from PIL import ImageFont
+    key = (int(size), bool(bold), id(candidates) if candidates is not None else 0)
+    hit = _font_cache.get(key)
+    if hit is not None:
+        return hit
+    if candidates is None:
+        candidates = FONT_CANDIDATES_BOLD if bold else FONT_CANDIDATES
+    got = None
+    for p in candidates:
+        try:
+            got = ImageFont.truetype(p, key[0])
+            break
+        except Exception:                                          # noqa
+            continue
+    if got is None:
+        try:
+            got = ImageFont.load_default(size=key[0])
+        except TypeError:                   # 老 Pillow 的 load_default 不收 size
+            got = ImageFont.load_default()
+    _font_cache[key] = got
+    return got
+
+
+# ------------------------------------------------------------------ 线路配置
+def cfg(key, default=None):
+    """读当前线路的 `route_def.CFG` —— **全技能唯一入口**。
+
+    2026-10-22：原先有 4 套实现并存，行为还不完全一样：
+
+      · `draw_osm._cfg_flag` / `make_terrain._route_cfg` / `prep_track._cfg_get`
+        —— 都 import 一次 route_def 再 .get()，运行时现取；
+      · `map_svg._CFG = getattr(RD, "CFG", {})` —— **import 期快照**，
+        import 那一刻就把配置固化了。
+
+    真正麻烦的不是重复，是**两套语义**：绝大多数脚本"每次调用现取"，
+    唯独 map_svg 是"取一次存着"。凡是需要"改完 CFG 不重启进程就生效"的场景
+    （同一个进程里连跑几步、或脚本内动态改配置后重算），map_svg 会静默拿旧值 ——
+    症状是"改了配置没反应"，而且只在特定执行顺序下才出现。
+    现在统一：一律运行时现取，读不到就给 default。
+
+    `sys.path` 那一行不是多余的：`route_def.py` 在 scripts/ 下，而脚本经常被
+    从**项目根**调用（`python scripts/xxx.py` 时 sys.path[0] 就是 scripts/，
+    但别的方式未必）。原 `prep_track._cfg_get` 就是靠这一手才能在任何 cwd 下
+    读到配置 —— 收敛时把这个能力一起带过来，别丢。
+    """
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        import route_def as RD
+        v = (getattr(RD, "CFG", None) or {}).get(key)
+    except Exception:                                              # noqa
+        return default
+    return default if v is None else v
+
+
+def cfg_flag(key, default=False):
+    """布尔开关版：取不到（None）回退 default，取到了就 `bool()` 之。
+
+    沿用 `draw_osm._cfg_flag` 的**旧语义**（写 `1` / `"true"` 这类非严格布尔值
+    的地方行为不变）—— 这次收敛的目的是消除重复实现，不是顺手改判定规则；
+    判定规则要改应当单独提，否则"改了代码、行为也跟着悄悄变了"。
+    """
+    v = cfg(key, None)
+    return default if v is None else bool(v)
+
+
 # ------------------------------------------------------------------ 底图元数据 / 投影
 def load_meta():
     """读 make_terrain.py 落盘的 out/base_meta.json。
@@ -103,19 +205,57 @@ def load_meta():
     return json.loads(f.read_text(encoding="utf-8"))
 
 
-def projector_of(meta):
-    """底图像素 ← 经纬度。**必须与 make_terrain.py 的投影逐字一致。**"""
-    ox = meta["tx0"] * 256 + meta["box"][0]
-    oy = meta["ty0"] * 256 + meta["box"][1]
-    s, z = meta["scale"], meta["z"]
+def mercator_px(lon, lat, z, tile=256):
+    """经纬度 → 全球 Web Mercator 像素。**全技能唯一权威实现。**
+
+    2026-10-22：这个公式原先有 **6 处独立抄写**（make_terrain 里 3 处：
+    `_window_px` 内联 + `lonlat_to_px` + 若干局部 proj；draw_osm、tiles、
+    以及本文件各 1 处），一致性只靠一句注释「必须与 make_terrain.py 逐字一致」
+    来维持 —— 也就是**靠人记着**。
+
+    为什么值得动：SKILL.md 自己把「投影错位」列为最惨翻车（轨迹整体偏移、
+    底图与矢量层对不上），而这类错误**不报错、只画错**，跑到最后才看得见。
+    现在收敛到这一处，并由 `selftest.py` 断言所有入口输出逐位相等 ——
+    以后谁再抄一份，自检会立刻抓出来。
+    """
+    n = tile * (2.0 ** z)
+    x = (lon + 180.0) / 360.0 * n
+    s = math.sin(math.radians(lat))
+    y = (0.5 - math.log((1.0 + s) / (1.0 - s)) / (4.0 * math.pi)) * n
+    return x, y
+
+
+def mercator_ll(x, y, z, tile=256):
+    """全球 Web Mercator 像素 → 经纬度（`mercator_px` 的严格逆运算）。"""
+    n = tile * (2.0 ** z)
+    lon = x / n * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
+    return lon, lat
+
+
+def make_projector(z, tx0, ty0, box, scale, tile=256):
+    """经纬度 → 输出图**局部**像素（权威实现）。
+
+    ox/oy 是输出图左上角在全球像素坐标系里的位置（瓦片原点 + 盒内偏移）；
+    减掉它、再乘 scale，得到图内坐标。底图栅格 / OSM 叠加 / 地图 SVG 三处
+    **必须**用同一个这个函数 —— 各写一份就是静默错位的源头。
+    """
+    ox, oy = tx0 * tile + box[0], ty0 * tile + box[1]
 
     def proj(lon, lat):
-        n = 256 * 2 ** z
-        x = (lon + 180.0) / 360.0 * n
-        sn = math.sin(math.radians(lat))
-        y = (0.5 - math.log((1 + sn) / (1 - sn)) / (4 * math.pi)) * n
-        return (x - ox) * s, (y - oy) * s
+        x, y = mercator_px(lon, lat, z, tile)
+        return ((x - ox) * scale, (y - oy) * scale)
+
     return proj
+
+
+def projector_of(meta):
+    """底图像素 ← 经纬度（从 `base_meta.json` 读参数）。
+
+    实现已委托 `make_projector`，不再自己抄一遍公式 —— 见 `mercator_px` 的说明。
+    """
+    return make_projector(meta["z"], meta["tx0"], meta["ty0"],
+                          meta["box"], meta["scale"])
 
 
 def m_per_px(meta):

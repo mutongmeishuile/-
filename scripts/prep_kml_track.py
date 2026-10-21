@@ -37,8 +37,26 @@ def hav(a, b):
     return 2 * R * math.asin(math.sqrt(h))
 
 
-def dp_simplify(pts, cum, tol):
-    """Douglas-Peucker，按「里程-位置」空间里的横向偏差裁点。tol 单位 m。"""
+def dp_simplify(pts, tol):
+    """Douglas-Peucker：按平面近似后的**横向偏差**裁点，tol 单位 m。
+
+    2026-10-22 修：经度缩放改用**本条轨迹自己的中纬**，不再写死 30.5°。
+    写死的后果是同一份 tol 在不同纬度效果不一样，参数不可移植：经度被按
+    cos(30.5°)/cos(φ) 倍缩放，等效容差 = tol × cos(30.5°)/cos(φ) ——
+    60°N 上 4 m 变成 6.89 m（多留 10.7% 冗余点），19°N 上变成 3.65 m（少留 0.8%）。
+    写成 30.5° 是因为最早的样例线路（九华山）正好在那个纬度，于是这个偏差
+    长期没发作 —— 它不致命，但让「tol=4.0」这个数字失去跨线路的可比性。
+    （`cum` 形参一直没被函数体用到，一并去掉。）
+    """
+    if len(pts) < 2:
+        return list(range(len(pts)))
+    # 用**本条轨迹的中纬**算该处 1° 的真实弧长（WGS84 椭球，取前两项：误差 < 0.002%）
+    #   · 平行圈（东西向）：111320·cos φ —— 收敛前这里**写死 30.5°**，是主要误差源；
+    #   · 子午线（南北向）：111132.92 − 559.82·cos 2φ —— 收敛前写死 111320（±0.7%）。
+    # 两个方向都用真实弧长，tol 才是**名副其实的米**，跨线路可比。
+    r = math.radians((min(p[1] for p in pts) + max(p[1] for p in pts)) / 2.0)
+    kx = math.cos(r) * 111320.0
+    ky = 111132.92 - 559.82 * math.cos(2.0 * r)
     keep = [False] * len(pts)
     keep[0] = keep[-1] = True
     stack = [(0, len(pts) - 1)]
@@ -48,9 +66,6 @@ def dp_simplify(pts, cum, tol):
             continue
         ax, ay = pts[i][0], pts[i][1]
         bx, by = pts[j][0], pts[j][1]
-        # 平面近似（纬度 30.5°，经度缩放 cos）
-        kx = math.cos(math.radians(30.5)) * 111320.0
-        ky = 111320.0
         ax, ay, bx, by = ax * kx, ay * ky, bx * kx, by * ky
         dx, dy = bx - ax, by - ay
         L2 = dx * dx + dy * dy
@@ -106,7 +121,7 @@ def main():
     print(f"原始里程 {cum[-1]/1000:.2f} km | 滤波后爬升 {up:.0f} m 下降 {dn:.0f} m "
           f"| 未滤波 {up_raw:.0f}/{dn_raw:.0f}")
 
-    idx = dp_simplify(pts, cum, 4.0)     # 4 m 横向容差
+    idx = dp_simplify(pts, 4.0)          # 4 m 横向容差（按本轨迹中纬换算，不再写死 30.5°）
     print("简化后点数", len(idx), "/", len(pts))
     simp = [{"lon": round(pts[i][0], 6), "lat": round(pts[i][1], 6),
              "km": round(cum[i] / 1000, 4), "ele": round(sm[i], 1),
