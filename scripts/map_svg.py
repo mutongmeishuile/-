@@ -501,7 +501,7 @@ def build_map_overlay(mobile=False):
     CP_W = CP_H = CP_R * 2 + 16 * M
 
     placed = {}
-    if not mobile:                              # 手机版地图过小，图例改为页内文字图例
+    if not mobile and not _legend_outside():    # 手机版过小走页内图例；legend_outside 走图例带
         # ⚠ 图例放不下时**缩到能放下为止**，不要直接丢弃（旧行为：一次失败就整块没了，
         #   用户看到"图例呢？"）。逐档收缩重试，_legend_size() 会同步刷新 _LG_S，
         #   渲染代码读同一个 _LG_S，尺寸与排版永远不会打架。
@@ -753,8 +753,15 @@ TITLE_H = 132               # 名称带高度（逻辑像素），仅独立高�
 
 
 def out_size(with_title=False):
-    """输出逻辑尺寸。带名称带时高度加 TITLE_H —— render_map_hi 要按它算画布高。"""
-    return IW, IH + (TITLE_H if with_title else 0)
+    """输出逻辑尺寸。带名称带时高度加 TITLE_H —— render_map_hi 要按它算画布高。
+
+    `legend_outside` 打开时，独立高清图下方还要再加一条图例带（高度由
+    `_legend_band_geom()` 算）。⚠ 画布高与 viewBox 高必须同源，否则会被 letterbox。
+    """
+    h = IH + (TITLE_H if with_title else 0)
+    if with_title and _legend_outside():
+        h += _legend_band_geom()["h"]
+    return IW, h
 
 
 def _title_band():
@@ -779,6 +786,11 @@ def _title_band():
     if sub:
         o.append(f'<text x="{x0}" y="112" font-size="16" font-weight="600" fill="#5A6270">'
                  f'{_esc(sub)}</text>')
+    # 数据口径（可选）：CFG["title_stats"] 一行右对齐 —— 这张图会被单独发出去，
+    # 光有名字没有里程/爬升，读者还是要回头问"多长、多高"。
+    if _CFG.get("title_stats"):
+        o.append(f'<text x="{IW - 40}" y="52" text-anchor="end" font-size="17" '
+                 f'font-weight="700" fill="#4A5261">{_esc(_CFG["title_stats"])}</text>')
     # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
     days = _CFG.get("days", [])
     if days:
@@ -797,6 +809,110 @@ def _esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+# ---------------------------------------------------------------- 图例带（可选）
+# CFG["legend_outside"] = True → 图例**不压在图面上**，改画在图下方一条带里。
+# 为什么要有它：本技能的地图是满幅地形，四角没有空白，图例压哪儿都会盖掉一片山 ——
+# 2026-10-21 珠峰东坡实测，图例卡正压在珠峰东坡—马卡鲁北侧的冰川群上，
+# 而那恰恰是徒步者最想看的一块（用户原话「图例遮住了想看的山峰冰川区域」）。
+# 带子与标题带同底色（#F6F0E3），视觉上是海报的下缘，不是"盖在图上的一块白"。
+# HTML 内嵌版：图例改由页面文字图例承担（build_guide._legend_html），图上不再画卡片。
+BD_ROW0 = 52          # 带内第一行基线（标题行之下）
+BD_PITCH = 29         # 行距（密排：同内容比两栏版矮一半以上）
+BD_PADT = 14
+BD_PADB = 16
+BD_COLS = 4           # 通栏列数（可用 CFG["legend_band_cols"] 覆盖）
+
+
+def _legend_outside():
+    return bool(_CFG.get("legend_outside"))
+
+
+def _legend_split_rows():
+    """把图例行拆成「分日路段」与「附加线（雪线 / 步道）」两段。
+
+    `_legend_rows()` 的顺序是「先分日、后附加」，附加行由 `CFG["legend_extra"]` 提供，
+    所以按 `len(CFG["days"])` 切开即可，不依赖行的内容。
+    """
+    rows = _legend_rows()
+    n = min(len(rows), len(_CFG.get("days", [])) or len(rows))
+    return rows[:n], rows[n:]
+
+
+def _legend_band_items():
+    """图例带的条目，一律「色标 + 名称 + （里程）」，供通栏网格排布。
+
+    ⚠ 分日行的 `legend` 文本自带前缀（CFG 里写的是 "D1 优帕村 → 晓乌措营地"），
+    而色标旁已经有一个 D1，**必须把前缀剥掉**，否则会印成「D1 D1 优帕村…」
+    （2026-10-21 两栏版实测就是这么印的，只是块大看着不明显）。
+    """
+    day_rows, extra_rows = _legend_split_rows()
+    items = []
+    for col, tag, desc, km, w, dash in day_rows:
+        t = desc.strip()
+        if t.startswith(tag):
+            t = t[len(tag):].lstrip(" 　·-→")
+        items.append(("day", col, tag, t, km, None))
+    for kind, nm in _legend_symbols():
+        items.append(("sym", None, "", nm, "", kind))
+    for col, tag, desc, km, w, dash in extra_rows:
+        items.append(("line", col, tag, desc, "", None))
+    return items
+
+
+def _legend_band_geom():
+    """图例带排版（逻辑 px，S=1）。
+
+    版面 = **通栏密排网格**（BD_COLS 列）：色标 + 名称 + 里程一行说清。
+    上一版是"左半区一列到底 + 右半区符号网格"，为了容纳 9 个分日行把带子撑到
+    360 逻辑 px（占整图 32%），用户反馈「下半区域图例占比多大，喧宾夺主」。
+    改密排后同样内容 ≈160 px，占整图 16% 左右。
+    """
+    items = _legend_band_items()
+    cols = max(1, int(_CFG.get("legend_band_cols", BD_COLS)))
+    n_rows = max(1, (len(items) + cols - 1) // cols)
+    h = BD_PADT + BD_ROW0 + BD_PITCH * (n_rows - 1) + BD_PADB
+    return {"h": h, "cols": cols, "n_rows": n_rows}
+
+
+def _legend_band_svg():
+    g = _legend_band_geom()
+    BH = g["h"]
+    items = _legend_band_items()
+    cols = g["cols"]
+    x0 = 40
+    cw = (IW - 2 * x0) / cols
+    o = [f'<rect x="0" y="0" width="{IW}" height="{BH}" fill="#F6F0E3"/>',
+         f'<line x1="0" y1="1" x2="{IW}" y2="1" stroke="#D8CFC0" stroke-width="2"/>',
+         f'<text x="{x0}" y="{BD_PADT + 16}" font-size="14" font-weight="800" '
+         f'fill="#8A7A66" letter-spacing="2">{_esc(_CFG.get("legend_title", "分日路段"))}</text>',
+         f'<text x="{IW - x0}" y="{BD_PADT + 16}" text-anchor="end" font-size="13.5" '
+         f'font-weight="600" fill="#7A8290">'
+         f'{_esc(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))}</text>']
+
+    for i, (kind, col, tag, text, km, glyph) in enumerate(items):
+        cx = x0 + (i % cols) * cw
+        ry = BD_PADT + BD_ROW0 + BD_PITCH * (i // cols)
+        if kind == "sym":
+            o.append(f'<g transform="translate({cx + 8:.1f},{ry - 5:.1f}) scale(0.42)">'
+                     f'{mk_pin(0, 0, glyph)}</g>')
+            o.append(f'<text x="{cx + 30:.0f}" y="{ry}" font-size="13.5" font-weight="700" '
+                     f'fill="#4A5261">{_esc(text)}</text>')
+            continue
+        dash = ' stroke-dasharray="7 4"' if kind == "line" else ""
+        o.append(f'<line x1="{cx}" y1="{ry - 4.5:.0f}" x2="{cx + 30}" y2="{ry - 4.5:.0f}" '
+                 f'stroke="{col}" stroke-width="{2.8 if kind == "day" else 2.2:.1f}" '
+                 f'stroke-linecap="round"{dash}/>')
+        o.append(f'<text x="{cx + 38:.0f}" y="{ry}" font-size="14" font-weight="800" '
+                 f'fill="{col}">{tag}</text>'
+                 f'<text x="{cx + 68:.0f}" y="{ry}" font-size="13.5" font-weight="600" '
+                 f'fill="#4A5261">{_esc(text)}</text>')
+        if km:
+            o.append(f'<text x="{cx + cw - 14:.0f}" y="{ry}" text-anchor="end" '
+                     f'font-size="13.5" font-weight="800" fill="#3A4250">{km}</text>')
+    return "".join(o)
+
+
+
 def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=False):
     """返回 (svg 字符串, 自检信息)。embed_max=0 表示不降采样（高清地图用）。
 
@@ -809,10 +925,13 @@ def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=Fa
                f'href="data:image/jpeg;base64,{_embed_jpeg(embed_max)}"/>')
     cls = "mapsvg map-p" if mobile else "mapsvg map-d"
     band = TITLE_H if with_title else 0
-    vh = IH + band
+    lb = _legend_band_geom()["h"] if (with_title and _legend_outside()) else 0
+    vh = IH + band + lb
     head = (f'<svg class="{cls}" viewBox="0 0 {IW} {vh}" xmlns="http://www.w3.org/2000/svg" '
             f'role="img" aria-label="{_CFG.get("aria_map", "全线地图")}">')
     if with_title:
+        tail = (f'<g transform="translate(0,{band + IH})">{_legend_band_svg()}</g>'
+                if lb else "")
         return (f'{head}{_title_band()}<g transform="translate(0,{band})">'
-                f'{img}{overlay}</g></svg>', placed)
+                f'{img}{overlay}</g>{tail}</svg>', placed)
     return f'{head}{img}{overlay}</svg>', placed

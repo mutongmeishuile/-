@@ -171,7 +171,7 @@ LABEL_GAP = 560          # 同一条等高线上相邻标注的最小弧长间�
 LABEL_SEP = 130          # 任意两个标注之间的最小间距（防聚成堆）
 LABEL_MAX_ANGLE = 62     # 局部倾角超过此值就不标（斜着读不出来的不如不标）
 LABEL_WINDOW = 26        # 估计局部走向的采样窗口（±窗口长度）
-LABEL_FONT = 9.5         # 字号（逻辑像素）
+LABEL_FONT = 8.2         # 字号（逻辑像素）：9.5→8.2（2026-10-21 用户：等高线字太粗太大）
 #   ⚠ 2026-10-17 希夏邦马：11 → 9.5。本窗口 25 m 首曲线下等高线数字约 100+ 个，
 #     11 px 时与峰名/湖名在同一片山脊上争位（用户反馈"字太大、重叠"）。
 #     别再往下压：低于 9 后缩到长图（~0.4×）里就只剩一个色点了。
@@ -182,6 +182,7 @@ MS_STEP = 1              # marching squares 用的 DEM 抽稀步长（1 = 全分
 FONT_CANDIDATES = [
     "C:/Windows/Fonts/msyhbd.ttc",
     "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msyh.ttc",            # 微软雅黑 Regular：比 SimHei 细一档
     "C:/Windows/Fonts/simhei.ttf",
     "/System/Library/Fonts/PingFang.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -1089,7 +1090,7 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
     _lab, _note = _snowline_texts(level)
     f = _label_font(max(11, int(round(LABEL_FONT * 1.25 * S))))
     fn = _label_font(max(8, int(round(LABEL_FONT * 0.8 * S))))
-    stroke = max(2, int(round(1.7 * S)))
+    stroke = max(2, int(round(1.15 * S)))   # 白描边 1.7→1.15*S
     W, H = pil.size
     cell = 14.0 * S
     avoid_cells = set()
@@ -1608,7 +1609,17 @@ def build_terrain():
         TINT_BAND_M = 0.0
     # 区域雪线（南/北坡）：把雪线差折成等效高程偏移，后续全部用同一套色表
     _rs = regional_snow_shift(dem, (LON0, LAT0, LON1, LAT1), verbose=True)
-    dem_tint = (dem - _rs).astype(np.float32) if _rs is not None else dem
+    if _rs is None:
+        dem_tint = dem
+    else:
+        # ⚠ 不能整体下移 dem：北坡 −1000 m 会把 5200 m 的高原压成 4200 m 的"草甸绿"，
+        #   图上出现一块块绿色斑点（2026-10-21 用户截图）。正确做法是**只拉伸高山带**：
+        #   把 [林线, 本坡雪线] 这段线性映射回 [林线, 基准雪线]，色序不变、比例不变。
+        _tl2 = _route_cfg("treeline_m", None)
+        _top = float(_tl2) if _tl2 else snow_m - 700.0     # 高山带下界
+        _top = min(_top, snow_m - 150.0)
+        _t = np.clip((dem - _top) / np.maximum(snow_m + _rs - _top, 1.0), 0.0, 1.2)
+        dem_tint = np.where(dem > _top, _top + _t * (snow_m - _top), dem).astype(np.float32)
     rgb = hypso(dem_tint, snowline=snow_m)
 
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色

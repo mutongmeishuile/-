@@ -30,7 +30,13 @@ STEM = CFG.get("file_stem", "线路")
 OUT_JPG = GC.ROOT / f"{STEM}-全线地图.jpg"
 
 W = MS.IW * 2                       # 与 make_terrain 的超采样一致（逻辑宽 ×2 = 栅格宽）
-H = round(MS.IH * W / MS.IW)
+# ⚠ 独立高清图**要带名称带**（map_svg.TITLE_H = 132 逻辑 px）：这张图是单独发出去的，
+#   没有标题就只剩一片地形与几根彩色线，收到的人不知道这是哪条线、几天、多长。
+#   HTML 内嵌版不加（页面已有 h1），所以这里显式 with_title=True，画布高也必须用
+#   out_size(True) —— 两处不一致会变成"图被上下压缩 / 留白"（2026-10-21 珠峰东坡实测：
+#   旧版 this file 只算 IH，标题带从来没打开过，交付物一直是光板地图）。
+_IH = MS.out_size(True)[1]
+H = round(_IH * W / MS.IW)
 SLACK_W, SLACK_H = 60, 260          # 给浏览器 chrome 留的余量（只用于开窗，不参与裁剪）
 
 
@@ -54,7 +60,7 @@ def _assert_full_frame(a, tag):
 
 
 def main():
-    svg, _ = MS.build_svg(mobile=False, embed_image=True, embed_max=0)
+    svg, _ = MS.build_svg(mobile=False, embed_image=True, embed_max=0, with_title=True)
     html = GC.ROOT / "_map_hi.html"
     html.write_text(_page_html(svg), encoding="utf-8")
 
