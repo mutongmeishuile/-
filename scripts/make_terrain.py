@@ -674,8 +674,11 @@ def belt_stops(dem, snowline, verbose=True, season=None):
     # （年宝玉则 3800–5369、雪线 4650）会把整片 4000–4650 草甸划进高山带 → 82% 画面发灰。
     # 林线是独立于雪线的第二条界线（天山 ≈2700、喜马拉雅 ≈4000、横断山 ≈4100–4300）。
     _tl = _route_cfg("treeline_m", None)
-    top = (min(float(_tl), s - 150.0) if _tl
-           else s - (700.0 if season == "summer" else 1300.0))
+    # ⚠ 用 max()：林线只用来**抬高**植被顶端，绝不降低。
+    #   林线以上仍是高山草甸（绿的），不是碎石；若取 min()，天山这类林线 2700、
+    #   雪线−700=3150 的线路会被砍掉 450 m 的绿带（实测乌孙绿占比 45%→18%）。
+    _base_top = s - (700.0 if season == "summer" else 1300.0)
+    top = min(max(float(_tl), _base_top) if _tl else _base_top, s - 150.0)
     # ⚠ 2026-10-21 改为**雪线相对高程**定位植被带（每档 ~600–800 m）。
     #   旧做法把整张植被色表压进 [dmin, top]：亚丁窗口从 3573 m 起，
     #   600 m 内塞完「深谷→森林→灌丛→草甸」，谷底直接取到 (58,96,72) 近黑绿，
