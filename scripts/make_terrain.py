@@ -124,6 +124,11 @@ JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 #   成排出现，3 px 的计曲线在雪原上连成"灰带"，把等高线读成了一片色块而不是线。
 # 分层设色的量化步长（米）：同一等高带内颜色必须一致（2026-10-20 用户要求）。
 # 由 build_terrain 在选出等高距后覆写为「首曲线间隔」；0 = 关闭量化。
+# 雪线以上「按坡度混岩」（2026-10-20）：雪线不是一刀切的白 —— 陡壁挂不住雪，露出岩体。
+# 0 = 关闭（回到二值：线以上全白）。斜率为 tan 值：35° ≈ 0.70、50° ≈ 1.19。
+SNOW_ROCK_MIX = 0.85          # 陡壁最多混多少岩色（1.0 = 完全变岩）
+SNOW_ROCK_T = (0.70, 1.19)    # 开始混岩 / 完全混岩 的坡度阈值
+SNOW_ROCK_RGB = (122, 116, 110)
 TINT_BAND_M = 0.0
 CONTOUR_DILATE = (0, 0)
 # 陡坡省略阈值（tan，不是角度）：超过就不画该档等高线。理由见 paint_contours 的注释。
@@ -1532,6 +1537,16 @@ def build_terrain():
     #   本意是"山影别把雪涂灰"，实际把雪线以上的晕渲压掉六成；而峰顶设色本身已接近纯白，
     #   两者叠加 → 雪原变成"白纸 + 等高线"，贡嘎主峰群 2400 m 高差全是平的。
     #   现在改为：**雪面用更强的明暗塑形**（见 shade_rgb 的 shaped），只保留一点点回抬。
+    # 雪线以上按坡度混岩：陡壁露岩、缓坡积雪（比"线以上全白"真实得多）
+    if SNOW_ROCK_MIX > 0:
+        gy, gx = np.gradient(dem)
+        res_m = 156543.03392 * np.cos(np.radians(lat_c)) / (2 ** meta["z"])   # DEM 像元边长（米）
+        slope = np.sqrt(gx ** 2 + gy ** 2) / max(res_m, 1e-6)
+        t0, t1 = SNOW_ROCK_T
+        rock = np.clip((slope - t0) / max(t1 - t0, 1e-6), 0.0, 1.0)
+        above = np.clip((dem - (snow_m - 80)) / 220.0, 0.0, 1.0)   # 雪线附近渐入，避免硬边
+        w = (above * rock * SNOW_ROCK_MIX)[..., None]
+        rgb = rgb * (1 - w) + np.array(SNOW_ROCK_RGB, np.float32) * w
     snow_w = np.clip((dem - snow_m) / 500.0, 0.0, 1.0) * 0.85
     img = shade_rgb(rgb, hs, snow_w=snow_w)
     img = np.clip(img, 0, 255).astype(np.uint8)
