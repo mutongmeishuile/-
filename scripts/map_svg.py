@@ -37,7 +37,8 @@ FURN_SB = 0.62        # 比例尺：只作用于字与内衬，**不作用于色
 _LG_S = FURN_LG       # 图例**实际**缩放（build_map_overlay 按高度预算/重试动态设定）
 
 EMBED_MAX = 1600      # 网页内嵌底图上限；高清地图用 embed_max=0
-PS_BASE = 0.85        # 点位符号／标注基准缩放
+FONT_STACK = "Microsoft YaHei,PingFang SC,Noto Sans CJK SC,Source Han Sans SC,sans-serif"
+PS_BASE = 0.66        # 点位符号／标注基准缩放（0.85 → 0.74 → 0.66：图钉再收两档）
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
 MFS_S = 2.8           # 手机版里程点/线宽的额外放大
 
@@ -49,8 +50,9 @@ D2_T = _CFG.get("d2_text", "#0F6E5C")
 
 PS = PS_BASE
 _PAD = 18
-_PIN_R = 18
+_PIN_R = 15
 _OCC, _LABELS, LABEL_OF = [], [], {}
+_TRK, _TRK_HW = [], 0.0     # 轨迹点与半宽（_layout 用来避让线）
 _lg_rect = _sb_rect = _cp_rect = None
 
 
@@ -146,6 +148,11 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
         if x0 < _PAD or x1 > IW - _PAD or y0 < _PAD or y1 > IH - _PAD:
             continue
         area = sum(GC.rect_overlap_area(box, o) for o in _OCC)
+        # 压到轨迹（含白晕）= 不可接受：2026-10-21 实测 POI 标注会正正落在
+        # 白色线道上（"措学仁玛营地"横穿白带），因为 _OCC 里只有图钉与家具，
+        # 线本身从来没进过占位表。给一个极大的罚值，让候选位一律先避开线。
+        if area == 0 and _TRK and _near_track(box, _TRK, _TRK_HW):
+            area = 1e6
         if area == 0:
             # 完美落位里也排个序：配置位 > 离点位近 > 离配置位近
             key = (0 if (ox, oy, a) == (dx, dy, anc) else 1, round(dist(box)),
@@ -190,7 +197,7 @@ def mk_pin(x, y, kind):
         hi = kind == "peak_hi"
         col = D1_T if hi else "#4A5261"
         r = (14 if hi else 11) * PS
-        return (f'<circle cx="{x}" cy="{y}" r="{r+4*PS:.1f}" fill="#fff" opacity="0.9"/>'
+        return (f'<circle cx="{x}" cy="{y}" r="{r+2.4*PS:.1f}" fill="#fff" opacity="0.88"/>'
                 f'<path d="M {x-r:.1f},{y+r*0.62:.1f} L {x},{y-r*0.78:.1f} '
                 f'L {x+r:.1f},{y+r*0.62:.1f} Z" fill="{col}"/>')
     if kind == "temple":
@@ -333,58 +340,134 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
     return km
 
 
-def _base_labels():
-    """底图地名注记的矢量层（2026-10-20）：draw_osm 只算位置，字在这里画。
+def _load_base_labels():
+    """读取 draw_osm 记下的地名锚点 + 样式（栅格 px → 逻辑 px）。
 
-    为什么搬到这一层：
-      · 轨迹线由本模块绘制。字若"烤"在底图位图里，线一过就把地名截断（白晕尤其明显）；
-        搬到 SVG 之后**字永远压在线之上**，线从字底下穿过。
-      · 位图字放大就糊；矢量字随缩放保持锐利。
-      · 全图文字避让从此在一个坐标系里算（_OCC）。
-    坐标来自 draw_osm 的记录（栅格 px + 基线），这里除以 ss 换回逻辑像素。
-    没有 label_boxes.json（旧底图 / labels_vector=False）时返回空串，行为与旧版一致。
+    只取数据，不排位置 —— 位置统一由 `_place_base_labels()` 动态求解。
     """
     try:
         lb = json.loads((GC.OUT / "label_boxes.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
         print("   ⚠ 没有 out/label_boxes.json —— 底图地名不会出现在图上（先跑 make_terrain.py）")
-        return ""
+        return []
     except Exception as e:                                         # noqa
-        # ⚠ 2026-10-20 教训：这里原本是 `except Exception: return ""`，
-        #   把「json 没 import」这种低级错误也吞掉了 —— 15 条线路的地名整层消失，
-        #   图看着"只是有点空"，没有任何报错。异常一律说出来。
         print(f"   ⚠ 底图地名加载失败：{type(e).__name__}: {e}")
-        return ""
+        return []
     if not lb.get("labels"):
         print("   ⚠ label_boxes.json 里没有 labels 字段 —— 底图地名不会出现")
-        return ""
+        return []
     ss = float(lb.get("ss", 1.0)) or 1.0
     out = []
     for it in lb["labels"]:
-        x, yb = it["x"] / ss, it["base"] / ss
-        fs = it["s"] / ss
-        f, st = it["f"], it["st"]
-        c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
-        c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
-        t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        out.append(f'<text x="{x:.1f}" y="{yb:.1f}" font-size="{fs:.1f}" font-weight="700" '
-                   f'fill="{c1}" stroke="{c2}" stroke-width="{it["sw"] / ss:.1f}" '
-                   f'paint-order="stroke" stroke-linejoin="round" '
-                   f'font-family="Microsoft YaHei,PingFang SC,Noto Sans CJK SC,sans-serif">{t}</text>')
+        s0 = it["s"] / ss
+        # 统一到 3 档字号：14+ 主峰 / 11.5–14 中档 / 其余小号。原来的 22–31（栅格）
+        # 换算成逻辑像素是 11–15.5，跟 POI 标注（16）几乎同级，图上一片一样重。
+        fs = 11.4 if s0 >= 13.5 else (10.6 if s0 >= 11.5 else 10.0)
+        out.append({
+            "t": it["t"], "x": it["x"] / ss, "y": it["base"] / ss,
+            "fs": fs, "w": it["s"] / ss, "pri": s0,
+            "fill": it["f"], "stroke": it["st"],
+        })
+    # 重要度按"徒步关心什么"排（2026-10-21）：垭口 > 地名/湖 > 峰 > 河。
+    # 拥挤时才需要取舍，所以这个顺序只在"实在没地方"时决定谁被丢。
+    def _rank(d):
+        f = tuple(d["fill"])
+        if f == (150, 78, 24):
+            return 1000.0                     # 垭口：路线必经点
+        if f[0] == f[1] == f[2] or (abs(f[0] - f[1]) < 6 and abs(f[1] - f[2]) < 6):
+            return 800.0 + d["pri"]           # 村/地名
+        if f[2] > f[0] + 40:
+            return 700.0 + d["pri"]           # 湖 / 河
+        return 500.0 + d["pri"] * 8           # 峰：越高越靠前
+    for d in out:
+        d["rank"] = _rank(d)
+    out.sort(key=lambda d: -d["rank"])
+    return out
+
+
+def _near_track(box, track, half_w):
+    """矩形是否压到轨迹带（含白色外晕）。"""
+    x0, y0, x1, y1 = box
+    for x, y in track:
+        if x0 - half_w <= x <= x1 + half_w and y0 - half_w <= y <= y1 + half_w:
+            return True
+    return False
+
+
+def _poi_dup(it, pois, pin_xy):
+    """底图地名与攻略 POI 是同一个地方？→ 丢掉底图那条。
+
+    OSM 的村/营地名与 POI 名往往只差后缀（「措学仁玛」vs「措学仁玛营地」、
+    「热嘎」vs「热嘎营地」），draw_osm 的 skip_names 全串匹配拦不住，
+    图上就会在同一个点上印两行名字 —— 2026-10-21 实测一处不落。
+    判据：名字互相包含（≥2 字）且锚点相距 < 60 逻辑 px。
+    """
+    t = it["t"].split(" ")[0]
+    if len(t) < 2:
+        return False
+    for d, (px, py) in zip(pois, pin_xy):
+        nm = d["name"].split(" · ")[-1]
+        if not (t in nm or nm in t):
+            continue
+        if (it["x"] - px) ** 2 + (it["y"] - py) ** 2 < 60 ** 2:
+            return True
+    return False
+
+
+def _place_base_labels(track, half_w, pois=(), pin_xy=()):
+    """OSM 地名：矢量层 + 动态避让。
+
+    为什么在**最后**排（2026-10-21）：
+      · 先排会让一堆底图地名把好位置占满，POI 营地/垭口标注只能被挤到边上 ——
+        而攻略图的主体是轨迹与营地，底图地名应当让路。
+      · 先排时 `_OCC` 里还没有图钉、里程点、POI 标注，避让等于没做。
+    策略：按重要度从高到低，围绕 draw_osm 给的原锚点试 8 个方向 × 3 档半径；
+    找到零重叠的位置就落，找不到就**丢掉这一个**（稀疏区基本不会丢，
+    拥挤区先丢次要的湖名/次峰名）。这就实现了"不拥挤区域不做取舍"。
+    """
+    items = _load_base_labels()
+    if not items:
+        return ""
+    if pois:
+        items = [it for it in items if not _poi_dup(it, pois, pin_xy)]
+    out, dropped = [], 0
+    for it in items:
+        fs = it["fs"]
+        w = GC.text_w(it["t"], fs) + 4
+        h = fs * 1.22
+        pad = fs * 0.55
+        tried = []
+        for k in (0, 1, 2):
+            r = fs * 0.75 * (k + 1)
+            tried += [(0, 0), (0, -r), (0, r), (-r, 0), (r, 0),
+                      (-r * 0.8, -r), (r * 0.8, -r), (-r * 0.8, r), (r * 0.8, r)] if k == 0                 else [(0, -r), (0, r), (-r, -r * 0.7), (r, -r * 0.7),
+                      (-r, r * 0.7), (r, r * 0.7), (-r, 0), (r, 0)]
+        for dx, dy in tried:
+            x0 = it["x"] + dx
+            yb = it["y"] + dy
+            box = (x0 - pad, yb - fs * 1.02, x0 + w + pad, yb + fs * 0.26)
+            if box[0] < 3 or box[2] > IW - 3 or box[1] < 3 or box[3] > IH - 3:
+                continue
+            if any(GC.rect_overlap_area(box, o) > 0 for o in _OCC):
+                continue
+            if _near_track(box, track, half_w):
+                continue
+            _OCC.append(box)
+            f, st = it["fill"], it["stroke"]
+            c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
+            c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
+            t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            wt = 700 if fs >= 11.4 else 600
+            out.append(f'<text x="{x0:.1f}" y="{yb:.1f}" font-size="{fs:.1f}" '
+                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="1.7" '
+                       f'stroke-opacity="0.92" paint-order="stroke" '
+                       f'stroke-linejoin="round">{t}</text>')
+            break
+        else:
+            dropped += 1
+    if dropped:
+        print(f"   底图地名：落位 {len(out)} 条 · 拥挤丢弃 {dropped} 条")
     return "".join(out)
-
-
-def _seed_label_boxes():
-    """把底图已有注记的矩形先登记进占位表，后续 POI/地名标注才会避开它们。"""
-    try:
-        lb = json.loads((GC.OUT / "label_boxes.json").read_text(encoding="utf-8"))
-        ss = float(lb.get("ss", 1.0)) or 1.0
-        for x0, y0, x1, y1 in lb.get("boxes", []):
-            _OCC.append((x0 / ss, y0 / ss, x1 / ss, y1 / ss))
-    except FileNotFoundError:
-        pass
-    except Exception as e:                                         # noqa
-        print(f"   ⚠ 注记占位加载失败：{type(e).__name__}: {e}")
 
 
 def build_map_overlay(mobile=False):
@@ -393,10 +476,10 @@ def build_map_overlay(mobile=False):
     global _lg_rect, _sb_rect, _cp_rect
     M = MFS_M if mobile else 1.0
     PS = PS_BASE * M
-    _PIN_R = 24 * M
+    _PIN_R = 19 * M
     _PAD = 22
     _OCC.clear()
-    _seed_label_boxes()          # 底图注记先占位（必须在放任何标注之前）
+    global _TRK, _TRK_HW
     _LABELS.clear()
     LABEL_OF.clear()
     # ⚠ 三件套矩形必须在每轮开头清零：手机版**不摆图例**，若不清零，
@@ -413,8 +496,10 @@ def build_map_overlay(mobile=False):
 
     o = []
     # ⚠ 线宽与符号要成比例：主线太粗会盖住底图等高线、也压掉点位符号。
-    #   2026-10-09 亚丁线用户实测反馈「线太粗」→ 5.4/8.6 降到 4.0/6.2。
-    ROUTE_W, HALO_W = 4.0 * M, 6.2 * M
+    #   2026-10-09 亚丁线「线太粗」→ 5.4/8.6 降到 4.0/6.2；
+    #   2026-10-21 珠峰东坡扩窗后线相对更粗、压地名 → 再收到 3.0/4.9。
+    ROUTE_W, HALO_W = 3.0 * M, 4.9 * M
+    _TRK, _TRK_HW = XY, (ROUTE_W + HALO_W) / 2 + 1.0
     o.append(f'<path d="{d_of(XY)}" fill="none" stroke="#FFFFFF" stroke-width="{HALO_W}" '
              f'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
     # ---- 分日配色：支持 N 天。优先 CFG["days"] 的 color + CFG["day_bounds"]（km），
@@ -441,8 +526,9 @@ def build_map_overlay(mobile=False):
         o.append(f'<path d="{d_of(seg)}" fill="none" stroke="{_day_cols[si]}" '
                  f'stroke-width="{ROUTE_W}" stroke-linecap="round" stroke-linejoin="round"/>')
 
-    # ---- 底图地名（矢量层）：压在轨迹之上、POI 之下 ----
-    o.append(_base_labels())
+    # ---- 底图地名（矢量层）：占位记在这里，最后统一摆位后再插回来 ----
+    #   （要等图钉 / 里程点 / POI 标注都摆完，_OCC 才完整，避让才算数）
+    _LBL_AT = len(o)
 
     # 每 5 km 里程点
     # ⚠ 三位数（105 km 等）在固定 r=7.4 的圆里必然溢出 → 用户看到「105 挤在圈里」。
@@ -463,11 +549,14 @@ def build_map_overlay(mobile=False):
     # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
     for _bi in _split_is[1:-1] if len(_split_is) > 2 else [SPLIT_I]:
         sx, sy = XY[_bi]
-        o.append(f'<line x1="{sx-56*M:.0f}" y1="{sy:.1f}" x2="{sx+56*M:.0f}" y2="{sy:.1f}" '
-                 f'stroke="#FFFFFF" stroke-width="{7*M:.1f}" stroke-linecap="round"/>'
-                 f'<line x1="{sx-56*M:.0f}" y1="{sy:.1f}" x2="{sx+56*M:.0f}" y2="{sy:.1f}" '
-                 f'stroke="#6C7480" stroke-width="{2.4*M:.1f}" '
-                 f'stroke-dasharray="{11*M:.0f} {8*M:.0f}" stroke-linecap="round"/>')
+        # ⚠ 2026-10-21：原来这条分日界是"白色胶囊底 + 2.4 粗虚线"，线宽收到 3.0 之后
+        #   它反而比主线还抢眼（图上像一排白色药丸）。改成细虚线 + 极窄白底。
+        o.append(f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
+                 f'stroke="#FFFFFF" stroke-width="{2.4*M:.1f}" stroke-linecap="round" '
+                 f'opacity="0.85"/>'
+                 f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
+                 f'stroke="#6C7480" stroke-width="{1.15*M:.1f}" '
+                 f'stroke-dasharray="{7*M:.0f} {5*M:.0f}" stroke-linecap="round"/>')
 
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
 
@@ -550,7 +639,10 @@ def build_map_overlay(mobile=False):
         name, ele, k = d["name"], d["ele"], d["kind"]
         dx, dy, anc = d["dx"], d["dy"], d["anchor"]
         x, y = pin_xy[i]
-        base = (18 if k in ("start", "end") else 16) * PS
+        # 标注字号**不跟符号缩放走**：图钉要小（0.66），字要读得清。
+        # 2026-10-21 实测：字跟着 PS 缩到 9.6 之后，比底图地名（10–11.4）还小，
+        # 白晕又占掉 1/4 笔画 —— POI 名看着发虚发灰，主次颠倒。
+        base = 15.6 if k in ("start", "end") else 14.4
         col = D1_T if k == "peak_hi" else (D2_T if k in ("start", "end") else INK)
         if mobile:
             txt = getattr(RD, "SHORT", {}).get(name, name)
@@ -589,7 +681,7 @@ def build_map_overlay(mobile=False):
         #   一圈白阴影（用户原话"字体看上去有白色的阴影"）。收到 2.4*PS ≈ 字号的 13%，
         #   读起来是"描边"而不是"发光"，同时仍能压住底图等高线。
         o.append(f'<text x="{tx}" y="{ty+7.4*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
-                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{2.4*PS:.1f}" '
+                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="2.1" '
                  f'stroke-opacity="0.92" paint-order="stroke" stroke-linejoin="round">{t}</text>')
 
     # ---- 落位绘制 ----
@@ -674,6 +766,8 @@ def build_map_overlay(mobile=False):
                  f'font-size="{fs:.1f}" fill="#3A4250">{sb_km/2:g}</text>'
                  f'<text x="{bx+sb_bar:.1f}" y="{num_y:.1f}" text-anchor="end" '
                  f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">{sb_km:g} km</text></g>')
+    o.insert(_LBL_AT, _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
+                            POIS, pin_xy))
     return "".join(o), placed
 
 
@@ -931,7 +1025,10 @@ def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=Fa
     band = TITLE_H if with_title else 0
     lb = _legend_band_geom()["h"] if (with_title and _legend_outside()) else 0
     vh = IH + band + lb
+    # 字体**只在根节点声明一次**：这样 OSM 地名、POI 标注、里程数字全部同一套字，
+    # 不再出现"底图地名是黑体、POI 标注落到浏览器默认衬线"的混排（2026-10-21 用户指出）。
     head = (f'<svg class="{cls}" viewBox="0 0 {IW} {vh}" xmlns="http://www.w3.org/2000/svg" '
+            f'font-family="{FONT_STACK}" '
             f'role="img" aria-label="{_CFG.get("aria_map", "全线地图")}">')
     if with_title:
         tail = (f'<g transform="translate(0,{band + IH})">{_legend_band_svg()}</g>'
