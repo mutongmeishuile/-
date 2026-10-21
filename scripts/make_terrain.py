@@ -1558,7 +1558,7 @@ def build_terrain():
         slope = np.sqrt(gx ** 2 + gy ** 2) / max(res_m, 1e-6)
         t0, t1 = SNOW_ROCK_T
         rock = np.clip((slope - t0) / max(t1 - t0, 1e-6), 0.0, 1.0)
-        above = np.clip((dem - (snow_m - 250)) / 380.0, 0.0, 1.0)  # 雪线上下各留一条残雪过渡带
+        above = np.clip((dem - (snow_m - 120)) / 260.0, 0.0, 1.0)  # 残雪过渡带：只留 120 m（原 250 m 把 4400 以上全洗白了）
         w = (above * rock * SNOW_ROCK_MIX)[..., None]
         rgb = rgb * (1 - w) + np.array(SNOW_ROCK_RGB, np.float32) * w
     snow_w = np.clip((dem - snow_m) / 500.0, 0.0, 1.0) * 0.85
