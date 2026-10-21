@@ -580,6 +580,18 @@ def hypso(dem, snowline=None):
 #   CFG["terrain_season"] 可按线路覆盖。
 SEASON = "summer"
 SUMMER_SNOW_SHIFT = 350.0
+# 按月份取雪线偏移（相对"现代雪线"= 消融季末的平衡线 ELA，即 8–9 月的值）。
+# 依据：6 月仍处残雪期，季节性雪线比 ELA 低 300–400 m（喜马拉雅/天山实测同期差 300–500）；
+# 7 月消融加速、8 月末到达最高。徒步最常走的 6–9 月用这张表即可。
+#   CFG["snow_month"] = 6  →  偏移 −350 m（比 9 月多约 550 m 的雪）
+MONTH_SNOW_SHIFT = {
+    5: -500.0,   # 5 月：积雪大面积未消，雪线很低
+    6: -350.0,   # 6 月：残雪期，垭口普遍有雪
+    7: -150.0,   # 7 月：消融中
+    8: 0.0,      # 8 月末 ≈ 现代雪线本值
+    9: 200.0,    # 9 月：最少年积雪
+    10: 350.0,   # 10 月：新雪开始，视觉雪线回升
+}
 BELT_DENSIFY_M = 100.0   # 密化步长：段间每 ~100 m 插一个中间色，过渡更自然
 
 
@@ -1486,8 +1498,16 @@ def build_terrain():
     # 夏季地貌：季节性积雪退到高处 → 雪线整体上移（雪线虚线、设色、雪面塑形同步用这个值）
     _season = str(_route_cfg("terrain_season", SEASON) or SEASON).lower()
     if _season == "summer":
-        _shift = float(_route_cfg("summer_snow_shift", SUMMER_SNOW_SHIFT))
-        print(f"   季节档 summer：雪线 {snow_m:.0f} → {snow_m + _shift:.0f} m（+{_shift:.0f} m，夏季季节性积雪已退）")
+        _m = _route_cfg("snow_month", None)
+        if _m is not None:
+            _m = int(_m)
+            _shift = float(MONTH_SNOW_SHIFT.get(_m, MONTH_SNOW_SHIFT[9]))
+            print(f"   月份档 {_m} 月：雪线偏移 {_shift:+.0f} m（相对现代雪线）")
+        else:
+            _shift = float(_route_cfg("summer_snow_shift", SUMMER_SNOW_SHIFT))
+        _why = "季节性积雪已退" if _shift >= 0 else "仍处残雪期，雪线低于平衡线"
+        print(f"   季节档 summer：雪线 {snow_m:.0f} → {snow_m + _shift:.0f} m"
+              f"（{_shift:+.0f} m，{_why}）")
         snow_m = snow_m + _shift
     if (_route_cfg("snowline_m", None) is None
             and str(_route_cfg("terrain_palette", "") or "").strip().lower() != "desert"):
