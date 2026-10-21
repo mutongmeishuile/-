@@ -126,8 +126,8 @@ JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
 # 由 build_terrain 在选出等高距后覆写为「首曲线间隔」；0 = 关闭量化。
 # 雪线以上「按坡度混岩」（2026-10-20）：雪线不是一刀切的白 —— 陡壁挂不住雪，露出岩体。
 # 0 = 关闭（回到二值：线以上全白）。斜率为 tan 值：35° ≈ 0.70、50° ≈ 1.19。
-SNOW_ROCK_MIX = 0.85          # 陡壁最多混多少岩色（1.0 = 完全变岩）
-SNOW_ROCK_T = (0.70, 1.19)    # 开始混岩 / 完全混岩 的坡度阈值
+SNOW_ROCK_MIX = 0.62          # 陡壁最多混多少岩色（0.85→0.62：雪更白、岩只到浅褐灰）
+SNOW_ROCK_T = (0.95, 1.60)    # 43.5° 起混 / 58° 全岩（原 35°/50° 露岩太多）
 SNOW_ROCK_RGB = (122, 116, 110)
 TINT_BAND_M = 0.0
 CONTOUR_DILATE = (0, 0)
