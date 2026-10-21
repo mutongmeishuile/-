@@ -622,6 +622,59 @@ def _ramp_check(stops, snowline, verbose=True):
     return not bad
 
 
+def regional_snow_shift(dem, bbox, verbose=True):
+    """按区域返回「等效高程偏移」数组（米）；未配置或失败返回 None。
+
+    CFG["snowline_regions"] = {
+        "border_file": "out/borders.json",   # [{"pts": [[lon,lat],...]}]
+        "south": 5000,                        # 南坡雪线（图的下方）
+        "north": 6000,                        # 北坡雪线（图的上方）
+        "blend_deg": 0.06,                    # 边界过渡宽度（度）
+    }
+    返回 shift：北坡 = north − south，南坡 = 0；边界处线性过渡。
+    用法：dem_eff = dem − shift，然后用 south 雪线的一套色表查色。
+    """
+    reg = _route_cfg("snowline_regions", None)
+    if not reg:
+        return None
+    try:
+        import json as _json
+        bp = reg.get("border_file", "out/borders.json")
+        # 容错：既接受 "out/borders.json"（相对项目），也接受裸文件名
+        cands = [Path(bp), GC.OUT / Path(bp).name, GC.ROOT / bp if hasattr(GC, "ROOT") else Path(bp)]
+        fb = next((c for c in cands if c.exists()), None)
+        if fb is None:
+            if verbose:
+                print(f"   ⚠ 找不到国界文件 {bp}，区域雪线不生效")
+            return None
+        bj = _json.loads(fb.read_text(encoding="utf-8"))
+        seg = bj["pts"] if isinstance(bj, dict) else bj[0]["pts"]
+        lons = np.array([pt[0] for pt in seg], float)
+        lats = np.array([pt[1] for pt in seg], float)
+        keep = np.isfinite(lons) & np.isfinite(lats)
+        lons, lats = lons[keep], lats[keep]
+        o = np.argsort(lons)
+        lons, lats = lons[o], lats[o]
+        x0, y0, x1, y1 = bbox
+        H, W = dem.shape
+        lon_axis = np.linspace(x0, x1, W)
+        lat_axis = np.linspace(y1, y0, H)
+        b_lat = np.interp(lon_axis, lons, lats)          # 每列的边界纬度
+        d = lat_axis[:, None] - b_lat[None, :]           # >0 = 边界以北
+        bw = max(float(reg.get("blend_deg", 0.06)), 1e-3)
+        w = np.clip(d / (2 * bw) + 0.5, 0.0, 1.0)        # 0=南坡 1=北坡
+        delta = float(reg["north"]) - float(reg["south"])
+        shift = (delta * w).astype(np.float32)
+        if verbose:
+            print(f"   区域雪线：北坡 {reg['north']:.0f} m / 南坡 {reg['south']:.0f} m"
+                  f"（Δ{delta:+.0f} m，过渡 {bw:.2f}°）")
+        return shift
+    except Exception as e:                                          # noqa
+        if verbose:
+            print(f"   ⚠ 区域雪线计算失败：{type(e).__name__}: {e}")
+        return None
+
+
 def belt_stops(dem, snowline, verbose=True, season=None):
     """按雪线对齐的绝对高程地貌带生成色阶表；区域够不到雪线带返回 None（调用方回退）。
 
@@ -1553,7 +1606,11 @@ def build_terrain():
         TINT_BAND_M = float(_route_cfg("tint_band_m", 0.0))
     except Exception:                                              # noqa
         TINT_BAND_M = 0.0
-    rgb = hypso(dem, snowline=snow_m)
+    # 区域雪线（南/北坡）：把雪线差折成等效高程偏移，后续全部用同一套色表
+    _rs = regional_snow_shift(dem, (LON0, LAT0, LON1, LAT1), verbose=True)
+    dem_tint = (dem - _rs).astype(np.float32) if _rs is not None else dem
+    rgb = hypso(dem_tint, snowline=snow_m)
+
     # 制图惯例：设色打底 + 晕渲塑形（环境光 + 方向光，背光面不死黑）+ 阴阳分色
     # ⚠ 2026-10-20（贡嘎大环）重做：原来这里是「向无山影的设色回抬」（600 m 内 0→0.6），
     #   本意是"山影别把雪涂灰"，实际把雪线以上的晕渲压掉六成；而峰顶设色本身已接近纯白，
@@ -1566,10 +1623,10 @@ def build_terrain():
         slope = np.sqrt(gx ** 2 + gy ** 2) / max(res_m, 1e-6)
         t0, t1 = SNOW_ROCK_T
         rock = np.clip((slope - t0) / max(t1 - t0, 1e-6), 0.0, 1.0)
-        above = np.clip((dem - (snow_m - 120)) / 260.0, 0.0, 1.0)  # 残雪过渡带：只留 120 m（原 250 m 把 4400 以上全洗白了）
+        above = np.clip((dem_tint - (snow_m - 120)) / 260.0, 0.0, 1.0)  # 残雪过渡带 120 m
         w = (above * rock * SNOW_ROCK_MIX)[..., None]
         rgb = rgb * (1 - w) + np.array(SNOW_ROCK_RGB, np.float32) * w
-    snow_w = np.clip((dem - snow_m) / 500.0, 0.0, 1.0) * 0.85
+    snow_w = np.clip((dem_tint - snow_m) / 500.0, 0.0, 1.0) * 0.85
     img = shade_rgb(rgb, hs, snow_w=snow_w)
     img = np.clip(img, 0, 255).astype(np.uint8)
     # BICUBIC 而非 LANCZOS：LANCZOS 在陡崖等高反差处会产生振铃，被随后的 USM 放大成"颗粒噪点"。

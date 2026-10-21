@@ -198,6 +198,9 @@ h1 .lite{font-size:19px;color:#5A6270;font-weight:600;letter-spacing:0}
 .ph .right.n{color:#68717E;font-weight:600}
 svg{display:block;width:100%;height:auto}
 .rbox-lgm{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px;padding-top:14px;border-top:1px dashed #E7E0D6}
+/* 附加行（雪线 / 步道）说明文字长：整行铺满，避免在 1/3 格里把 tag 挤成两行 */
+.rbox-lgm .lg.wide{grid-column:1/-1}
+.rbox-lgm .lg.wide i{width:34px}
 .lg{display:flex;align-items:center;gap:9px;font-size:13px;color:#3A4250}
 .lg i{width:22px;height:5px;border-radius:3px;flex:0 0 auto}
 .lg b{font-weight:800}
@@ -331,11 +334,30 @@ def _legend_html():
     rows = []
     for d in DAYS:
         rows.append((d["color"], d["tag"], d.get("legend", ""), d.get("dist_label", "")))
-    if CFG.get("extra_legend_desc"):
+    # 附加行与 map_svg._legend_rows 同源：CFG["legend_extra"] 列表优先
+    # （雪线 / 步道 / 冰川面可并存），缺省退回旧的单行 extra_legend_* 键。
+    # ⚠ 2026-10-21 珠峰东坡实测：旧版这里只认 extra_legend_desc，
+    #   而 map_svg 认 legend_extra —— 结果**地图内有雪线/步道两行、HTML 图例没有**，
+    #   两套图例对不上（"图例要覆盖图上所有符号"直接失效）。
+    extra = CFG.get("legend_extra")
+    if extra:
+        for it in extra:
+            rows.append((it.get("color", "#8C8C86"), it.get("tag", ""),
+                         it.get("desc", ""), it.get("dist_label", ""),
+                         bool(it.get("dash"))))
+    elif CFG.get("extra_legend_desc"):
         rows.append((CFG.get("extra_legend_color", "#8C8A86"),
-                     CFG.get("extra_legend_tag", "步道"), CFG["extra_legend_desc"], ""))
-    return "".join(f'<div class="lg"><i style="background:{c}"></i><b>{t}</b> {d}'
-                   f'<span>{k}</span></div>' for c, t, d, k in rows)
+                     CFG.get("extra_legend_tag", "步道"), CFG["extra_legend_desc"], "", True))
+    out = []
+    for r in rows:
+        c, t, d, k = r[0], r[1], r[2], r[3]
+        dashed = len(r) > 4 and r[4]
+        # 虚线行（雪线 / 步道）样本画成虚线，别用实心色条冒充
+        style = (f"background:repeating-linear-gradient(90deg,{c} 0 5px,transparent 5px 9px)"
+                 if dashed else f"background:{c}")
+        out.append(f'<div class="lg{" wide" if dashed else ""}"><i style="{style}"></i><b>{t}</b> {d}'
+                   f'<span>{k}</span></div>')
+    return "".join(out)
 
 
 # ---- 累计升降（与 prep_kml_track 同口径：11 点平滑 + 3 m 阈值）----

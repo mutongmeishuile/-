@@ -120,8 +120,14 @@ def main():
         sys.path.insert(0, str(HERE))
         import route_def as RD
         c = getattr(RD, "CFG", {})
-        need = ("file_stem", "title", "sub", "days", "day_cards", "notes", "src")
+        need = ("file_stem", "title", "sub", "days", "day_cards", "notes")
         miss = [k for k in need if not c.get(k)]
+        # ⚠ `src` 只要求"键存在"，不要求非空：用户明确要求剔除「数据说明 / 底图来源」
+        #   两块时，route_def 里写的是 `"src": []` —— 旧判据 `not c.get("src")` 会把
+        #   这种**正确配置**判成缺项（2026-10-21 珠峰东坡实测：明明按约定配了空列表，
+        #   preflight 仍报 FAIL，误导人往 CFG 里塞溯源长文）。
+        if "src" not in c:
+            miss.append("src")
         if not track_ready:
             print("  [..]   route_def 尚未填（首次运行正常）—— 正确顺序："
                   "先 prep_track.py 拿到里程/爬升，再回来填数字区与文案")
