@@ -1548,6 +1548,61 @@ def avoid_points(meta, scale_raster, ss):
     return pts
 
 
+# ------------------------------------------------------------------ 高海拔水面过滤
+
+def _drop_high_alt_water(osm_path, dem, bbox, snow_m, out_path):
+    """雪线以上的小水面直接剔除（仅大窗口总览图启用）。
+
+    OSM 在青藏高原/喜马拉雅标了上千个冰面湖/冰面塘（supraglacial pond）。在
+    几百 km 的幅面上，它们就是雪山里一个深色麻点，读者会当成渲染错误
+    （2026-10-21 尼泊尔总览用户圈图，雪线以上水面 1391 个）。
+
+    判据：水面重心所在栅格海拔 > 雪线 − 300 m 的一律不画；但**有名湖/大湖保留**
+    （浪强错 4570 m ≈ 42 km² 就在雪线上沿，是希夏邦马一带的地标）。佩枯错、
+    玛旁雍错等大湖海拔低于雪线，天然不受影响。
+    """
+    import json as _json
+    x0, y0, x1, y1 = bbox
+    H, W = dem.shape
+    d = _json.loads(Path(osm_path).read_text(encoding="utf-8"))
+    keep, dropped = [], 0
+    for e in d.get("elements", []):
+        t = e.get("tags", {})
+        is_w = (t.get("natural") == "water" or t.get("landuse") == "reservoir"
+                or t.get("waterway") == "riverbank")
+        if is_w and isinstance(t, dict):
+            pts = []
+            def _walk(x):
+                if isinstance(x, dict):
+                    if "lat" in x:
+                        pts.append((x["lon"], x["lat"]))
+                    else:
+                        for v in x.values():
+                            _walk(v)
+                elif isinstance(x, list):
+                    for v in x:
+                        _walk(v)
+            _walk(e.get("geometry") or e.get("members") or [])
+            if len(pts) >= 3:
+                lon = sum(q[0] for q in pts) / len(pts)
+                lat = sum(q[1] for q in pts) / len(pts)
+                px, py = int((lon - x0) / (x1 - x0) * W), int((y1 - lat) / (y1 - y0) * H)
+                if 0 <= py < H and 0 <= px < W and dem[py, px] > snow_m - 300:
+                    # 保护：有名字的湖、或面积够大的湖是地标，删了反而是信息损失；
+                    # 要删的是无名的冰面小塘。
+                    _xs = [q[0] for q in pts]
+                    _ys = [q[1] for q in pts]
+                    _area = (max(_xs) - min(_xs)) * (max(_ys) - min(_ys))
+                    if not (t.get("name") or _area > 0.0015):      # ≈ 20 km²
+                        dropped += 1
+                        continue
+        keep.append(e)
+    _json.dump({"elements": keep}, open(out_path, "w", encoding="utf-8"), ensure_ascii=False)
+    if dropped:
+        print(f"   雪线以上水面 {dropped} 个 → 已剔除")
+    return out_path
+
+
 # ------------------------------------------------------------------ 主流程
 def build_terrain():
     LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
@@ -1709,7 +1764,14 @@ def build_terrain():
                 skip.add(str(_s).strip())
         except Exception:                                          # noqa
             skip = set()
-        pil = draw_overlay(pil, m, OUT / "osm.json", skip_names=skip,
+        _osm_draw = OUT / "osm.json"
+        try:
+            if (LON1 - LON0) > 1.5:      # 只在"大窗口总览图"启用
+                _osm_draw = _drop_high_alt_water(_osm_draw, dem, (LON0, LAT0, LON1, LAT1),
+                                                 snow_m, OUT / "osm_draw.json")
+        except Exception as _e:                                        # noqa
+            print(f"   （水面过滤跳过：{_e}）")
+        pil = draw_overlay(pil, m, _osm_draw, skip_names=skip,
                            px_scale=SS, proj_scale=scale_raster,
                            seed_cells=(seed_cells
                                        | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
