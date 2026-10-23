@@ -747,7 +747,7 @@ def build_map_overlay(mobile=False):
     CP_W = CP_H = CP_R * 2 + 16 * M
 
     placed = {}
-    if not mobile and not _legend_outside():    # 手机版过小走页内图例；legend_outside 走图例带
+    if not mobile and _legend_place() == "map":   # 手机版过小走页内图例；band/title 另画
         # 落点首选顺序：默认 tl→tr→br→bl（旧行为）。用户点名"图例放左下角"这类要求时
         # 用 CFG["legend_corner"]="bl" 把它提到最前 —— **只改顺序、不改避让规则**：
         # 硬约束仍是"不压轨迹、不压标注"，左下角真放不下才会退到下一角（不会硬摆压线）。
@@ -1023,6 +1023,110 @@ def out_size(with_title=False):
     return IW, h
 
 
+def _legend_place():
+    """图例放哪：`"map"`（图面内，默认）/ `"band"`（图下方图例带）/ `"title"`（标题带里）。
+
+    优先级：显式 `CFG["legend_place"]` > 旧的 `CFG["legend_outside"]`（→"band"）> "map"。
+    保留 legend_outside 是为了老线路不用改配置（珠峰东坡等已在用它）。
+    """
+    p = str(_CFG.get("legend_place") or "").strip().lower()
+    if p in ("map", "band", "title"):
+        return p
+    return "band" if _legend_outside() else "map"
+
+
+def _title_legend(x_right, y_bottom):
+    """标题带里的紧凑图例（`CFG["legend_place"]="title"`）。
+
+    为什么要有（2026-10-23 用户指着截图问「能不能放这片区域」）
+    ---------------------------------------------------------
+    满幅地形图上，图例卡压哪儿都盖一片山；而**标题带中间本来就是空的**（左边标题、
+    右边数据口径）。把它放进去，图面一点不浪费；位置按用户要求"靠右下角"——
+    右缘与数据行对齐（`x_right`），底缘贴带子下沿（`y_bottom`）。
+
+    排版"两簇并排、底边对齐"：左簇符号说明（n×2 网格），右簇分日 + 附加线（3 列）。
+    ⚠ **必须留出标题块的宽度**：`title_lite` 一长就会和图例第一列撞在一起
+    （2026-10-23 实测「（贡雅线 鸡荷段 · 7 天 6 晚 · 重装野线）」直接压在「起点 终点」上）。
+    这里先量标题块的右缘，算 `avail = x_right - 标题右缘`，整块按 `k = avail/需要的宽`
+    等比缩放（下限 0.62），再靠右下角定位 —— 换条线标题再长也不会撞。
+    """
+    day_rows, extra_rows = _legend_split_rows()
+    entries = list(day_rows) + list(extra_rows)
+    syms = _legend_symbols()
+
+    FS, FS_T, FS_K = 11.0, 11.5, 10.5
+    PITCH, GAP_COL, GAP_BLOCK = 22.0, 18.0, 26.0
+    LINE_W, TAG_DX, DESC_GAP = 22.0, 28.0, 6.0
+
+    def entry_w(row):
+        _c, tag, desc, km = row[0], row[1], row[2], row[3]
+        w = TAG_DX + GC.text_w(tag, FS_T) + DESC_GAP + GC.text_w(desc, FS)
+        if km:
+            w += 8 + GC.text_w(km, FS_K)
+        return w
+
+    ncol = 3 if len(entries) > 6 else max(1, min(3, len(entries)))
+    nrow = -(-len(entries) // ncol)                     # ceil
+    cols = [[] for _ in range(ncol)]
+    for i, r in enumerate(entries):
+        cols[i % ncol].append(r)                        # 列优先：横读是 D1 → D2 → D3
+    col_w = [max([entry_w(r) for r in c] or [0]) for c in cols]
+    day_w = sum(col_w) + GAP_COL * (ncol - 1)
+
+    sym_cols = 3 if len(syms) > 3 else max(1, len(syms))
+    sym_rows = -(-len(syms) // sym_cols)
+    sym_cell = max([13 + 5 + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
+    sym_w = sym_cell * sym_cols
+
+    total = sym_w + GAP_BLOCK + day_w
+    h = max(nrow, sym_rows) * PITCH
+
+    # 标题块右缘：只算**和图例同高**的两行（主标题 82 / 副题 112）。
+    # badge 在 y=30、图例顶边在 y≈50 以下，纵向不重叠，不必为它让宽 ——
+    # 早先把 badge 也算进来（且 `&nbsp;` 被当成 6 个字量宽），avail 直接被压到 535 px。
+    x_left = 40
+    t = _CFG.get("title") or _CFG.get("file_stem") or ""
+    sub = _CFG.get("title_lite") or ""
+    _right = x_left + max(GC.text_w(t, 44) + 2, GC.text_w(sub, 16))
+    avail = x_right - (_right + 26)
+    k = max(0.62, min(1.0, avail / total)) if total else 1.0
+
+    # 本地坐标原点 = 块左上角；整块 translate 到右下角落点再 scale
+    ox = x_right - total * k
+    oy = y_bottom - h * k
+    o = [f'<g transform="translate({ox:.1f},{oy:.1f}) scale({k:.3f})">']
+
+    for i, (kind, nm) in enumerate(syms):
+        cx = (i % sym_cols) * sym_cell + 7
+        # 符号簇**底边对齐**：不足 nrow 行时贴最后几行，多余的空间留在上方
+        cy = (nrow - sym_rows + i // sym_cols) * PITCH + 15
+        o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.38)">{mk_pin(0, 0, kind)}</g>')
+        o.append(f'<text x="{cx + 12:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
+                 f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
+
+    dx = sym_w + GAP_BLOCK
+    for ci, col in enumerate(cols):
+        for ri, row in enumerate(col):
+            c, tg, desc, km = row[0], row[1], row[2], row[3]
+            base = ri * PITCH + 15
+            lx = dx + sum(col_w[:ci]) + GAP_COL * ci
+            o.append(f'<line x1="{lx:.1f}" y1="{base - 4:.1f}" x2="{lx + LINE_W:.1f}" '
+                     f'y2="{base - 4:.1f}" stroke="{c}" stroke-width="3" stroke-linecap="round"/>')
+            o.append(f'<text x="{lx + TAG_DX:.1f}" y="{base:.1f}" font-size="{FS_T:.1f}" '
+                     f'font-weight="800" fill="{c}">{_esc(tg)}</text>')
+            tx = lx + TAG_DX + GC.text_w(tg, FS_T) + DESC_GAP
+            o.append(f'<text x="{tx:.1f}" y="{base:.1f}" font-size="{FS:.1f}" '
+                     f'font-weight="600" fill="#4A5261">{_esc(desc)}</text>')
+            if km:
+                o.append(f'<text x="{lx + col_w[ci]:.1f}" y="{base:.1f}" text-anchor="end" '
+                         f'font-size="{FS_K:.1f}" font-weight="800" fill="#6B7280">{_esc(km)}</text>')
+    o.append('</g>')
+    if k < 0.999:
+        print(f"   标题带图例：按 {k:.2f} 缩放到 {total * k:.0f}×{h * k:.0f} px"
+              f"（需要 {total:.0f}，可用 {avail:.0f}）")
+    return "".join(o)
+
+
 def _title_band():
     """地图名称带（2026-10-20 与贡嘎大环对齐）：整幅图**正上方**一条标题栏。
 
@@ -1050,9 +1154,12 @@ def _title_band():
     if _CFG.get("title_stats"):
         o.append(f'<text x="{IW - 40}" y="52" text-anchor="end" font-size="17" '
                  f'font-weight="700" fill="#4A5261">{_esc(_CFG["title_stats"])}</text>')
+    # 图例放标题带时整块搬进来（右缘贴数据行、底缘贴带子下沿）；否则只留分日色条
+    if _legend_place() == "title":
+        o.append(_title_legend(IW - 40, TITLE_H - 16))
     # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
     days = _CFG.get("days", [])
-    if days:
+    if days and _legend_place() != "title":
         bx = IW - 40 - len(days) * 34
         for i, d in enumerate(days):
             o.append(f'<rect x="{bx + i * 34:.0f}" y="96" width="28" height="6" rx="3" '

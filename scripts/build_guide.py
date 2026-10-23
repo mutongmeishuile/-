@@ -562,7 +562,7 @@ def schedule_rows():
 
 
 def _legend_css():
-    """图例在图面内时，桌面端不要再显示一份页内文字图例。
+    """图例画在图面内时，桌面端不要再显示一份页内文字图例。
 
     2026-10-23 实测：`legend_outside` 关掉（图例卡画在图上）之后，地图下方那条
     `.rbox-lgm` 仍然照渲 —— 同一份 D1–D7 图例出现两遍，页面看着很啰嗦。
@@ -570,7 +570,10 @@ def _legend_css():
     所以这里只在桌面隐藏，手机端由 MOBILE_CSS 重新打开。
     开关仍是 `legend_outside`：打开时图面内没有卡，页内图例就是唯一图例，不能隐藏。
     """
-    if CFG.get("legend_outside"):
+    place = str(CFG.get("legend_place") or "").strip().lower()
+    if place not in ("map", "band", "title"):
+        place = "band" if CFG.get("legend_outside") else "map"
+    if place != "map":
         return ""
     return ".rbox-lgm{display:none}"
 
