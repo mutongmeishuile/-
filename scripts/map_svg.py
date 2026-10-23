@@ -1235,13 +1235,21 @@ def _title_band():
     # ⚠ 名称带底色不能用近白（#FFFDF8）：render_map_hi 的满幅校验把"整行全白"判为裁切，
     #   一条纯白的带会直接让 16 条线路全部报错。用暖纸色，既过校验也更像地图边框。
     _th = _title_h()
+    # 三行文字的纵向节奏（2026-10-23 用户要求"最美观 + 动态随带高"）：
+    #   badge(15px) → title(44px) → subtitle(16px)
+    #   视觉净空比 = badge→title : title→subtitle ≈ 1.55 : 1（疏→密，标题组更紧凑）
+    #   基线按 H 的 0.18 / 0.58 / 0.84 锚定，字号不缩放、间隙等比。
+    #   H=158 → y = 28/92/133（净空 27/18）；H=132 → y = 24/77/111（净空 16/11）
+    _y_badge = round(_th * 0.18)
+    _y_title = round(_th * 0.58)
+    _y_sub   = round(_th * 0.84)
     o = [f'<rect x="0" y="0" width="{IW}" height="{_th}" fill="{TITLE_BG}"/>',
-         f'<text x="{x0}" y="30" font-size="15" font-weight="700" fill="{TITLE_INK_MUTED}" '
+         f'<text x="{x0}" y="{_y_badge}" font-size="15" font-weight="700" fill="{TITLE_INK_MUTED}" '
          f'letter-spacing="2.5">全线地图 · {tag}</text>',
-         f'<text x="{x0 - 2}" y="96" font-size="44" font-weight="900" fill="#1F2430" '
+         f'<text x="{x0 - 2}" y="{_y_title}" font-size="44" font-weight="900" fill="#1F2430" '
          f'letter-spacing="1">{_esc(t)}</text>']
     if sub:
-        o.append(f'<text x="{x0}" y="136" font-size="16" font-weight="600" fill="#55605A">'
+        o.append(f'<text x="{x0}" y="{_y_sub}" font-size="16" font-weight="600" fill="#55605A">'
                  f'{_esc(sub)}</text>')
     # 数据口径（可选）：CFG["title_stats"] 一行右对齐 —— 这张图会被单独发出去，
     # 光有名字没有里程/爬升，读者还是要回头问"多长、多高"。
