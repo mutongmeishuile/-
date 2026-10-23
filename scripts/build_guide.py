@@ -413,7 +413,9 @@ def _duration():
     if CFG.get("duration"):
         return CFG["duration"]
     if len(RD.SCHEDULE) >= 2:
-        return f"{RD.SCHEDULE[-1][3]} 收队"
+        _t = RD.SCHEDULE[-1][3]
+        if _t and _t not in ("—", "-", ""):
+            return f"{_t} 收队"
     return "—"
 
 
