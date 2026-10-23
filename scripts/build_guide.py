@@ -572,7 +572,8 @@ def _legend_css():
     """
     place = str(CFG.get("legend_place") or "").strip().lower()
     if place not in ("map", "band", "title"):
-        place = "band" if CFG.get("legend_outside") else "map"
+        # 默认 "title"（2026-10-23 起）：地图上没有图例卡，页内文字图例就是唯一图例
+        place = "band" if CFG.get("legend_outside") else "title"
     if place != "map":
         return ""
     return ".rbox-lgm{display:none}"

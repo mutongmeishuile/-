@@ -1036,7 +1036,7 @@ def _legend_place():
     p = str(_CFG.get("legend_place") or "").strip().lower()
     if p in ("map", "band", "title"):
         return p
-    return "band" if _legend_outside() else "map"
+    return "band" if _legend_outside() else "title"
 
 
 def _title_legend(x_right, y_bottom):
@@ -1048,14 +1048,14 @@ def _title_legend(x_right, y_bottom):
     右边数据口径）。把它放进去，图面一点不浪费；位置按用户要求"靠右下角"——
     右缘与数据行对齐（`x_right`），底缘贴带子下沿（`y_bottom`）。
 
-    排版"两簇并排、底边对齐"：左簇符号说明（n×2 网格），右簇分日 + 附加线（3 列）。
+    排版"两簇并排、底边对齐"：左簇符号说明（3×n 网格），右侧上为分日格子（最多 4 列），
+    下为附加线（雪线 / 步道）横排一行。
     ⚠ **必须留出标题块的宽度**：`title_lite` 一长就会和图例第一列撞在一起
     （2026-10-23 实测「（贡雅线 鸡荷段 · 7 天 6 晚 · 重装野线）」直接压在「起点 终点」上）。
     这里先量标题块的右缘，算 `avail = x_right - 标题右缘`，整块按 `k = avail/需要的宽`
     等比缩放（下限 0.62），再靠右下角定位 —— 换条线标题再长也不会撞。
     """
     day_rows, extra_rows = _legend_split_rows()
-    entries = list(day_rows) + list(extra_rows)
     syms = _legend_symbols()
 
     FS, FS_T, FS_K = 11.0, 11.5, 10.5
@@ -1066,24 +1066,35 @@ def _title_legend(x_right, y_bottom):
         _c, tag, desc, km = row[0], row[1], row[2], row[3]
         w = TAG_DX + GC.text_w(tag, FS_T) + DESC_GAP + GC.text_w(desc, FS)
         if km:
-            w += 8 + GC.text_w(km, FS_K)
+            w += 16 + GC.text_w(km, FS_K)   # 里程与描述之间留 16 px：8 px 时中文描述的实际字形宽会把空隙吃掉
         return w
 
-    ncol = 3 if len(entries) > 6 else max(1, min(3, len(entries)))
-    nrow = -(-len(entries) // ncol)                     # ceil
+    # ---- 分日格子：最多 4 列；附加行（雪线 / 步道）单独占最后一行 ----
+    # ⚠ 早先把附加行也塞进同一网格：它们的描述特别长（"OSM 测绘的既有步道 / 牧道 /
+    #   机耕路（非本次轨迹）"），会把整列撑宽 —— 同列的 D1/D4 就跟里程数字拉开一大截空，
+    #   博格达实测 100+ px，看着像漏打了个字。现在附加行自成一行，列宽只由分日行决定。
+    days = list(day_rows)
+    ncol = min(4, max(1, len(days))) if days else 1
+    nrow = -(-len(days) // ncol) if days else 0
     cols = [[] for _ in range(ncol)]
-    for i, r in enumerate(entries):
-        cols[i % ncol].append(r)                        # 列优先：横读是 D1 → D2 → D3
+    for i, r in enumerate(days):
+        cols[i % ncol].append(r)                        # 列优先：横读是 D1 → D2 → D3 → D4
     col_w = [max([entry_w(r) for r in c] or [0]) for c in cols]
     day_w = sum(col_w) + GAP_COL * (ncol - 1)
+
+    ext_w = 0.0
+    for i, r in enumerate(extra_rows):
+        ext_w += entry_w(r) + (GAP_COL * 2 if i else 0)
 
     sym_cols = 3 if len(syms) > 3 else max(1, len(syms))
     sym_rows = -(-len(syms) // sym_cols)
     sym_cell = max([13 + 5 + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
     sym_w = sym_cell * sym_cols
 
-    total = sym_w + GAP_BLOCK + day_w
-    h = max(nrow, sym_rows) * PITCH
+    grid_w = max(day_w, ext_w)
+    total = sym_w + GAP_BLOCK + grid_w
+    nrow_all = nrow + (1 if extra_rows else 0)
+    h = max(nrow_all, sym_rows) * PITCH
 
     # 标题块右缘：只算**和图例同高**的两行（主标题 82 / 副题 112）。
     # badge 在 y=30、图例顶边在 y≈50 以下，纵向不重叠，不必为它让宽 ——
@@ -1102,28 +1113,40 @@ def _title_legend(x_right, y_bottom):
 
     for i, (kind, nm) in enumerate(syms):
         cx = (i % sym_cols) * sym_cell + 7
-        # 符号簇**底边对齐**：不足 nrow 行时贴最后几行，多余的空间留在上方
-        cy = (nrow - sym_rows + i // sym_cols) * PITCH + 15
+        # 符号簇**底边对齐**：不足 nrow_all 行时贴最后几行，多余的空间留在上方
+        cy = (nrow_all - sym_rows + i // sym_cols) * PITCH + 15
         o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.38)">{mk_pin(0, 0, kind)}</g>')
         o.append(f'<text x="{cx + 12:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
 
+    def _entry(row, lx, base, w_col):
+        """画一格：色标 + 日标 + 描述 + 右对齐里程（`w_col` = 本列右缘）。"""
+        c, tg, desc, km = row[0], row[1], row[2], row[3]
+        g = [f'<line x1="{lx:.1f}" y1="{base - 4:.1f}" x2="{lx + LINE_W:.1f}" '
+             f'y2="{base - 4:.1f}" stroke="{c}" stroke-width="3" stroke-linecap="round"/>',
+             f'<text x="{lx + TAG_DX:.1f}" y="{base:.1f}" font-size="{FS_T:.1f}" '
+             f'font-weight="800" fill="{c}">{_esc(tg)}</text>']
+        tx = lx + TAG_DX + GC.text_w(tg, FS_T) + DESC_GAP
+        g.append(f'<text x="{tx:.1f}" y="{base:.1f}" font-size="{FS:.1f}" '
+                 f'font-weight="600" fill="#4A5261">{_esc(desc)}</text>')
+        if km:
+            g.append(f'<text x="{lx + w_col:.1f}" y="{base:.1f}" text-anchor="end" '
+                     f'font-size="{FS_K:.1f}" font-weight="800" fill="#6B7280">{_esc(km)}</text>')
+        return "".join(g)
+
     dx = sym_w + GAP_BLOCK
     for ci, col in enumerate(cols):
         for ri, row in enumerate(col):
-            c, tg, desc, km = row[0], row[1], row[2], row[3]
-            base = ri * PITCH + 15
             lx = dx + sum(col_w[:ci]) + GAP_COL * ci
-            o.append(f'<line x1="{lx:.1f}" y1="{base - 4:.1f}" x2="{lx + LINE_W:.1f}" '
-                     f'y2="{base - 4:.1f}" stroke="{c}" stroke-width="3" stroke-linecap="round"/>')
-            o.append(f'<text x="{lx + TAG_DX:.1f}" y="{base:.1f}" font-size="{FS_T:.1f}" '
-                     f'font-weight="800" fill="{c}">{_esc(tg)}</text>')
-            tx = lx + TAG_DX + GC.text_w(tg, FS_T) + DESC_GAP
-            o.append(f'<text x="{tx:.1f}" y="{base:.1f}" font-size="{FS:.1f}" '
-                     f'font-weight="600" fill="#4A5261">{_esc(desc)}</text>')
-            if km:
-                o.append(f'<text x="{lx + col_w[ci]:.1f}" y="{base:.1f}" text-anchor="end" '
-                         f'font-size="{FS_K:.1f}" font-weight="800" fill="#6B7280">{_esc(km)}</text>')
+            o.append(_entry(row, lx, ri * PITCH + 15, col_w[ci]))
+
+    # 附加行（雪线 / 步道）：分日格子下面横排一行，不参与列宽计算
+    if extra_rows:
+        lx = dx
+        for row in extra_rows:
+            w = entry_w(row)
+            o.append(_entry(row, lx, nrow * PITCH + 15, w))
+            lx += w + GAP_COL * 2
     o.append('</g>')
     if k < 0.999:
         print(f"   标题带图例：按 {k:.2f} 缩放到 {total * k:.0f}×{h * k:.0f} px"
