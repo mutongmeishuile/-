@@ -1713,7 +1713,10 @@ def build_terrain():
     LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
     GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "make_terrain")
     print(f"[1/6] 地图窗口（{src}）: {LON0}, {LAT0} → {LON1}, {LAT1}", flush=True)
-    z_use = pick_dem_z(LON0, LAT0, LON1, LAT1)
+    # 线路级可强制 DEM 级别（CFG["dem_z"]）：z14 的平滑会吞掉冰川面的细节，
+    # 博格达主峰北壁实测被渲染成一条无特征灰带。只允许 ≤ DEM_Z（不会超出数据源）。
+    _z_req = _route_cfg("dem_z", None)
+    z_use = pick_dem_z(LON0, LAT0, LON1, LAT1, z=int(_z_req)) if _z_req else pick_dem_z(LON0, LAT0, LON1, LAT1)
     if z_use != DEM_Z:
         print(f"[1/6] 窗口较大（{_window_px(DEM_Z, LON0, LAT0, LON1, LAT1) / 1e6:.0f} M px @z{DEM_Z} "
               f"> 上限 {DEM_MAX_PX / 1e6:.0f} M px）→ DEM 自动降到 z{z_use}"
