@@ -1014,6 +1014,15 @@ TITLE_H = 132               # 名称带高度（逻辑像素），仅独立高�
 # 其他模式的画布高一个字都不变。地图本身大小不变，只是它在画布里的 y 起点下移。
 TITLE_H_LEGEND = 148
 
+# ---- 标题带 / 图例带配色 ----
+# 原来用暖纸色 #F6F0E3，和底图（冷调植被带，采样中位 (125,139,109)）放一起发闷、发"脏"。
+# 现在取**同色相、高明度、低饱和**的一档（G 略高于 R、B 最低），等于把地形色提亮压灰，
+# 带上带下是一套色。文字也跟着换：小字从 #8A7A66（对旧底只有 3.66:1，本来就不达标）
+# 换成 #5F6B60（对 #E9EEE7 是 4.75:1）。
+TITLE_BG = "#E9EEE7"
+TITLE_LINE = "#C6D0C4"
+TITLE_INK_MUTED = "#5F6B60"
+
 
 def out_size(with_title=False):
     """输出逻辑尺寸。带名称带时高度加 TITLE_H —— render_map_hi 要按它算画布高。
@@ -1196,13 +1205,13 @@ def _title_band():
     # ⚠ 名称带底色不能用近白（#FFFDF8）：render_map_hi 的满幅校验把"整行全白"判为裁切，
     #   一条纯白的带会直接让 16 条线路全部报错。用暖纸色，既过校验也更像地图边框。
     _th = _title_h()
-    o = [f'<rect x="0" y="0" width="{IW}" height="{_th}" fill="#F6F0E3"/>',
-         f'<text x="{x0}" y="30" font-size="15" font-weight="700" fill="#8A7A66" '
+    o = [f'<rect x="0" y="0" width="{IW}" height="{_th}" fill="{TITLE_BG}"/>',
+         f'<text x="{x0}" y="30" font-size="15" font-weight="700" fill="{TITLE_INK_MUTED}" '
          f'letter-spacing="2.5">全线地图 · {tag}</text>',
          f'<text x="{x0 - 2}" y="82" font-size="44" font-weight="900" fill="#1F2430" '
          f'letter-spacing="1">{_esc(t)}</text>']
     if sub:
-        o.append(f'<text x="{x0}" y="112" font-size="16" font-weight="600" fill="#5A6270">'
+        o.append(f'<text x="{x0}" y="112" font-size="16" font-weight="600" fill="#55605A">'
                  f'{_esc(sub)}</text>')
     # 数据口径（可选）：CFG["title_stats"] 一行右对齐 —— 这张图会被单独发出去，
     # 光有名字没有里程/爬升，读者还是要回头问"多长、多高"。
@@ -1221,9 +1230,9 @@ def _title_band():
             o.append(f'<rect x="{bx + i * 34:.0f}" y="96" width="28" height="6" rx="3" '
                      f'fill="{d.get("color", "#888")}"/>'
                      f'<text x="{bx + i * 34 + 14:.0f}" y="116" text-anchor="middle" '
-                     f'font-size="10" font-weight="700" fill="#8A7A66">{d.get("tag", "")}</text>')
+                     f'font-size="10" font-weight="700" fill="{TITLE_INK_MUTED}">{d.get("tag", "")}</text>')
     o.append(f'<line x1="0" y1="{_th - 1}" x2="{IW}" y2="{_th - 1}" '
-             f'stroke="#D8CFC0" stroke-width="2"/>')
+             f'stroke="{TITLE_LINE}" stroke-width="2"/>')
     return "".join(o)
 
 
@@ -1236,7 +1245,7 @@ def _esc(s):
 # 为什么要有它：本技能的地图是满幅地形，四角没有空白，图例压哪儿都会盖掉一片山 ——
 # 2026-10-21 珠峰东坡实测，图例卡正压在珠峰东坡—马卡鲁北侧的冰川群上，
 # 而那恰恰是徒步者最想看的一块（用户原话「图例遮住了想看的山峰冰川区域」）。
-# 带子与标题带同底色（#F6F0E3），视觉上是海报的下缘，不是"盖在图上的一块白"。
+# 带子与标题带同底色（TITLE_BG），视觉上是海报的下缘，不是"盖在图上的一块白"。
 # HTML 内嵌版：图例改由页面文字图例承担（build_guide._legend_html），图上不再画卡片。
 BD_ROW0 = 52          # 带内第一行基线（标题行之下）
 BD_PITCH = 29         # 行距（密排：同内容比两栏版矮一半以上）
@@ -1307,10 +1316,10 @@ def _legend_band_svg():
     cols = g["cols"]
     x0 = 40
     cw = (IW - 2 * x0) / cols
-    o = [f'<rect x="0" y="0" width="{IW}" height="{BH}" fill="#F6F0E3"/>',
-         f'<line x1="0" y1="1" x2="{IW}" y2="1" stroke="#D8CFC0" stroke-width="2"/>',
+    o = [f'<rect x="0" y="0" width="{IW}" height="{BH}" fill="{TITLE_BG}"/>',
+         f'<line x1="0" y1="1" x2="{IW}" y2="1" stroke="{TITLE_LINE}" stroke-width="2"/>',
          f'<text x="{x0}" y="{BD_PADT + 16}" font-size="14" font-weight="800" '
-         f'fill="#8A7A66" letter-spacing="2">{_esc(_CFG.get("legend_title", "分日路段"))}</text>',
+         f'fill="{TITLE_INK_MUTED}" letter-spacing="2">{_esc(_CFG.get("legend_title", "分日路段"))}</text>',
          f'<text x="{IW - x0}" y="{BD_PADT + 16}" text-anchor="end" font-size="13.5" '
          f'font-weight="600" fill="#7A8290">'
          f'{_esc(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))}</text>']
