@@ -1043,7 +1043,7 @@ TITLE_H = 132               # 名称带高度（逻辑像素），仅独立高�
 # 图例塞进标题带时带子要加高：132 px 只够把 3 行图例顶到数据行鼻子上
 # （2026-10-23 用户实测"融在一起了"）。加高 16 px 只影响用 legend_place="title" 的线，
 # 其他模式的画布高一个字都不变。地图本身大小不变，只是它在画布里的 y 起点下移。
-TITLE_H_LEGEND = 148
+TITLE_H_LEGEND = 158
 
 # ---- 标题带 / 图例带配色 ----
 # 原来用暖纸色 #F6F0E3，和底图（冷调植被带，采样中位 (125,139,109)）放一起发闷、发"脏"。
@@ -1150,7 +1150,7 @@ def _title_legend(x_right, y_bottom):
     sym_cols = min(4, max(1, -(-len(syms) // max(1, nrow_all)))) if syms else 1
     sym_cols = min(sym_cols, max(1, len(syms)))
     sym_rows = -(-len(syms) // sym_cols)
-    sym_cell = max([13 + 5 + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
+    sym_cell = max([16 + 6 + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
     sym_w = sym_cell * sym_cols
 
     grid_w = max(day_w, ext_w)
@@ -1175,10 +1175,9 @@ def _title_legend(x_right, y_bottom):
 
     for i, (kind, nm) in enumerate(syms):
         cx = (i % sym_cols) * sym_cell + 7
-        # 符号簇**底边对齐**：不足 nrow_all 行时贴最后几行，多余的空间留在上方
         cy = (nrow_all - sym_rows + i // sym_cols) * PITCH + 15
-        o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.38)">{mk_pin(0, 0, kind)}</g>')
-        o.append(f'<text x="{cx + 12:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
+        o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.52)">{mk_pin(0, 0, kind)}</g>')
+        o.append(f'<text x="{cx + 16:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
 
     def _entry(row, lx, base, w_col):
@@ -1239,10 +1238,10 @@ def _title_band():
     o = [f'<rect x="0" y="0" width="{IW}" height="{_th}" fill="{TITLE_BG}"/>',
          f'<text x="{x0}" y="30" font-size="15" font-weight="700" fill="{TITLE_INK_MUTED}" '
          f'letter-spacing="2.5">全线地图 · {tag}</text>',
-         f'<text x="{x0 - 2}" y="82" font-size="44" font-weight="900" fill="#1F2430" '
+         f'<text x="{x0 - 2}" y="96" font-size="44" font-weight="900" fill="#1F2430" '
          f'letter-spacing="1">{_esc(t)}</text>']
     if sub:
-        o.append(f'<text x="{x0}" y="112" font-size="16" font-weight="600" fill="#55605A">'
+        o.append(f'<text x="{x0}" y="136" font-size="16" font-weight="600" fill="#55605A">'
                  f'{_esc(sub)}</text>')
     # 数据口径（可选）：CFG["title_stats"] 一行右对齐 —— 这张图会被单独发出去，
     # 光有名字没有里程/爬升，读者还是要回头问"多长、多高"。
