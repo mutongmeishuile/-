@@ -1009,6 +1009,10 @@ def _embed_jpeg(max_w=EMBED_MAX):
 
 
 TITLE_H = 132               # 名称带高度（逻辑像素），仅独立高清图使用
+# 图例塞进标题带时带子要加高：132 px 只够把 3 行图例顶到数据行鼻子上
+# （2026-10-23 用户实测"融在一起了"）。加高 16 px 只影响用 legend_place="title" 的线，
+# 其他模式的画布高一个字都不变。地图本身大小不变，只是它在画布里的 y 起点下移。
+TITLE_H_LEGEND = 148
 
 
 def out_size(with_title=False):
@@ -1017,7 +1021,7 @@ def out_size(with_title=False):
     `legend_outside` 打开时，独立高清图下方还要再加一条图例带（高度由
     `_legend_band_geom()` 算）。⚠ 画布高与 viewBox 高必须同源，否则会被 letterbox。
     """
-    h = IH + (TITLE_H if with_title else 0)
+    h = IH + (_title_h() if with_title else 0)
     if with_title and _legend_outside():
         h += _legend_band_geom()["h"]
     return IW, h
@@ -1127,6 +1131,11 @@ def _title_legend(x_right, y_bottom):
     return "".join(o)
 
 
+def _title_h():
+    """名称带当前高度：图例搬进带子里时要更高一点（见 TITLE_H_LEGEND 的注释）。"""
+    return TITLE_H_LEGEND if _legend_place() == "title" else TITLE_H
+
+
 def _title_band():
     """地图名称带（2026-10-20 与贡嘎大环对齐）：整幅图**正上方**一条标题栏。
 
@@ -1141,7 +1150,8 @@ def _title_band():
     x0 = 40
     # ⚠ 名称带底色不能用近白（#FFFDF8）：render_map_hi 的满幅校验把"整行全白"判为裁切，
     #   一条纯白的带会直接让 16 条线路全部报错。用暖纸色，既过校验也更像地图边框。
-    o = [f'<rect x="0" y="0" width="{IW}" height="{TITLE_H}" fill="#F6F0E3"/>',
+    _th = _title_h()
+    o = [f'<rect x="0" y="0" width="{IW}" height="{_th}" fill="#F6F0E3"/>',
          f'<text x="{x0}" y="30" font-size="15" font-weight="700" fill="#8A7A66" '
          f'letter-spacing="2.5">全线地图 · {tag}</text>',
          f'<text x="{x0 - 2}" y="82" font-size="44" font-weight="900" fill="#1F2430" '
@@ -1156,7 +1166,8 @@ def _title_band():
                  f'font-weight="700" fill="#4A5261">{_esc(_CFG["title_stats"])}</text>')
     # 图例放标题带时整块搬进来（右缘贴数据行、底缘贴带子下沿）；否则只留分日色条
     if _legend_place() == "title":
-        o.append(_title_legend(IW - 40, TITLE_H - 16))
+        # 底缘留 14 px（带子下沿之上）—— 顶到边会像被切掉
+        o.append(_title_legend(IW - 40, _th - 14))
     # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
     days = _CFG.get("days", [])
     if days and _legend_place() != "title":
@@ -1166,7 +1177,7 @@ def _title_band():
                      f'fill="{d.get("color", "#888")}"/>'
                      f'<text x="{bx + i * 34 + 14:.0f}" y="116" text-anchor="middle" '
                      f'font-size="10" font-weight="700" fill="#8A7A66">{d.get("tag", "")}</text>')
-    o.append(f'<line x1="0" y1="{TITLE_H - 1}" x2="{IW}" y2="{TITLE_H - 1}" '
+    o.append(f'<line x1="0" y1="{_th - 1}" x2="{IW}" y2="{_th - 1}" '
              f'stroke="#D8CFC0" stroke-width="2"/>')
     return "".join(o)
 
@@ -1294,7 +1305,7 @@ def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=Fa
         img = (f'<image x="0" y="0" width="{IW}" height="{IH}" '
                f'href="data:image/jpeg;base64,{_embed_jpeg(embed_max)}"/>')
     cls = "mapsvg map-p" if mobile else "mapsvg map-d"
-    band = TITLE_H if with_title else 0
+    band = _title_h() if with_title else 0
     lb = _legend_band_geom()["h"] if (with_title and _legend_outside()) else 0
     vh = IH + band + lb
     # 字体**只在根节点声明一次**：这样 OSM 地名、POI 标注、里程数字全部同一套字，
