@@ -1714,9 +1714,18 @@ def build_terrain():
     GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "make_terrain")
     print(f"[1/6] 地图窗口（{src}）: {LON0}, {LAT0} → {LON1}, {LAT1}", flush=True)
     # 线路级可强制 DEM 级别（CFG["dem_z"]）：z14 的平滑会吞掉冰川面的细节，
-    # 博格达主峰北壁实测被渲染成一条无特征灰带。只允许 ≤ DEM_Z（不会超出数据源）。
+    # 博格达主峰北壁实测被渲染成一条无特征灰带。**绕过 DEM_MAX_PX 上限**——
+    # pick_dem_z 的降档循环会把强制值又降回去（博格达实测：传 z=15 仍被降到 14）。
+    # 只允许 ≤ DEM_Z（不超出数据源）。代价：内存/耗时按像素数走，z15 大窗口可能要几分钟。
     _z_req = _route_cfg("dem_z", None)
-    z_use = pick_dem_z(LON0, LAT0, LON1, LAT1, z=int(_z_req)) if _z_req else pick_dem_z(LON0, LAT0, LON1, LAT1)
+    if _z_req:
+        z_use = min(int(_z_req), DEM_Z)
+        _px = _window_px(z_use, LON0, LAT0, LON1, LAT1)
+        print(f"[1/6] 线路强制 dem_z={z_use}"
+              + (f"（{_px / 1e6:.0f} M px，超默认上限 {DEM_MAX_PX / 1e6:.0f} M —— 记得预期变慢）"
+                 if _px > DEM_MAX_PX else ""))
+    else:
+        z_use = pick_dem_z(LON0, LAT0, LON1, LAT1)
     if z_use != DEM_Z:
         print(f"[1/6] 窗口较大（{_window_px(DEM_Z, LON0, LAT0, LON1, LAT1) / 1e6:.0f} M px @z{DEM_Z} "
               f"> 上限 {DEM_MAX_PX / 1e6:.0f} M px）→ DEM 自动降到 z{z_use}"
