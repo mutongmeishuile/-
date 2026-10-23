@@ -1086,14 +1086,18 @@ def _title_legend(x_right, y_bottom):
     for i, r in enumerate(extra_rows):
         ext_w += entry_w(r) + (GAP_COL * 2 if i else 0)
 
-    sym_cols = 3 if len(syms) > 3 else max(1, len(syms))
+    nrow_all = nrow + (1 if extra_rows else 0)
+    # 符号簇的列数**跟着分日格子的行数走**：两簇行数不一致时（比如 5 类符号 3 列 2 行、
+    # 分日 2 行 + 附加 1 行 = 3 行），底边对齐会让符号簇孤零零吊在下面、上方一片空。
+    # 按 "ceil(符号数 / 行数)" 反算列数，两簇就等高，读起来是一个整体。
+    sym_cols = min(4, max(1, -(-len(syms) // max(1, nrow_all)))) if syms else 1
+    sym_cols = min(sym_cols, max(1, len(syms)))
     sym_rows = -(-len(syms) // sym_cols)
     sym_cell = max([13 + 5 + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
     sym_w = sym_cell * sym_cols
 
     grid_w = max(day_w, ext_w)
     total = sym_w + GAP_BLOCK + grid_w
-    nrow_all = nrow + (1 if extra_rows else 0)
     h = max(nrow_all, sym_rows) * PITCH
 
     # 标题块右缘：只算**和图例同高**的两行（主标题 82 / 副题 112）。
@@ -1189,8 +1193,8 @@ def _title_band():
                  f'font-weight="700" fill="#4A5261">{_esc(_CFG["title_stats"])}</text>')
     # 图例放标题带时整块搬进来（右缘贴数据行、底缘贴带子下沿）；否则只留分日色条
     if _legend_place() == "title":
-        # 底缘留 14 px（带子下沿之上）—— 顶到边会像被切掉
-        o.append(_title_legend(IW - 40, _th - 14))
+        # 底缘留 8 px（带子下沿之上）—— 用户口径：默认 8 px，再少就顶到边了
+        o.append(_title_legend(IW - 40, _th - 8))
     # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
     days = _CFG.get("days", [])
     if days and _legend_place() != "title":
