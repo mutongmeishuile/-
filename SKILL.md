@@ -23,6 +23,12 @@ agent_created: true
 | `XX-全线地图.jpg` | 底图原生宽（如 3008），真 1:1 | 放大看细节 |
 | `XX.gpx` | 全量轨迹点 + 具名 wpt | 导航 |
 
+**这个目录里只该有上面五件东西**（含原始 KML）。过程文件（`_qa_*.png` 审计截图、
+`scripts/out/*.bak`、`out/base_terrain.jpg`…）由 `make_all.py` 收尾**自动清掉**，
+不用手动处理；要单独清就 `python scripts/clean.py`（`--dry-run` 先看要删什么、
+`--deep` 连缓存一起清、`--keep-qa` 留审计截图）。**清理只删白名单模式，绝不碰交付物**
+—— `selftest.py` 第 ⑧ 项专门守这条（防哪天有人写个 `*.png` 把长图删了）。
+
 > **只出一种长图（宽屏 ~2340）**。手机阅读直接看 HTML —— 它本身就是响应式的（<900px 切单栏）。
 > 本技能**不再生成手机版长图**（用户明确要求），旧版那条 `860 宽` 的产物与 `--split long=desk,phone`
 > 用法都已废弃，别再照抄。
@@ -231,7 +237,7 @@ python scripts/research_route.py --region 线路名
                                                # ③ 出 out/research_brief.md：该查的地名/水源/营地/装备
 # ④ 按 brief 用 WebSearch（8264 / 两步路 / 官方公告…）把 ★ TODO 逐条回填进 route_def.py
 #    —— 这一步模型能自主完成（见下方「自主生成」），无需人介入
-python scripts/make_all.py                     # ⑤ 一条命令出四件交付物 + QA
+python scripts/make_all.py                     # ⑤ 一条命令出四件交付物 + QA，跑完自动清中间产物
 ```
 
 > `--kml` 建议**每次都写**：不给时它按线路名猜 `<线路名>.kml`，猜错不会当场报错，
@@ -251,6 +257,8 @@ python scripts/make_all.py                     # ⑤ 一条命令出四件交付
    逐条核实，把结论**写回 `route_def.py` 里的 `★ TODO` 占位**（grep `★ TODO` 一眼看全所有待办）。
 3. `make_all` → `qa_guide`：`todo_guard` 数的是 `★ TODO `（标记后带空格的才是真占位），
    **只要还有没填的，就亮红灯不准交付**；同时桌面/手机两版审计截图确认版式 0 问题。
+   **截图要复核就加 `--keep-temp`** —— 默认跑完会连同其它中间产物一起清掉；
+   有步骤失败时则不清理，留着排错。
 
 **质量红线（自主 ≠ 瞎编）**：
 - 地名、门票/许可价、水源/营地现状、装备建议 **绝不能凭空编**——至少 1 个来源佐证。

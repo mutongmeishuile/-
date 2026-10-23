@@ -268,10 +268,52 @@ def t_todo_guard():
     check("已填完的配置不误报", probe(clean) == 0)
 
 
+# ---------------------------------------------------------------- ⑧ 清理白名单
+def t_clean_guard():
+    """`clean.py` 的白名单**不许命中任何交付物**。
+
+    这是唯一一类"错了不报错、直接把用户成品删掉"的风险：
+    哪天有人为了省事把 `*.png` / `*.jpg` 写进 TEMP_SPECS，长图与全线地图会在
+    下次清理时静默消失（而且是不可恢复的 —— 要重跑 5–8 min 出图）。
+    所以用 fnmatch 对着交付物名字逐个试，一条命中就算失败。
+    """
+    print("⑧ 清理白名单（不许命中交付物：长图/地图/攻略/GPX/KML）")
+    import fnmatch
+    import clean as CL
+
+    deliverables = [
+        "珠峰东坡7天-攻略.html",
+        "珠峰东坡7天-攻略长图.png",
+        "珠峰东坡7天-全线地图.jpg",
+        "珠峰东坡7天.gpx",
+        "珠峰东坡7天.kml",
+    ]
+    specs = list(CL.TEMP_SPECS) + list(CL.DEEP_SPECS)
+    bad = [(pat, name) for _, pat, _ in specs
+           for name in deliverables if fnmatch.fnmatch(name, pat)]
+    check("白名单不匹配交付物", not bad,
+          "；".join(f"{p} 会命中 {n}" for p, n in bad))
+
+    # 反例：必须是**真的**能匹配到中间产物，否则白名单失效（静默不清 = 用户报的老问题）
+    temps = ["_qa_desk.png", "_qa_phone.png", "line.bak", "base_terrain.jpg"]
+    miss = [n for n in temps
+            if not any(fnmatch.fnmatch(n, pat) for _, pat, _ in specs)]
+    check("白名单确实能命中中间产物", not miss, f"漏了 {miss}")
+
+    # `_deliverables()` 用「下划线开头不算交付物」区分审计截图与成品
+    import tempfile
+    d = Path(tempfile.mkdtemp())
+    for n in deliverables + ["_qa_desk.png"]:
+        (d / n).write_text("x", encoding="utf-8")
+    got = {p.name for p in CL._deliverables(d)}
+    check("成品进保留集、`_qa_*` 不进", got == set(deliverables),
+          f"保留集 = {sorted(got)}")
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
-               t_simplify_lat, t_cfg, t_font, t_todo_guard):
+               t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard):
         try:
             fn()
         except Exception as e:                                      # noqa

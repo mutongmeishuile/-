@@ -36,6 +36,13 @@
     python scripts/make_all.py --serial         # 强制串行（并行输出看不清时排错用）
     python scripts/make_all.py --jobs 2         # 限制同时跑的进程数
     python scripts/make_all.py --dry-run        # 只打印执行计划与分层
+    python scripts/make_all.py --keep-temp      # 跑完**不**清理中间产物（要留着核对时用）
+    python scripts/make_all.py --clean-deep     # 顺带清 out/ 缓存（下次出图重新下 DEM/OSM）
+
+**收尾自动清理**：跑完（含 qa）之后自动调 `clean.py`，删掉 `_qa_*.png` 审计截图、
+`out/base_terrain.jpg`、`out/*.bak` 之类只在过程里有用的东西 —— 定稿目录里只剩
+攻略 HTML / 长图 / 全线地图 / GPX / 原始 KML。想看审计截图就加 `--keep-temp`。
+**失败时不清理**：那些文件正是排错要看的。
 
 步骤名：prep / osm / dem / html / long / map / gpx / qa
 脚本按 "每步一个通用脚本" 约定自动发现（不再按线路复制脚本）：
@@ -61,6 +68,7 @@ EXCLUDE = {
     "build_route_guide.py",  # 无轨迹时的手绘方案模板
     "new_route.py",          # 生成 route_def.py 骨架；跑一次就够，属"开工准备"不属流水线
     "make_all.py", "preflight.py", "guide_common.py",
+    "clean.py",              # 收尾清理工具，由 main() 在最后直接调用
 }
 
 # 依赖表：key -> 必须先完成的前置步骤
@@ -114,8 +122,11 @@ def layers(plan_keys):
     return out
 
 
-def run_one(name, script, args=()):
-    """跑一个脚本：输出进临时文件，避免多进程共享 pipe 时缓冲区打满互相阻塞。"""
+def run_one(name, script, args=(), tail_n=8):
+    """跑一个脚本：输出进临时文件，避免多进程共享 pipe 时缓冲区打满互相阻塞。
+
+    `tail_n=0` 表示**全量回显**（收尾清理那种"要看清删了哪些文件"的步骤用）。
+    """
     t = time.time()
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as fh:
         r = subprocess.run([sys.executable, str(HERE / script), *args], cwd=str(HERE),
@@ -123,7 +134,8 @@ def run_one(name, script, args=()):
         fh.seek(0)
         log = fh.read()
     dt = time.time() - t
-    tail = "\n".join(log.strip().splitlines()[-8:])
+    lines = log.strip().splitlines()
+    tail = "\n".join(lines if not tail_n else lines[-tail_n:])
     return r.returncode, script, dt, tail
 
 
@@ -139,6 +151,10 @@ def main():
     ap.add_argument("--split", default="",
                     help="把某步骤按参数拆成并行子任务，如 long=a,b（本项目已无手机版长图，"
                          "一般用不到；仅对'同脚本、不同参数、产物不重名'的步骤安全）")
+    ap.add_argument("--keep-temp", action="store_true",
+                    help="跑完不清理中间产物（QA 审计截图 / out 备份等）")
+    ap.add_argument("--clean-deep", action="store_true",
+                    help="清理时连 out/ 缓存一起删（osm.json / base_map.jpg / track_*.json）")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -222,6 +238,20 @@ def main():
         print(f"  wave{i} 合计 {time.time() - t:.1f}s")
 
     print(f"\n总耗时 {time.time() - t_all:.1f}s — " + ("全流程完成 ✓" if not fail else f"{fail} 步失败 ↑"))
+
+    # ---- 收尾清理：中间产物不该和交付物混在一个目录里 ----
+    # 只在**成功**时清理：失败时那些 `_qa_*.png`、`out/*.bak` 正是排错要看的东西。
+    if fail:
+        print("\n（有步骤失败 → 中间产物保留，方便排错）")
+    elif a.keep_temp:
+        print("\n（--keep-temp：中间产物已保留）")
+    else:
+        print()
+        carc = ["--deep"] if a.clean_deep else []
+        rc, _, dt, tail = run_one("clean", "clean.py", tuple(carc), tail_n=0)   # 清单要完整
+        print(tail)
+        if rc:
+            print(f"  !! clean.py 退出码 {rc}（{dt:.1f}s）—— 中间产物没清干净，手动跑一次")
     return 1 if fail else 0
 
 

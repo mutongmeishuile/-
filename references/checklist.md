@@ -79,4 +79,7 @@
 - [ ] `make_terrain.py` 打印的 `抑制重名 N` 不为 0（为 0 = 重名注记还在图上）
 - [ ] GPX 回读断言的 `trkpt` 数 == `track_full.json` 点数
 - [ ] 所有数值口径统一（海拔取整一致、里程累计口径说明）
+- [ ] **交付目录只剩五件**：`XX-攻略.html` / `XX-攻略长图.png` / `XX-全线地图.jpg` / `XX.gpx` / 原始 KML。
+      还有 `_qa_*.png`、`out/*.bak`、`base_terrain.jpg` → 跑 `python scripts/clean.py`
+      （`make_all` 成功收尾时会自动做；失败时故意保留，那是排错依据）
 
