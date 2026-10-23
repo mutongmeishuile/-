@@ -222,7 +222,15 @@ python scripts/shoot_guide.py                # → <file_stem>-攻略长图.png�
 python scripts/render_map_hi.py              # → <file_stem>-全线地图.jpg
 python scripts/make_gpx.py                   # → <file_stem>.gpx
 python scripts/qa_guide.py                   # 数值化自检
+python scripts/qa_guide.py --no-phone        # 同上，只审桌面版（本技能不出手机版长图，省一趟浏览器）
 ```
+
+> **两种"会撞车"的预检，2026-10-23 起内建**（省掉"出图→肉眼看→改→再出图"的返工）：
+> `build_guide` 打印**剖面标注预检**（桌面/手机各一遍，用 `text_w` 估宽 + off 估高两两判重叠，
+> 还会抓 BOT_LBL 落到横轴刻度上的情况）；`map_svg` 打印**点位密度预检**
+> （分"符号会叠 < 38 px = 一个图钉直径"与"标注偏挤 < 100 px"两档）。
+> 命中就按提示改 `MARKS` 的 off（正=下/负=上）或删掉次要点位 —— 别再用出图来试。
+> 阈值可用 `CFG["poi_pin_px"]` / `CFG["poi_min_gap_px"]` 覆盖。
 
 `new_route.py` 是「不用手抄数字」的关键一步：它读 `out/` 的三个 json，
 把**总里程 / 爬升 / 海拔范围 / 分段建议 / POI 候选 / 剖面标注 / 时间表**直接算出来写进

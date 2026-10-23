@@ -322,6 +322,58 @@ def _legend_symbols():
     return [(k, names.get(k, k)) for k in used]
 
 
+def _report_poi_density(POIS, pin_xy):
+    """点位密度预检：**摆位之前**就把"哪两个点近到抢地方"算出来，别等出图再肉眼找。
+
+    为什么要有（2026-10-23 大横断海子线实测，为此删点删了三轮）
+    --------------------------------------------------------
+    1504 逻辑 px 的图上 POI 标签约 150 px 宽、图钉半径 19 px。中段 6 个点
+    （黑海子 41.4 / 黑海子垭口 42.6 / 白海子 43.7 / 石头垭口 45.6 /
+    长海子 47.2 / 长海垭口 48.8）挤在 7 km 内，图上满屏长引线，
+    最后删掉两个垭口点位才干净 —— 而这本来是一个 for 循环就能算出来的。
+
+    **分两档报，别只报一个阈值**（只报一档时要么全是噪音、要么漏掉真问题）：
+      · 硬档 `d < 2×图钉半径`（默认 38 px）：两个符号本身会叠在一起，必须处理；
+      · 软档 `d < 100 px`：标注会互相挤，Placer 一般靠"一左一右"摆得开，只报数量。
+    实测校准：本线 18 点里有 4 对落在硬档（温泉营地×荷花海 19 px 等）——
+    出图后确认过：符号是上下贴着，但两条标注分摆两侧、可读，属于"可接受"。
+    所以硬档的措辞是"确认要不要合并"，不是"必须删"。
+    """
+    try:
+        pin_r = float(_CFG.get("poi_pin_px", 19.0))
+        soft = float(_CFG.get("poi_min_gap_px", 100.0))
+    except Exception:                                              # noqa
+        pin_r, soft = 19.0, 100.0
+    hard = pin_r * 2.0
+
+    pairs = []
+    n = len(POIS)
+    for i in range(n):
+        for j in range(i + 1, n):
+            (x1, y1), (x2, y2) = pin_xy[i], pin_xy[j]
+            d = ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
+            if d < soft:
+                pairs.append((d, POIS[i]["name"], POIS[j]["name"]))
+    pairs.sort()
+    if not pairs:
+        print(f"   点位密度预检：{n} 个点位，最近间距均 ≥ {soft:.0f} px ✓")
+        return []
+
+    h = [p for p in pairs if p[0] < hard]
+    s = [p for p in pairs if p[0] >= hard]
+    print(f"   点位密度预检：{n} 个点位 · 最近 {pairs[0][0]:.0f} px")
+    if h:
+        print(f"     · 符号会叠（< {hard:.0f} px = 一个图钉直径）：{len(h)} 对 —— "
+              + "、".join(f"{a}×{b} {d:.0f}px" for d, a, b in h))
+        print("       → 确认这两条是否值得各占一个图钉；要清爽就合并（如把垭口并入邻近营地）")
+    if s:
+        print(f"     · 标注偏挤（{hard:.0f}–{soft:.0f} px）：{len(s)} 对 —— "
+              + "、".join(f"{a}×{b} {d:.0f}px" for d, a, b in s[:6])
+              + ("…" if len(s) > 6 else ""))
+        print("       → 通常摆得开（Placer 会分摆两侧）；出图后瞄一眼有没有长引线")
+    return pairs
+
+
 def _legend_scale(map_h):
     """图例缩放系数：默认 FURN_LG，超出「图高 42%」预算时收缩，下限 0.34。
 
@@ -583,6 +635,8 @@ def build_map_overlay(mobile=False):
                  f'stroke-dasharray="{7*M:.0f} {5*M:.0f}" stroke-linecap="round"/>')
 
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
+    if not mobile:
+        _report_poi_density(POIS, pin_xy)
 
     # ---- 家具先摆（硬约束：不压轨迹、互不重叠）；标注随后绕开它们 ----
     placer = GC.Placer(IW, IH, track=XY, pad=_PAD, track_half_w=(ROUTE_W + HALO_W) / 2 + 2)

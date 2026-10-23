@@ -226,6 +226,17 @@ def todo_guard():
 
 
 if __name__ == "__main__":
+    # 本技能**只出宽屏长图**（手机版长图已废弃，手机阅读直接看 HTML）。
+    # 所以 600 px 那趟只是"看手机换行有没有崩"的探针，不是产物 —— 不想看就 --no-phone，
+    # 省一趟无头浏览器（也顺带绕开下面那个"两个实例互相抢资源"的老毛病）。
+    import argparse
+    ap = argparse.ArgumentParser(description="攻略交付前自检")
+    ap.add_argument("--no-phone", action="store_true",
+                    help="只审桌面版（技能不出手机版长图时用）")
+    ap.add_argument("--no-shots", action="store_true",
+                    help="完全跳过审计截图（只看切边扫描与占位符守卫）")
+    args = ap.parse_args()
+
     print("① 切边扫描（最外 2 px 深色占比）")
     allok = True
     for name, w, thr, fb in IMGS:
@@ -244,7 +255,11 @@ if __name__ == "__main__":
     # 所以这里并行失败后自动退回串行重试，别把"环境抢资源"误报成"审计截图生成不了"。
     from concurrent.futures import ThreadPoolExecutor
     overlay_paths = []
-    _jobs = ((1200, "desk"), (600, "phone"))
+    if args.no_shots:
+        _jobs = ()
+        print("  [..] --no-shots：跳过审计截图")
+    else:
+        _jobs = ((1200, "desk"), (600, "phone")) if not args.no_phone else ((1200, "desk"),)
     with ThreadPoolExecutor(max_workers=2) as pool:
         futs = {width: pool.submit(render_overlay, label, width, doc_h)
                 for width, label in _jobs}
@@ -269,7 +284,7 @@ if __name__ == "__main__":
         if out and out.exists():
             overlay_paths.append(str(out))
             print(f"  → {label} 审计截图（串行）：{out.name}")
-    if not overlay_paths:
+    if not overlay_paths and not args.no_shots:
         print("  ⚠ 审计截图未生成，请手动用浏览器核对对比度/溢出")
     print("③ 三件套压轨迹：见 make_all 日志里 map_svg.self_check 的「压轨迹点/家具互相重叠」")
     n_todo = todo_guard()

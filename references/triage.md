@@ -91,6 +91,7 @@
 | 图例放哪、图例只有文字没图形 | `references/pitfalls-map-svg.md` §1–2 |
 | **三件套（图例/指北针/比例尺）动态避让** | `references/pitfalls-map-svg.md` §9 |
 | 剖面标签互压 | `references/pitfalls-map-svg.md` §5 |
+| **不知道立面/地图上哪两条标注会撞（不想靠看图试）** | 不用查 —— `build_guide` 现在会打印**标注预检**（桌面/手机各一遍）、`map_svg` 会打印**点位密度预检**（分"符号会叠"与"标注偏挤"两档）。命中就按提示改 `MARKS` 的 off 或删点位，别再出图试 |
 | 虚实线用错、步道配色撞色 | `references/pitfalls-map-svg.md` §6–7 |
 | 图例样本与出图配色不一致 | `references/pitfalls-map-svg.md` §4 |
 | **做得慢、返工多、一小时还没完** | **`references/efficiency.md`**（耗时实测 + 提速做法） |

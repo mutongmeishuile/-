@@ -58,7 +58,8 @@ ELE_LO, ELE_HI = CFG.get("ele_range") or _auto_ele_range()
 
 
 # ---------------------------------------------------------------- 剖面
-def profile_svg(fs=1.0, mobile=False):
+def _prof_geom(fs=1.0):
+    """剖面画布几何：profile_svg 与标注预检共用一套，避免两处各算一遍然后漂移。"""
     PW, PH = 1000, round(360 * (1 if fs == 1.0 else 1.06))
     pl = round(max(66, 46 * fs))
     pr = 976
@@ -66,6 +67,109 @@ def profile_svg(fs=1.0, mobile=False):
     pb = PH - round(58 * fs) - 16
     kx = (pr - pl) / TOTAL_KM
     ky = (pb - pt) / (ELE_HI - ELE_LO)
+    return {"PW": PW, "PH": PH, "pl": pl, "pr": pr, "pt": pt, "pb": pb, "kx": kx, "ky": ky}
+
+
+def check_prof_labels(fs=1.0, mobile=False):
+    """剖面标注密度预检：**渲染前**就算出"哪两条标注会叠字"，别再靠看图发现。
+
+    为什么要有（2026-10-23 大横断海子线实测，改了三轮才对）
+    ------------------------------------------------------
+    剖面横轴 (pr-pl)/TOTAL_KM ≈ 12.3 viewBox px/km，而一条标签有 90–150 px 宽 ——
+    **相邻 8 km 以内的两条标注，同侧摆必然叠字**。那次的实际翻车：
+      · 黑海子(41.4)/白海子(43.7)/石头垭口(45.6)/长海子(47.2) 四点在 6 km 内，
+        叠成「黑海子 4635长海子 4680」一行，来回改了三轮；
+      · 终点 2416 m 贴着绘图区底边，BOT_LBL 的 +38 px 固定偏移把字压到横轴刻度上
+        （渲染成「65终点 各坝村 2416」）。
+    这两类都能用 text_w 估宽 + off 估高、两两判 AABB 相交一次算出。
+
+    只做提示、不改任何东西；返回 [(说明, 建议)] 供 build_html 打印。
+    """
+    g = _prof_geom(fs)
+    fsz_of = lambda hi: round((13 if hi else 12) * fs)          # noqa: E731
+    boxes = []
+
+    marks = RD.MARKS
+    if mobile:
+        marks = [m for m in marks if len(m) < 6 or m[5]]
+    for mk in marks:
+        km, el, txt, hi, off = mk[0], mk[1], mk[2], mk[3], mk[4]
+        fsz = fsz_of(hi)
+        w = GC.text_w(txt, fsz)
+        # 与渲染一致：文字居中，横向夹在绘图区内
+        tx = min(max(g["pl"] + km * g["kx"], g["pl"] + w / 2 + round(2 * fs)),
+                 g["pr"] - w / 2 - round(2 * fs))
+        y = g["pb"] - (el - ELE_LO) * g["ky"] + off * fs
+        boxes.append({"txt": txt, "x0": tx - w / 2, "x1": tx + w / 2,
+                      "y0": y - fsz * 0.86, "y1": y + fsz * 0.30,
+                      "km": km, "off": off, "kind": "mark"})
+    for km, el, txt, anc in RD.BOT_LBL:
+        fsz = round(12 * fs)
+        w = GC.text_w(txt, fsz)
+        x = g["pl"] + km * g["kx"]
+        if anc == "start":
+            x0 = x + round(9 * fs)
+        elif anc == "end":
+            x0 = x - round(6 * fs) - w
+        else:
+            x0 = x - w / 2
+        y = g["pb"] - (el - ELE_LO) * g["ky"] + round(38 * fs)
+        boxes.append({"txt": txt, "x0": x0, "x1": x0 + w,
+                      "y0": y - fsz * 0.86, "y1": y + fsz * 0.30,
+                      "km": km, "off": 0, "kind": "bot"})
+
+    out = []
+    for i in range(len(boxes)):
+        a = boxes[i]
+        # ① 掉出画布 / 压横轴刻度：BOT_LBL 的固定 +38 px 是元凶
+        if a["y1"] > g["PH"]:
+            out.append((f"「{a['txt']}」超出画布下沿 {a['y1'] - g['PH']:.0f} px → 会被裁掉",
+                        "把该标注从 BOT_LBL 挪到 MARKS（纵偏移可调）"))
+        elif a["kind"] == "bot" and a["y0"] > g["pb"] - 2:
+            # 文字"起点"落在横轴线**以下**才算压刻度带（线以上、区内的属正常位置，
+            # 2026-10-23 首版判据写成 y0 < pb+24，把珠峰东坡/萨普的正常标注全报成错）
+            out.append((f"「{a['txt']}」落到横轴线以下（文字顶 y={a['y0']:.0f} / 轴 y={g['pb']:.0f}），"
+                        f"会压住刻度数字",
+                        "BOT_LBL 的文字固定在点位下方 38 px；海拔贴近 ELE_LO 时改走 MARKS"))
+        for j in range(i + 1, len(boxes)):
+            b = boxes[j]
+            ox = min(a["x1"], b["x1"]) - max(a["x0"], b["x0"])
+            oy = min(a["y1"], b["y1"]) - max(a["y0"], b["y0"])
+            # ⚠ 判据是"够不够读"，不是"有没有面积相交"：两块只差 0–10 px 时人眼看是
+            #   连成一串（实测「黑海子 4635长海子 4680」就是 ox≈0 的情形），必须一并报。
+            if ox > -10 and oy > -5:
+                dkm = abs(a["km"] - b["km"])
+                same_side = (a["off"] >= 0) == (b["off"] >= 0)
+                head = (f"「{a['txt']}」×「{b['txt']}」" +
+                        (f"叠字 {ox:.0f}×{oy:.0f} px" if ox > 0 and oy > 0
+                         else f"只差 {max(ox, 0):.0f} px 宽 / {oy:.0f} px 高，读起来会连成一串"))
+                if same_side:
+                    tip = ("两点隔 %.1f km（%.0f px），标签宽 %.0f px —— "
+                           "把其中一个的 off 改成另一侧（正=曲线下方，负=上方）"
+                           % (dkm, dkm * g["kx"], a["x1"] - a["x0"]))
+                else:
+                    tip = f"两点只隔 {dkm:.1f} km，一上一下仍不够 → 删掉次要的那个标注"
+                out.append((head, tip))
+    return out
+
+
+def _report_prof_labels():
+    """打印剖面标注预检（桌面版与手机版各一遍，只报不复述同一句）。"""
+    for fs, mobile, tag in ((1.0, False, "桌面"), (2.4, True, "手机")):
+        bad = check_prof_labels(fs, mobile)
+        if not bad:
+            print(f"   标注预检（{tag}版）：无叠字 ✓")
+            continue
+        print(f"   标注预检（{tag}版）：{len(bad)} 处会叠字 —— 现在是**算**出来的，不用等出图：")
+        for what, tip in bad:
+            print(f"     · {what}")
+            print(f"       → {tip}")
+
+
+def profile_svg(fs=1.0, mobile=False):
+    _g = _prof_geom(fs)
+    PW, PH, pl, pr, pt, pb = _g["PW"], _g["PH"], _g["pl"], _g["pr"], _g["pt"], _g["pb"]
+    kx, ky = _g["kx"], _g["ky"]
 
     def X(km):
         return pl + km * kx
@@ -472,6 +576,7 @@ def build_html():
     c1 = MS.self_check(False)
     map_p, _ = MS.build_svg(mobile=True, embed_max=820)
     c2 = MS.self_check(True)
+    _report_prof_labels()
     prof_d = profile_svg(fs=1.0, mobile=False)
     prof_p = profile_svg(fs=2.4, mobile=True)
     days_html = "".join(day_card(*c) for c in CFG.get("day_cards", []))
