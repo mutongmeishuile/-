@@ -875,7 +875,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_skip += 1
             continue
         ev = _ele_of(ele)
-        if ev is None:
+        # 指定峰强制进顶级（2026-10-24 四姑娘大环线）：分级是**按本窗口高程分位**算的，
+        # 一山之主（四姑娘山的大/二/三姑娘峰 5025–5355）在 5500–6250 一大片峰的窗口里
+        # 只能落到 p62 以下 → 最低档、not forced → 拥挤时直接丢掉，名字整片消失。
+        # CFG["peak_top_names"] 里的名字跳过分级，按顶级字号/颜色/三角出图（与其它具名峰同款）。
+        _top_names = set(GC.cfg("peak_top_names", ()) or ())
+        if name in _top_names:
+            f_peak_use, forced, tri_k, col, tcol = f_peak_hi, True, 1.0, (84, 60, 40), (48, 32, 20)
+        elif ev is None:
             f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
         elif q_hi is None:
             # 样本不足 PEAK_TIER_MIN_N：无法可靠分级，统一中档保证有名字的峰都出得来

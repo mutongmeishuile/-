@@ -219,12 +219,14 @@ def mk_pin(x, y, kind):
                 f'<text x="{x}" y="{y+6*PS:.1f}" text-anchor="middle" font-size="{15*PS:.1f}" '
                 f'font-weight="800" fill="#fff">终</text>')
     if kind in ("peak", "peak_hi"):
-        hi = kind == "peak_hi"
-        col = D1_T if hi else "#4A5261"
-        r = (14 if hi else 11) * PS
-        return (f'<circle cx="{x}" cy="{y}" r="{r+2.4*PS:.1f}" fill="#fff" opacity="0.88"/>'
-                f'<path d="M {x-r:.1f},{y+r*0.62:.1f} L {x},{y-r*0.78:.1f} '
-                f'L {x+r:.1f},{y+r*0.62:.1f} Z" fill="{col}"/>')
+        # 山峰：与营地 / 水源 / 村落的构造完全同源 —— 白底圈 + 色盘 + 白色三角。
+        # 2026-10-24 改：旧版是「白晕 + 裸色三角」（peak_hi r=14 深红 / peak r=11 灰），
+        # 与其它符号两种画风，且同类山峰一大一小。现在两种 kind 几何一致，
+        # 若要强调主峰请只改 label 颜色，不要改符号尺寸。
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{11.6*PS:.1f}" fill="#4A5261"/>'
+                f'<path d="M {x-7.2*PS:.1f},{y+5.2*PS:.1f} L {x},{y-6.6*PS:.1f} '
+                f'L {x+7.2*PS:.1f},{y+5.2*PS:.1f} Z" fill="#fff"/>')
     if kind == "temple":
         return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
                 f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#5A4A8A"/>'
@@ -839,7 +841,7 @@ def build_map_overlay(mobile=False):
         # 2026-10-21 实测：字跟着 PS 缩到 9.6 之后，比底图地名（10–11.4）还小，
         # 白晕又占掉 1/4 笔画 —— POI 名看着发虚发灰，主次颠倒。
         base = 15.6 if k in ("start", "end") else 14.4
-        col = D1_T if k == "peak_hi" else (D2_T if k in ("start", "end") else INK)
+        col = D2_T if k in ("start", "end") else INK
         if mobile:
             txt = getattr(RD, "SHORT", {}).get(name, name)
         else:
