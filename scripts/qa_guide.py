@@ -238,18 +238,37 @@ if __name__ == "__main__":
     # 桌面版高度从长图反推（长图 = 版心 × scale2），手机版用同高（只改视口宽度看换行/溢出）
     long_png = GC.ROOT / f"{STEM}-攻略长图.png"
     doc_h = (Image.open(long_png).size[1] / 2.0) if long_png.exists() else 4000
-    # desk/phone 两次渲染互相独立（各自起一个无头浏览器进程），并行跑省一半时间
+    # desk/phone 两次渲染互相独立（各自起一个无头浏览器进程），并行跑省一半时间。
+    # ⚠ 2026-10-23 大横断海子线实测：**两个无头浏览器同时起会互相打架** —— 总有一个
+    # 以 rc=21 退出（两张图交替失败，每次不同的那张），串行跑则都成功。
+    # 所以这里并行失败后自动退回串行重试，别把"环境抢资源"误报成"审计截图生成不了"。
     from concurrent.futures import ThreadPoolExecutor
+    overlay_paths = []
+    _jobs = ((1200, "desk"), (600, "phone"))
     with ThreadPoolExecutor(max_workers=2) as pool:
         futs = {width: pool.submit(render_overlay, label, width, doc_h)
-                for width, label in ((1200, "desk"), (600, "phone"))}
-        overlay_paths = []
-        for width, label in ((1200, "desk"), (600, "phone")):
-            out = futs[width].result()
+                for width, label in _jobs}
+        _failed = []
+        for width, label in _jobs:
+            try:
+                out = futs[width].result()
+            except Exception as e:                       # noqa
+                print(f"  [..] {label} 并行渲染失败（{type(e).__name__}），转串行重试")
+                _failed.append((width, label))
+                continue
             if out and out.exists():
                 overlay_paths.append(str(out))
                 print(f"  → {label} 审计截图：{out.name}（红=对比度不足 橙=越界 "
                       f"品红=被裁 黄=字号过小；顶部汇总条给数量）")
+    for width, label in _failed:
+        try:
+            out = render_overlay(label, width, doc_h)
+        except Exception as e:                           # noqa
+            print(f"  [!!] {label} 串行也失败：{e}")
+            continue
+        if out and out.exists():
+            overlay_paths.append(str(out))
+            print(f"  → {label} 审计截图（串行）：{out.name}")
     if not overlay_paths:
         print("  ⚠ 审计截图未生成，请手动用浏览器核对对比度/溢出")
     print("③ 三件套压轨迹：见 make_all 日志里 map_svg.self_check 的「压轨迹点/家具互相重叠」")
