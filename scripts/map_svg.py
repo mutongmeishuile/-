@@ -1074,7 +1074,24 @@ def _title_legend(x_right, y_bottom):
     #   机耕路（非本次轨迹）"），会把整列撑宽 —— 同列的 D1/D4 就跟里程数字拉开一大截空，
     #   博格达实测 100+ px，看着像漏打了个字。现在附加行自成一行，列宽只由分日行决定。
     days = list(day_rows)
-    ncol = min(4, max(1, len(days))) if days else 1
+    # ---- 每行放几天：**动态算，不写死 4 列** ----
+    # 用户口径（2026-10-23）："较多空白，可以动态调整每行放的天数，最后整体右移"。
+    # 5 天按 4 列排 → 第二行只剩 D5，右边 3 格全空（博格达实测一大片空白）；
+    # 按 3 列排 → 3 + 2，只空 1 格，且整块窄了、右对齐后自然整体右移。
+    # 判据：先在**行数预算**内（多了会顶到数据行）挑"空格最少"的列数，同分再挑列多的（更矮）。
+    _avail_h = y_bottom - 68                       # 68 = 数据行基线 52 + 下缘 16
+    _max_rows = max(1, int(_avail_h // PITCH))
+    best = None
+    for _c in range(1, 5):
+        if not days:
+            break
+        _rows = -(-len(days) // _c)
+        if _rows + (1 if extra_rows else 0) > _max_rows:
+            continue
+        _score = (_rows * _c - len(days), _rows)   # ①空格少 ②行少
+        if best is None or _score < best[0]:
+            best = (_score, _c)
+    ncol = best[1] if best else min(4, max(1, len(days))) if days else 1
     nrow = -(-len(days) // ncol) if days else 0
     cols = [[] for _ in range(ncol)]
     for i, r in enumerate(days):
@@ -1108,7 +1125,8 @@ def _title_legend(x_right, y_bottom):
     sub = _CFG.get("title_lite") or ""
     _right = x_left + max(GC.text_w(t, 44) + 2, GC.text_w(sub, 16))
     avail = x_right - (_right + 26)
-    k = max(0.62, min(1.0, avail / total)) if total else 1.0
+    # 宽度和高度都要过：行数多到顶住数据行时，也等比缩下去（别只按宽度算）
+    k = max(0.62, min(1.0, avail / total, _avail_h / h)) if total else 1.0
 
     # 本地坐标原点 = 块左上角；整块 translate 到右下角落点再 scale
     ox = x_right - total * k
