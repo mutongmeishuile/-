@@ -387,6 +387,7 @@ CFG = {
     "kml": "@@KML@@",                       # 轨迹文件名（相对 project 根）
     # "bbox": [lon0, lat0, lon1, lat1],     # 可选：显式覆盖地图窗口。
     #                                        # 默认留空 → resolve_bbox() 从轨迹包围盒自动推（+8% 留白）
+    # "bbox_pad": 0.20,                     # 可选：只改留白比例（"地图大一点"用这个）
     "page_title": "@@NAME@@ · 徒步攻略",     # ★
     "title": "@@NAME@@",                    # ★
     "title_lite": "@@TODO@@ 一句话副题（几天的线 · 以什么为底）",

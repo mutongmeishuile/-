@@ -98,6 +98,7 @@ CFG = {
     "kml": "",                              # ★ 轨迹文件名（相对 project 根）；fill 后可一条命令重跑全流程
     # "bbox": [lon0, lat0, lon1, lat1],     # 可选：显式覆盖地图窗口。**默认留空**，
     #                                        # 让 guide_common.resolve_bbox() 从轨迹包围盒自动推（+8% 留白）
+    # "bbox_pad": 0.20,                     # 可选：只改留白比例（用户说"地图大一点"时用这个，别看手写 bbox）
     "page_title": "九华山南北穿越 · 2 天徒步攻略",
     "title": "九华山南北穿越",
     "title_lite": "（2 天 · 八峰连穿实录为底）",

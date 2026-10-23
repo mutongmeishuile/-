@@ -89,6 +89,50 @@ MIRRORS = [
 ]
 
 
+def _el_extent(e):
+    """单个要素的经纬度包围盒（node 用 lat/lon，way/relation 用 bounds 或 geometry）。"""
+    if "lat" in e and "lon" in e:
+        return e["lon"], e["lat"], e["lon"], e["lat"]
+    b = e.get("bounds")
+    if b:
+        return b["minlon"], b["minlat"], b["maxlon"], b["maxlat"]
+    c = e.get("center")
+    if c:
+        return c["lon"], c["lat"], c["lon"], c["lat"]
+    g = e.get("geometry") or []
+    if g:
+        los = [p["lon"] for p in g]
+        las = [p["lat"] for p in g]
+        return min(los), min(las), max(los), max(las)
+    return None
+
+
+def _cache_covers(d):
+    """缓存是否仍然覆盖当前窗口。
+
+    为什么需要：缓存以"文件存在"为命中条件，但窗口是**从轨迹推的** ——
+    改了 bbox_pad 或轨迹后，`make_all` 仍会命中旧缓存，于是底图扩了、
+    矢量层却还停在旧范围（新扩出来的边缘没有道路/水系/峰名，且**全程不报错**）。
+    判据：缓存的四边都要够到当前窗口（容差 2%，OSM 边缘本来就可能没要素）。
+    空缓存（上次全部镜像失败的产物）一律判为"不覆盖"→ 自动重抓。
+    """
+    els = d.get("elements") or []
+    if not els:
+        return False
+    lons, lats = [], []
+    for e in els:
+        ex = _el_extent(e)
+        if ex:
+            lons += [ex[0], ex[2]]
+            lats += [ex[1], ex[3]]
+    if not lons:
+        return False
+    tx = (LON1 - LON0) * 0.02
+    ty = (LAT1 - LAT0) * 0.02
+    return (min(lons) <= LON0 + tx and max(lons) >= LON1 - tx and
+            min(lats) <= LAT0 + ty and max(lats) >= LAT1 - ty)
+
+
 def fetch(force=False, soft=False, rounds=2):
     """抓取并缓存。soft=True 时，全镜像失败返回空要素集而不是抛错。
 
@@ -96,8 +140,11 @@ def fetch(force=False, soft=False, rounds=2):
     """
     if CACHE.exists() and not force:
         d = json.loads(CACHE.read_text(encoding="utf-8"))
-        print(f"命中缓存 {CACHE.name}：{len(d['elements'])} 个要素")
-        return d
+        if _cache_covers(d):
+            print(f"命中缓存 {CACHE.name}：{len(d['elements'])} 个要素")
+            return d
+        print(f"缓存未覆盖当前窗口（{len(d.get('elements') or [])} 个要素）→ 重抓 "
+              f"{LON0:.4f}, {LAT0:.4f} → {LON1:.4f}, {LAT1:.4f}")
 
     print(f"窗口 {LON0}, {LAT0} → {LON1}, {LAT1}")
     last = None

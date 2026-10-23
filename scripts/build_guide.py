@@ -126,8 +126,13 @@ def profile_svg(fs=1.0, mobile=False):
         o.append(f'<circle cx="{X(km):.1f}" cy="{Y(el):.1f}" '
                  f'r="{(5.0 if hi else 3.6)*min(fs,1.6):.1f}" '
                  f'fill="{D1_T if hi else "#3A4250"}" stroke="#FFFFFF" stroke-width="1.6"/>')
-        o.append(f'<text x="{X(km):.1f}" y="{Y(el)+off*fs:.1f}" text-anchor="middle" '
-                 f'font-size="{round((13 if hi else 12)*fs)}" font-weight="800" '
+        # 标注文字**夹在绘图区内**：起终点正好落在 km=0 / km=TOTAL 上，居中锚点会让
+        # 半行字跑到画布外（2026-10-23 博格达实测：右端「黑沟桥 2519」被裁成「黑沟桥 251」）。
+        _mfs = round((13 if hi else 12) * fs)
+        _tw = GC.text_w(txt, _mfs)
+        _tx = min(max(X(km), pl + _tw / 2 + round(2 * fs)), pr - _tw / 2 - round(2 * fs))
+        o.append(f'<text x="{_tx:.1f}" y="{Y(el)+off*fs:.1f}" text-anchor="middle" '
+                 f'font-size="{_mfs}" font-weight="800" '
                  f'fill="{D1_T if hi else "#3A4250"}" stroke="#FFFFFF" '
                  f'stroke-width="{round(3.2*fs)}" paint-order="stroke" '
                  f'stroke-linejoin="round">{txt}</text>')

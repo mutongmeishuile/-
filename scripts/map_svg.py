@@ -615,13 +615,18 @@ def build_map_overlay(mobile=False):
 
     placed = {}
     if not mobile and not _legend_outside():    # 手机版过小走页内图例；legend_outside 走图例带
+        # 落点首选顺序：默认 tl→tr→br→bl（旧行为）。用户点名"图例放左下角"这类要求时
+        # 用 CFG["legend_corner"]="bl" 把它提到最前 —— **只改顺序、不改避让规则**：
+        # 硬约束仍是"不压轨迹、不压标注"，左下角真放不下才会退到下一角（不会硬摆压线）。
+        _corner = str(_CFG.get("legend_corner") or "").strip().lower()
+        _default = ["tl", "tr", "br", "bl", "ml", "mr", "tc", "bc"]
+        _pref = ([_corner] + [c for c in _default if c != _corner]) if _corner else _default
         # ⚠ 图例放不下时**缩到能放下为止**，不要直接丢弃（旧行为：一次失败就整块没了，
         #   用户看到"图例呢？"）。逐档收缩重试，_legend_size() 会同步刷新 _LG_S，
         #   渲染代码读同一个 _LG_S，尺寸与排版永远不会打架。
         for _mult in (1.0, 0.86, 0.74, 0.62, 0.5):
             LG_W, LG_H = _legend_size(_lg_scale * _mult)
-            got = placer.place(LG_W + 2 * lg_pad, LG_H + 2 * lg_pad,
-                               prefer=("tl", "tr", "br", "bl", "ml", "mr", "tc", "bc"))
+            got = placer.place(LG_W + 2 * lg_pad, LG_H + 2 * lg_pad, prefer=tuple(_pref))
             if got:
                 # place() 返回 (x, y, rect)；家具占位登记的是 rect（含内衬那一圈）
                 _lg_rect = (got[0] + lg_pad, got[1] + lg_pad, got[0] + lg_pad + LG_W,

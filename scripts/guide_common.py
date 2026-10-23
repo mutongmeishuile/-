@@ -296,11 +296,16 @@ def track_bbox(extra=()):
     return min(lons), min(lats), max(lons), max(lats)
 
 
-def resolve_bbox(pad_frac=0.08, min_pad=0.004):
+def resolve_bbox(pad_frac=None, min_pad=0.004):
     """地图窗口 = 轨迹包围盒 + 留白。返回 `(lon0, lat0, lon1, lat1, 来源说明)`。
 
     优先级：`route_def.CFG['bbox']`（显式覆盖，给"轨迹只走了一小段、但想多看周围
-    地形"的场合用）> 轨迹自动推。**默认走自动推，别写死坐标。**
+    地形"的场合用）> 轨迹自动推（留白取 `CFG['bbox_pad']`，默认 8%）。
+    **默认走自动推，别写死坐标。**
+
+    `CFG["bbox_pad"]`：用户说「地图面积再大一点 / 多留点周边地形」时要的旋钮。
+    写 0.20 就是四周各外扩轨迹跨度的 20%（窗口面积约 1.4²，不是 20%）。
+    比手填 `CFG["bbox"]` 安全得多 —— 后者是死坐标，轨迹一改就漏山。
 
     ⚠ 窗口**必须**以真实轨迹为前提。曾经踩过：轨迹还没生成时，`route_def.POIS` 的
       `_p()` 会退化成占位坐标 `(0.0, 0.0, 0.0)`，于是"轨迹+POI"的包围盒变成
@@ -314,14 +319,18 @@ def resolve_bbox(pad_frac=0.08, min_pad=0.004):
             "      python scripts/prep_track.py <你的.kml>\n"
             "    （万一确实想要一个与轨迹无关的窗口，就在 route_def.CFG['bbox'] 里显式给。）")
     extra = []
+    pad = 0.08 if pad_frac is None else float(pad_frac)
     try:
         sys.path.insert(0, str(HERE))
         import route_def as RD
         # 丢掉 (0,0) 占位点：轨迹未就绪时 _p() 会退化成占位坐标，混进包围盒会毁掉窗口
         extra = [(d["lon"], d["lat"]) for d in pois_of(RD) if (d["lon"] or d["lat"])]
-        fixed = getattr(RD, "CFG", {}).get("bbox")
+        cfgd = getattr(RD, "CFG", {}) or {}
+        fixed = cfgd.get("bbox")
         if fixed:
             return (*[float(v) for v in fixed], "route_def.CFG['bbox']（显式覆盖）")
+        if pad_frac is None and cfgd.get("bbox_pad") is not None:
+            pad = float(cfgd["bbox_pad"])          # 用户要"地图大一点"时的手工留白
     except SystemExit:
         raise
     except Exception:                                              # noqa
@@ -330,10 +339,10 @@ def resolve_bbox(pad_frac=0.08, min_pad=0.004):
     if bb is None:
         raise SystemExit("地图窗口推不出来：轨迹与 POI 都没有可用坐标。")
     x0, y0, x1, y1 = bb
-    px = max((x1 - x0) * pad_frac, min_pad)
-    py = max((y1 - y0) * pad_frac, min_pad)
+    px = max((x1 - x0) * pad, min_pad)
+    py = max((y1 - y0) * pad, min_pad)
     return (round(x0 - px, 6), round(y0 - py, 6), round(x1 + px, 6), round(y1 + py, 6),
-            f"轨迹包围盒 + {pad_frac:.0%} 留白（自动）")
+            f"轨迹包围盒 + {pad:.0%} 留白（自动）")
 
 
 def assert_bbox_covers(bbox, where=""):
