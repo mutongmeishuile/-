@@ -310,6 +310,7 @@ svg{display:block;width:100%;height:auto}
 /* 附加行（雪线 / 步道）说明文字长：整行铺满，避免在 1/3 格里把 tag 挤成两行 */
 .rbox-lgm .lg.wide{grid-column:1/-1}
 .rbox-lgm .lg.wide i{width:34px}
+.rbox-lgm .lg b{white-space:nowrap}
 .lg{display:flex;align-items:center;gap:9px;font-size:13px;color:#3A4250}
 .lg i{width:22px;height:5px;border-radius:3px;flex:0 0 auto}
 .lg b{font-weight:800}
@@ -385,7 +386,7 @@ MOBILE_CSS = """
   .ngrid{grid-template-columns:1fr;gap:15px}
   .nbox h3{font-size:15.5px}
   .nbox li{font-size:14.2px;line-height:1.8}
-  .rbox-lgm{grid-template-columns:1fr;gap:9px}
+  .rbox-lgm{display:grid;grid-template-columns:1fr;gap:9px}
   .lg{font-size:14px}
   .lg span{font-size:13.2px}
   table.tsc{font-size:12.6px}
@@ -442,7 +443,12 @@ def _stats_html():
 def _legend_html():
     rows = []
     for d in DAYS:
-        rows.append((d["color"], d["tag"], d.get("legend", ""), d.get("dist_label", "")))
+        desc = str(d.get("legend", "") or "").strip()
+        # 与 map_svg._legend_rows 同一处理：CFG 的 legend 常自带「D1 」前缀，
+        # 而前面已经有一列 <b>{tag}</b> —— 不剔就印成「D1 D1 鸡丑垭口 → 两河口营地」。
+        if desc.startswith(d["tag"] + " "):
+            desc = desc[len(d["tag"]) + 1:]
+        rows.append((d["color"], d["tag"], desc, d.get("dist_label", "")))
     # 附加行与 map_svg._legend_rows 同源：CFG["legend_extra"] 列表优先
     # （雪线 / 步道 / 冰川面可并存），缺省退回旧的单行 extra_legend_* 键。
     # ⚠ 2026-10-21 珠峰东坡实测：旧版这里只认 extra_legend_desc，
@@ -555,6 +561,20 @@ def schedule_rows():
     return "".join(out)
 
 
+def _legend_css():
+    """图例在图面内时，桌面端不要再显示一份页内文字图例。
+
+    2026-10-23 实测：`legend_outside` 关掉（图例卡画在图上）之后，地图下方那条
+    `.rbox-lgm` 仍然照渲 —— 同一份 D1–D7 图例出现两遍，页面看着很啰嗦。
+    页内文字图例本来是给**手机**用的（图面内图例在手机上会缩到读不出），
+    所以这里只在桌面隐藏，手机端由 MOBILE_CSS 重新打开。
+    开关仍是 `legend_outside`：打开时图面内没有卡，页内图例就是唯一图例，不能隐藏。
+    """
+    if CFG.get("legend_outside"):
+        return ""
+    return ".rbox-lgm{display:none}"
+
+
 def _notes_html():
     boxes = []
     for title, items in CFG.get("notes", []):
@@ -588,7 +608,7 @@ def build_html():
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>{CFG.get("page_title", STEM + " · 攻略")}</title>
-<style>{CSS}{MOBILE_CSS}</style>
+<style>{CSS}{_legend_css()}{MOBILE_CSS}</style>
 </head>
 <body>
 <div class="page">

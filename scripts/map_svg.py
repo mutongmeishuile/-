@@ -16,6 +16,7 @@ import base64
 import io
 import json
 import math
+import re
 
 import guide_common as GC
 import route_def as RD
@@ -251,20 +252,41 @@ def mk_pin(x, y, kind):
 
 
 # ---------------------------------------------------------------- 三件套
+def _legend_km_txt(s):
+    """把 "14.40 km" 归一成 "14.4"。
+
+    单位统一提到图例标题（「分日路段 · km」），省掉每行 3 个字符宽 ——
+    7 天就省 21 字符宽，卡片能窄一截（2026-10-23 精细化）。
+    """
+    t = str(s or "").strip()
+    m = re.match(r"^([\d.]+)\s*km$", t, re.I)
+    if not m:
+        return t
+    v = float(m.group(1))
+    return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
 def _legend_rows():
     rows = []
     # 样本线宽：跟字号同量级即可（字 9.35 逻辑 px）。6.5 的粗横杠会盖过文字，
     # 用户要求"线条也细一点儿" → 主线段 3.8、虚线步道 1.5。
     for d in _CFG.get("days", []):
-        rows.append((d.get("color", D1_C), d.get("tag", "D"), d.get("legend", ""),
-                     d.get("dist_label", ""), 3.8, ""))
+        tag = d.get("tag", "D")
+        desc = str(d.get("legend", "") or "").strip()
+        # ⚠ 「D1 D1 鸡丑垭口 → 两河口营地」：CFG 的 legend 常自带日标前缀，而前面
+        #   还有一列 tag —— 直接拼就是重复两遍。这里把重复前缀剔掉（只剔一次，且要求
+        #   后面紧跟空格，避免把真的以 D1 开头的专名误伤）。
+        if desc.startswith(tag + " "):
+            desc = desc[len(tag) + 1:]
+        rows.append((d.get("color", D1_C), tag, desc,
+                     _legend_km_txt(d.get("dist_label", "")), 3.8, ""))
     # 附加行：CFG["legend_extra"] 列表优先（冰川面 / 雪线 / 步道可并存），
     # 缺省退回旧的单行 extra_legend_* 键。
     extra = _CFG.get("legend_extra")
     if extra:
         for it in extra:
             rows.append((it.get("color", "#8C8C86"), it.get("tag", ""),
-                         it.get("desc", ""), it.get("dist_label", ""),
+                         it.get("desc", ""), _legend_km_txt(it.get("dist_label", "")),
                          it.get("width", 1.5), it.get("dash", ' stroke-dasharray="8 5"')))
     elif _CFG.get("extra_legend_desc"):
         rows.append((_CFG.get("extra_legend_color", "#8C8A86"),
@@ -279,16 +301,53 @@ def _legend_rows():
 #   但用两列网格 + 缩小系数控制面积。名称可用 CFG["legend_kind_names"] 覆盖。
 _KIND_ORDER = ["start", "end", "camp", "water", "warn", "peak_hi", "peak", "temple"]
 # ---- 图例排版常量（单位 = 1×图例缩放 `_LG_S`，`_legend_size()` 与渲染代码共用）----
-LG_TITLE = 30         # 卡片顶 → 标题基线
-LG_ROW0 = 60          # 卡片顶 → 第一个分日行的基线
-LG_PITCH = 38         # 分日行行距
-LG_DIV_GAP = 14       # 最后一个分日行 → 分隔线
-LG_SYM0 = 26          # 分隔线 → 第一行符号中心
-LG_SYM_PITCH = 38     # 符号行行距
-LG_BOT = 46           # 最后一行内容 → 卡片底（脚注落在这段，太小会压到末行符号！实测踩坑）
-LG_FOOT = 14          # 卡片底 → 脚注基线
-LG_GLYPH = 0.42       # 符号样本缩放
+# 2026-10-23 精细化：原 30/60/38/38/46 的组合在 7 天线路上一张卡高 482（×0.55 = 265），
+# 占 684 高的图面 39%，压掉将近半个角落。行距与边距整体收紧 15% 左右，
+# 字号不动（字是信息，行距是装饰），高 408（×0.55 = 224，33%）。
+# ⚠ 改这些值必须同时改渲染代码里的 `+11*S` 基线偏移与符号 +7*S —— 都走同一组常量。
+LG_TITLE = 26         # 卡片顶 → 标题基线
+LG_ROW0 = 52          # 卡片顶 → 第一行的"行位"
+LG_BASE = 11          # 行位 → 文字基线（⚠ 分隔线要**从基线**再往下让，见 LG_DIV_GAP）
+LG_PITCH = 32         # 分日行行距
+LG_DIV_GAP = 10       # 最后一行**文字基线** → 分隔线（旧版按"行位"算，线正划在字上）
+LG_SYM0 = 24          # 分隔线 → 第一行符号中心
+LG_SYM_PITCH = 34     # 符号行行距
+LG_BOT = 40           # 最后一行内容 → 卡片底（脚注落在这段，太小会压到末行符号！实测踩坑）
+LG_FOOT = 13          # 卡片底 → 脚注基线
+LG_GLYPH = 0.55       # 符号样本缩放（0.42 时起点/终点只剩一颗小点，图例反而看不出是什么）
 LG_MIN_TAIL = 12      # 脚注与末行内容的最小安全间距（自检用）
+# 图例卡片宽度：**按内容算，不写死**。566 是旧的固定值，7 天线里有一半是空白；
+# 另一方面描述一长（"温泉营地 → 废弃牧屋营地"）又会顶到右边框。
+LG_W_MIN, LG_W_MAX = 300, 700     # 逻辑 px 上下限（×S 之前）
+LG_DESC_X = 132       # 描述列起点（示例线 18→78、日标 88、描述 132）
+
+
+def _legend_w():
+    """按内容算卡片宽度（单位 = 1×S）。取四段里最宽的那段。"""
+    rows = _legend_rows()
+    title = _legend_title_txt()
+    need = [18 + GC.text_w(title, 22) + 18]
+    for _c, _tag, desc, km, _w, _d in rows:
+        x = LG_DESC_X + GC.text_w(desc, 17)
+        if km:
+            x += 14 + GC.text_w(km, 17)
+        need.append(x + 18)
+    syms = _legend_symbols()
+    if syms:
+        # 两列网格：每列 = 符号 34 + 间距 22 + 名称
+        half = max(34 + 22 + GC.text_w(nm, 17) for _k, nm in syms)
+        need.append(2 * half + 36)
+    foot = _CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图")
+    if foot:
+        need.append(18 + GC.text_w(foot, 16.5) + 18)
+    return max(LG_W_MIN, min(LG_W_MAX, max(need)))
+
+
+def _legend_title_txt():
+    """图例标题：有里程列时自动补单位（每行就不再重复写 km）。"""
+    t = _CFG.get("legend_title", "分日路段")
+    has_km = any(r[3] for r in _legend_rows())
+    return f"{t}（km）" if has_km and "km" not in t else t
 
 
 def _legend_geom():
@@ -296,14 +355,15 @@ def _legend_geom():
     rows = len(_legend_rows())
     syms = len(_legend_symbols())
     last_row = LG_ROW0 + LG_PITCH * max(0, rows - 1)
-    end = last_row + 16                                   # 末行的下半行高
+    end = last_row + LG_BASE + 4                           # 末行的下半行高（基线下方 4 px）
     if syms:
-        div = last_row + LG_DIV_GAP
+        div = last_row + LG_BASE + LG_DIV_GAP
         n_sym_rows = (syms + 1) // 2
         last_sym = div + LG_SYM0 + LG_SYM_PITCH * max(0, n_sym_rows - 1)
-        end = last_sym + 16
+        end = last_sym + 14
     h = end + LG_BOT
     return {"rows": rows, "last_row": last_row, "end": end, "h": h,
+            "w": _legend_w(),
             "foot": h - LG_FOOT, "tail": h - LG_FOOT - end}
 _KIND_NAME = {"start": "起点", "end": "终点", "camp": "营地", "water": "水源 · 海子",
               "warn": "注意点", "peak_hi": "主峰 · 最高点", "peak": "山峰", "temple": "寺庙"}
@@ -374,6 +434,25 @@ def _report_poi_density(POIS, pin_xy):
     return pairs
 
 
+def _anchor_name(x, y, w, h, placer):
+    """反查"这块家具最后落在哪个锚位"—— 只为打一行日志，让"动态摆位"可核对。
+
+    Placer 只返回坐标，不返回它选了哪个锚点；而排查"图例为什么跑到这儿"时，
+    没有这一行就只能靠量坐标反推。这里按 8 个锚位（含 0/14/28 三档内缩）取曼哈顿最近的那个。
+    """
+    best, bd = "?", 1e18
+    for nm in GC.Placer.ANCHORS:
+        for ins in (0, 14, 28):
+            try:
+                ax, ay = placer._anchor_xy(nm, w, h, ins)      # noqa: SLF001
+            except Exception:                                  # noqa
+                continue
+            d = abs(ax - x) + abs(ay - y)
+            if d < bd:
+                bd, best = d, nm
+    return best
+
+
 def _legend_scale(map_h):
     """图例缩放系数：默认 FURN_LG，超出「图高 42%」预算时收缩，下限 0.34。
 
@@ -400,7 +479,7 @@ def _legend_size(scale=None):
     if g["tail"] < LG_MIN_TAIL:                       # 开发期护栏：宁可吵，不要悄悄压字
         print(f"   ⚠ 图例几何异常：脚注与末行间距仅 {g['tail'] * _LG_S:.1f} px"
               f"（应 ≥ {LG_MIN_TAIL * _LG_S:.1f}）—— 调大 LG_BOT")
-    return (round(566 * _LG_S), round(g["h"] * _LG_S))
+    return (round(g["w"] * _LG_S), round(g["h"] * _LG_S))
 
 
 def _nice_bar_km(m_per_px, iw, target_frac=0.16):
@@ -687,9 +766,12 @@ def build_map_overlay(mobile=False):
                             got[1] + lg_pad + LG_H)
                 _OCC.append(got[2])
                 placed["lg"] = got
-                if _mult < 1.0:
-                    print(f"   图例按 {_lg_scale * _mult:.2f} 缩放放置"
-                          f"（日程 {len(lg_rows)} 行 + 符号 {len(_legend_symbols())} 类）")
+                _an = _anchor_name(got[0], got[1], LG_W + 2 * lg_pad,
+                                   LG_H + 2 * lg_pad, placer)
+                print(f"   图例：{_an} 角 · {LG_W}×{LG_H} px · 缩放 {_lg_scale * _mult:.2f}"
+                      f"（日程 {len(lg_rows)} 行 + 符号 {len(_legend_symbols())} 类）"
+                      + ("· 已缩档才放下" if _mult < 1.0 else ""))
+                break
                 break
     got = placer.place(SB_W, SB_H, prefer=("bl", "br", "tl", "tr", "bc", "tc", "ml", "mr"))
     if got:
@@ -774,21 +856,21 @@ def build_map_overlay(mobile=False):
         g = [f'<g class="il"><rect x="{lx}" y="{ly}" width="{LG_W}" height="{LG_H}" rx="{round(14*S)}" '
              f'fill="#FFFFFF" opacity="0.96" stroke="#D9D2C6" stroke-width="1.4"/>',
              f'<text x="{lx+18*S:.0f}" y="{ly+LG_TITLE*S:.0f}" font-size="{round(22*S)}" '
-             f'font-weight="800" fill="{INK}">{_CFG.get("legend_title", "分日路段")}</text>']
+             f'font-weight="800" fill="{INK}">{_legend_title_txt()}</text>']
         for i, (col, tag, desc, km, w, dash) in enumerate(lg_rows):
             ry = ly + (LG_ROW0 + LG_PITCH * i) * S
             # ⚠ 样本线要压在文字的**视觉中线**上，不能随手给个负偏移：
             #   文字基线在 ry+11*S、字号 19*S，字形中线 ≈ 基线 − 0.35×字号 ≈ ry+4.4*S。
             #   原先写 ry-7*S，比文字中心高 11*S（≈6 逻辑 px）—— 看上去就是"线条错位"。
-            line_y = ry + 4.4 * S
+            line_y = ry + (LG_BASE - 6.6) * S
             g.append(f'<line x1="{lx+18*S:.0f}" y1="{line_y:.0f}" x2="{lx+78*S:.0f}" y2="{line_y:.0f}" '
                      f'stroke="{col}" stroke-width="{w:.1f}" stroke-linecap="round"{dash}/>')
-            g.append(f'<text x="{lx+90*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(19*S)}" '
+            g.append(f'<text x="{lx+88*S:.0f}" y="{ry+LG_BASE*S:.0f}" font-size="{round(19*S)}" '
                      f'font-weight="800" fill="{col}">{tag}</text>'
-                     f'<text x="{lx+140*S:.0f}" y="{ry+11*S:.0f}" font-size="{round(17*S)}" '
+                     f'<text x="{lx+LG_DESC_X*S:.0f}" y="{ry+LG_BASE*S:.0f}" font-size="{round(17*S)}" '
                      f'font-weight="600" fill="#4A5261">{desc}</text>')
             if km:
-                g.append(f'<text x="{lx+LG_W-18*S:.0f}" y="{ry+11*S:.0f}" text-anchor="end" '
+                g.append(f'<text x="{lx+LG_W-18*S:.0f}" y="{ry+LG_BASE*S:.0f}" text-anchor="end" '
                          f'font-size="{round(17*S)}" font-weight="800" fill="#3A4250">{km}</text>')
 
         # ---- 符号说明（两列网格）：让图上出现的每种符号都在图例里有样本 ----
@@ -796,7 +878,7 @@ def build_map_overlay(mobile=False):
         if syms:
             # 分隔线 / 符号行位置全部走 LG_* 常量，与 _legend_size() 严格同源
             last_row_y = ly + (LG_ROW0 + LG_PITCH * max(0, len(lg_rows) - 1)) * S
-            sy = last_row_y + LG_DIV_GAP * S
+            sy = last_row_y + (LG_BASE + LG_DIV_GAP) * S
             g.append(f'<line x1="{lx+18*S:.0f}" y1="{sy:.0f}" x2="{lx+LG_W-18*S:.0f}" y2="{sy:.0f}" '
                      f'stroke="#E2DACD" stroke-width="{1.4*S:.1f}"/>')
             col_w = (LG_W - 36 * S) / 2.0
