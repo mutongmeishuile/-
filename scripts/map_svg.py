@@ -248,6 +248,36 @@ def mk_pin(x, y, kind):
                 f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#D0871B"/>'
                 f'<text x="{x}" y="{y+5.4*PS:.1f}" text-anchor="middle" '
                 f'font-size="{15*PS:.1f}" font-weight="900" fill="#fff">!</text>')
+    if kind == "pass":
+        # 垭口：倒三角 + 横杠（山鞍形）
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<path d="M {x-9*PS:.1f},{y-5*PS:.1f} L {x+9*PS:.1f},{y-5*PS:.1f} '
+                f'L {x},{y+8*PS:.1f} Z" fill="#8B5E3C"/>'
+                f'<rect x="{x-7*PS:.1f}" y="{y-8*PS:.1f}" width="{14*PS:.1f}" '
+                f'height="{3*PS:.1f}" rx="{1.5*PS:.1f}" fill="#8B5E3C"/>')
+    if kind == "ford":
+        # 涉滩：水滴 + 波纹
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#2E86AB"/>'
+                f'<path d="M {x-6*PS:.1f},{y-1*PS:.1f} Q {x-3*PS:.1f},{y-5*PS:.1f} '
+                f'{x},{y-1*PS:.1f} Q {x+3*PS:.1f},{y+3*PS:.1f} {x+6*PS:.1f},{y-1*PS:.1f}" '
+                f'stroke="#fff" stroke-width="{2.2*PS:.1f}" fill="none" stroke-linecap="round"/>'
+                f'<path d="M {x-6*PS:.1f},{y+3.5*PS:.1f} Q {x-3*PS:.1f},{y-0.5*PS:.1f} '
+                f'{x},{y+3.5*PS:.1f} Q {x+3*PS:.1f},{y+7*PS:.1f} {x+6*PS:.1f},{y+3.5*PS:.1f}" '
+                f'stroke="#fff" stroke-width="{2.2*PS:.1f}" fill="none" stroke-linecap="round"/>')
+    if kind == "poi":
+        # 地标：菱形
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<path d="M {x},{y-10*PS:.1f} L {x+7.5*PS:.1f},{y} '
+                f'L {x},{y+10*PS:.1f} L {x-7.5*PS:.1f},{y} Z" fill="#6B4FA0"/>')
+    if kind == "village":
+        # 村落：小房子
+        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#C4703A"/>'
+                f'<path d="M {x-7*PS:.1f},{y-0.5*PS:.1f} L {x},{y-7*PS:.1f} '
+                f'L {x+7*PS:.1f},{y-0.5*PS:.1f} Z" fill="#fff"/>'
+                f'<rect x="{x-5*PS:.1f}" y="{y-0.5*PS:.1f}" width="{10*PS:.1f}" '
+                f'height="{6*PS:.1f}" fill="#fff"/>')
     return ""
 
 
@@ -285,11 +315,11 @@ def _legend_rows():
     extra = _CFG.get("legend_extra")
     if extra:
         for it in extra:
-            rows.append((it.get("color", "#8C8C86"), it.get("tag", ""),
+            rows.append((it.get("color", "#563A8A"), it.get("tag", ""),
                          it.get("desc", ""), _legend_km_txt(it.get("dist_label", "")),
                          it.get("width", 1.5), it.get("dash", ' stroke-dasharray="8 5"')))
     elif _CFG.get("extra_legend_desc"):
-        rows.append((_CFG.get("extra_legend_color", "#8C8A86"),
+        rows.append((_CFG.get("extra_legend_color", "#563A8A"),
                      _CFG.get("extra_legend_tag", "步道"),
                      _CFG["extra_legend_desc"], "", 1.5, ' stroke-dasharray="8 5"'))
     return rows
@@ -299,7 +329,7 @@ def _legend_rows():
 # 用户要求「图中所涉及的图例最好在图例区域都展示出来，不要占地过大」
 # → 不再只画分日线段，把起点/终点/营地/水源/垭口/高峰的图形样本也摆进去，
 #   但用两列网格 + 缩小系数控制面积。名称可用 CFG["legend_kind_names"] 覆盖。
-_KIND_ORDER = ["start", "end", "camp", "water", "warn", "peak_hi", "peak", "temple"]
+_KIND_ORDER = ["start", "end", "camp", "water", "warn", "pass", "peak_hi", "peak", "village", "ford", "poi", "temple"]
 # ---- 图例排版常量（单位 = 1×图例缩放 `_LG_S`，`_legend_size()` 与渲染代码共用）----
 # 2026-10-23 精细化：原 30/60/38/38/46 的组合在 7 天线路上一张卡高 482（×0.55 = 265），
 # 占 684 高的图面 39%，压掉将近半个角落。行距与边距整体收紧 15% 左右，
@@ -366,7 +396,8 @@ def _legend_geom():
             "w": _legend_w(),
             "foot": h - LG_FOOT, "tail": h - LG_FOOT - end}
 _KIND_NAME = {"start": "起点", "end": "终点", "camp": "营地", "water": "水源 · 海子",
-              "warn": "注意点", "peak_hi": "主峰 · 最高点", "peak": "山峰", "temple": "寺庙"}
+              "warn": "注意点", "peak_hi": "主峰 · 最高点", "peak": "山峰", "temple": "寺庙",
+              "pass": "垭口", "ford": "涉滩 / 过河", "poi": "地标", "village": "村落 · 补给"}
 
 
 def _legend_symbols():
@@ -1068,8 +1099,8 @@ def _title_legend(x_right, y_bottom):
     syms = _legend_symbols()
 
     FS, FS_T, FS_K = 11.0, 11.5, 10.5
-    PITCH, GAP_COL, GAP_BLOCK = 22.0, 18.0, 26.0
-    LINE_W, TAG_DX, DESC_GAP = 22.0, 28.0, 6.0
+    PITCH, GAP_COL, GAP_BLOCK = 26.0, 22.0, 34.0
+    LINE_W, TAG_DX, DESC_GAP = 22.0, 28.0, 8.0
 
     def entry_w(row):
         _c, tag, desc, km = row[0], row[1], row[2], row[3]
@@ -1215,9 +1246,16 @@ def _title_band():
                  f'{_esc(sub)}</text>')
     # 数据口径（可选）：CFG["title_stats"] 一行右对齐 —— 这张图会被单独发出去，
     # 光有名字没有里程/爬升，读者还是要回头问"多长、多高"。
-    if _CFG.get("title_stats"):
+    # 不配时自动从 route_def 生成「总里程 · +爬升 / −下降」。
+    _stats = _CFG.get("title_stats")
+    if not _stats:
+        try:
+            _stats = f"{RD.TOTAL_KM:.1f} km · +{RD.ASC} / −{RD.DESC} m"
+        except Exception:
+            _stats = None
+    if _stats:
         o.append(f'<text x="{IW - 40}" y="52" text-anchor="end" font-size="17" '
-                 f'font-weight="700" fill="#4A5261">{_esc(_CFG["title_stats"])}</text>')
+                 f'font-weight="700" fill="#4A5261">{_esc(_stats)}</text>')
     # 图例放标题带时整块搬进来（右缘贴数据行、底缘贴带子下沿）；否则只留分日色条
     if _legend_place() == "title":
         # 底缘留 8 px（带子下沿之上）—— 用户口径：默认 8 px，再少就顶到边了
