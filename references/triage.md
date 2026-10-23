@@ -78,6 +78,7 @@
 | **切边扫描对满幅地图报警，但轨迹明明没被裁** | `references/pitfalls-terrain.md` §5c（深绿林区 + 晕渲会把最低档森林深绿压到亮度 120 以下，top 冲到 44%。**别抬阈值**，走 `qa_guide` 的 `track_inside()` 轨迹完整性判据；改完必须做反向验证——裁一半的图要能被判失败） |
 | **用户问"多少米有雪线"（天山以外的山脉）** | `references/pitfalls-terrain.md` §6 + **`references/china-terrain.md` §4**（全国山脉雪线/林线表） |
 | **图上写的雪线米数 ≠ `CFG["snowline_m"]`** | `references/pitfalls-terrain.md` §6（四个键要一起配：`snowline_m` / `_label` / `_note` / `_src`；只改高度不改文案是**静默错误**） |
+| **两张图色系不同 / 配色突然变成暖绿** | **`references/china-terrain.md` §4**（配了 `snowline_m` 没配 `snow_month` → summer 档兜底 +350 m 抬高雪线 → `belt_stops` 回退 `ramp_stops` 暖调。同山同月直接补 `snow_month`） |
 | **中国区线路底图配色（沙漠/戈壁/草原/森林/盐湖怎么上色）** | **`references/china-terrain.md`** §2–3 |
 | **黄土沟壑 / 喀斯特 / 雅丹 / 滩涂怎么表现** | **`references/china-terrain.md`** §6–7 |
 | 改色 / 改窗口后哪里要跟着改 | `references/pitfalls-terrain.md` §7 |
