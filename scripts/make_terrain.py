@@ -277,6 +277,121 @@ def load_dem(z, lon0, lat0, lon1, lat1, workers=24):
     return sub, {"z": z, "tx0": tx0, "ty0": ty0, "box": [cx0, cy0, cx1, cy1]}
 
 
+def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
+                      min_gain=200.0, tol=100.0, max_gap=400.0, verbose=True):
+    """把 OSM 峰点吸附到 DEM 的局部山顶，返回 `{"lon,lat": [lon, lat]}`。
+
+    为什么需要（2026-10-23 博格达实测，用户指着截图问"这个三角标的不准确"）
+    ------------------------------------------------------------------------
+    `natural=peak` 是**人工录入**的点，坐标常有几百米漂移；而等高线与晕渲是 DEM 画的。
+    于是三角符号落在山腰、名字漂在坡上，和地形对不上。实测 7 个具名峰里 3 个明显偏：
+
+        博格达三峰 5288：点在 4362 的山腰，800 m 内山顶 4810（离 797 m）
+        博格达五峰 5213：4802 → 5158（离 508 m）
+        博格达六峰 5180：4332 → 4784（离 380 m）
+        Nangfeng  4683：4372 → 4594（离 347 m）
+        博格达峰   5445：5148 就是邻域最高（离 7 m）—— 点位本来就准，绝不能动
+
+    判据（三条同时满足才动）
+    ------------------------
+    ① 邻域最高点比**当前点**的 DEM 高 ≥ `min_gain`（200 m）→ 点在坡上不在顶；
+    ② 邻域最高点不得高过标称 `ele + tol`（默认 +100 m）→ 否则说明窗口里装进了
+       **另一座更高的峰**（实测「4488 那座」800 m 内就是 5175 的主峰，硬吸会张冠李戴），
+       这时把半径减半重试；
+    ③ 只在 `radius_m` 内找，找不到就**不动** —— 宁可保留 OSM 原点，也不造位置；
+    ④ 山顶 DEM 不得比标称 ele 低过 `max_gap`（400 m）→ 差太多说明找到的是**卫峰**
+       而不是本峰（博格达三峰 5288 周围 800 m 最高只有 4810，差 478 m：宁可不动）。
+
+    只借 DEM 定位置，不借它改高程：DEM 对 5000 m 级雪峰普遍低估 200–400 m
+    （雪面反照 + 30 m 分辨率抹平尖顶），图上印的仍是 OSM 的 `ele`。
+    """
+    try:
+        d = json.loads(Path(osm_path).read_text(encoding="utf-8"))
+    except Exception:                                              # noqa
+        return {}
+    z, tx0, ty0 = meta["z"], meta["tx0"], meta["ty0"]
+    cx0, cy0 = meta["box"][0], meta["box"][1]
+    H, W = dem.shape
+    mpp = 156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)
+    out, moved, skipped_gap = {}, [], []
+
+    # 其它具名峰的原点：吸附目标不许落在它们 300 m 内 —— 否则就是"张冠李戴"，
+    # 把 A 峰的三角挪到 B 峰的头上（峰群密集区 800 m 窗口里常有邻峰）。
+    named_px = []
+    for e in d.get("elements", []):
+        t = e.get("tags", {})
+        if t.get("natural") != "peak" or "lon" not in e:
+            continue
+        if not (t.get("name") or t.get("name:en")):
+            continue
+        gx, gy = lonlat_to_px(e["lon"], e["lat"], z)
+        named_px.append((gx - tx0 * 256 - cx0, gy - ty0 * 256 - cy0))
+
+    for e in d.get("elements", []):
+        t = e.get("tags", {})
+        if t.get("natural") != "peak" or "lon" not in e:
+            continue
+        try:
+            ele = float(str(t.get("ele", "")).replace("m", "").strip())
+        except ValueError:
+            ele = None
+        if ele is None:
+            # 没有 ele 的裸峰点（本窗口 43 个）不校正：没有标称高程就没有
+            # "该吸到哪座山头"的判据 —— 它们在图上也只标个高程数字，位置容差大。
+            continue
+        gx, gy = lonlat_to_px(e["lon"], e["lat"], z)
+        xi, yi = int(round(gx - tx0 * 256 - cx0)), int(round(gy - ty0 * 256 - cy0))
+        if not (0 <= xi < W and 0 <= yi < H):
+            continue
+        base = float(dem[yi, xi])
+        r = int(radius_m / mpp)
+        hit = None
+        for _ in range(4):                       # 最多缩 3 次（800 → 400 → 200 → 100 m）
+            if r < 60:
+                break
+            win = dem[max(0, yi - r):yi + r, max(0, xi - r):xi + r]
+            iy, ix = np.unravel_index(np.nanargmax(win), win.shape)
+            mx = float(win[iy, ix])
+            ax, ay = ix + max(0, xi - r), iy + max(0, yi - r)
+            if mx > ele + tol:
+                r //= 2                           # 窗口里有更高的别的峰 → 缩半径
+                continue
+            # 目标点离"别的具名峰原点"太近 → 说明吸过去会盖在邻峰上，缩半径重试
+            if any(math.hypot(ax - nx, ay - ny) * mpp < 300.0
+                   for nx, ny in named_px
+                   if math.hypot(nx - xi, ny - yi) > 1e-6):
+                r //= 2
+                continue
+            if mx - base >= min_gain:
+                if ele - mx > max_gap:
+                    gap = (t.get("name") or t.get("name:en") or "(无名)", ele, mx)
+                    skipped_gap.append(gap)
+                else:
+                    hit = (ax, ay, mx)
+            break
+        nm = t.get("name") or t.get("name:en") or "(无名)"
+        if not hit:
+            continue
+        px_, py_, mx = hit
+        lo, la = px_to_lonlat(px_ + tx0 * 256 + cx0, py_ + ty0 * 256 + cy0, z)
+        dist = math.hypot(px_ - xi, py_ - yi) * mpp
+        out[f"{e['lon']:.7f},{e['lat']:.7f}"] = [round(lo, 7), round(la, 7)]
+        moved.append((nm, base, mx, dist))
+
+    if verbose:
+        if moved:
+            print(f"   峰点校正：{len(moved)} 个 OSM 点漂在山腰 → 吸附到 DEM 山顶"
+                  f"（位移 {min(m[3] for m in moved):.0f}–{max(m[3] for m in moved):.0f} m）")
+            for nm, base, mx, dist in moved:
+                print(f"     · {nm:16s} DEM {base:5.0f} → {mx:5.0f} m   移 {dist:4.0f} m")
+        else:
+            print("   峰点校正：本窗口无需校正（所有峰点都在各自山顶附近）")
+        for nm, ele, mx in skipped_gap:
+            print(f"     ~ {nm:16s} 800 m 内最高只有 {mx:.0f} m（标称 {ele:.0f}），"
+                  f"差的太多 —— 像是卫峰，保持 OSM 原点")
+    return out
+
+
 # ------------------------------------------------------------------ 晕渲
 def hillshade(dem, z, lat_c, az=None, alt=ALT, zf=Z_FACTOR):
     """GDAL Horn 算法。返回 0–1 的明暗值。
@@ -1761,8 +1876,19 @@ def build_terrain():
                                                  snow_m, OUT / "osm_draw.json")
         except Exception as _e:                                        # noqa
             print(f"   （水面过滤跳过：{_e}）")
+        # 峰点校正：OSM 的人工峰点常漂在山腰（博格达 7 个具名峰里 3 个偏 350–800 m），
+        # 而等高线是 DEM 画的 —— 不校正就会出现"三角符号不在地形顶上"。
+        snap = {}
+        if GC.cfg_flag("peak_snap", True):
+            try:
+                snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0)
+                (OUT / "peak_snap.json").write_text(
+                    json.dumps(snap, ensure_ascii=False, indent=0), encoding="utf-8")
+            except Exception as _e:                                    # noqa
+                print(f"   （峰点校正跳过：{_e}）")
         pil = draw_overlay(pil, m, _osm_draw, skip_names=skip,
                            px_scale=SS, proj_scale=scale_raster,
+                           peak_snap=snap,
                            seed_cells=(seed_cells
                                        | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
     except FileNotFoundError:

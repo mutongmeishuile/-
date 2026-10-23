@@ -494,7 +494,8 @@ def _pick_name(t):
 
 
 def draw_overlay(pil, meta, osm_path=None, skip_names=None,
-                 px_scale=1.0, proj_scale=None, seed_cells=None, verbose=True):
+                 px_scale=1.0, proj_scale=None, seed_cells=None, verbose=True,
+                 peak_snap=None):
     """把 OSM 要素叠到 pil 上。
 
     skip_names: 需要抑制的注记名（一般是攻略自己的 POI 名）。
@@ -505,6 +506,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     proj_scale: 投影用的「栅格像素 / 瓦片像素」比例；默认取 meta["scale"]（非超采样场景）。
     seed_cells: 已被占用的注记网格（cell = 14×px_scale），一般传等高线高程标注的占位，
       让地名/峰名主动避开等高线数字，避免两种注记叠在同一个点上。
+    peak_snap: `{"lon,lat": [lon, lat]}`，把漂在山腰的 OSM 峰点换到 DEM 山顶。
+      由 `make_terrain.snap_peaks_to_dem()` 算好传进来（本模块没有 DEM）；
+      key 用**原始坐标**（7 位小数），所以不依赖要素顺序。空表 = 不校正。
     """
     osm_path = Path(osm_path) if osm_path else (OUT / "osm.json")
     # 冰川层按线路开关：默认关，route_def.CFG["glacier_layer"]=True 才画（判据见常量注释）
@@ -737,6 +741,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not (-m < x < size[0] + m and -m < y < size[1] + m):
             continue
         if t.get("natural") == "peak":
+            # 峰点校正：OSM 的人工点常漂在山腰，符号要画在 DEM 山顶上（见 peak_snap 说明）
+            _sn = (peak_snap or {}).get(f"{e['lon']:.7f},{e['lat']:.7f}")
+            if _sn:
+                x, y = proj(_sn[0], _sn[1])
             peaks.append((x, y, _pick_name(t), t.get("ele", "")))
         elif t.get("natural") == "saddle":
             # 哑口 / 垭口（2026-10-17 念青东补）。OSM 用 natural=saddle，

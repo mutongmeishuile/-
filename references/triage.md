@@ -28,6 +28,7 @@
 | **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |
 | **两条线的图"地名/山峰名差很多"，先怀疑技能没同步** | `references/pitfalls-terrain.md` §14。**先 `out count` 比 bbox + 比 `osm.json` 命名元素数**，多半是 OSM 数据源稀疏（非登山区 peak 常为 0），不是脚本；诊断查询**别用 overpass.osm.ch**（它没有亚洲数据，会返回假的 0） |
 | **某个峰/湖明显有名却显示成无名（只标高程数字）** | 先查它是不是**只有 `name:en`、没有 `name`**：`grep '"name:en"' out/osm.json`。OSM 里中文名被录进英文栏很常见（博格达 `Nangfeng/Xifeng/Hongfeng Peak`）。配 `CFG["name_map"] = {"Nangfeng Peak": "南峰"}` 显式补名 —— **脚本不自动音译**（会在别的语种上造错名）；`selftest.py` ⑨ 守这条 |
+| **峰名的三角符号不在山顶上、漂在山腰（和等高线对不上）** | 这是 OSM `natural=peak` **人工点位漂移**，不是投影错。`make_terrain.snap_peaks_to_dem()` 已自动校正（DEM 山顶 + 四条判据），日志 `峰点校正：N 个 …`。若某峰没被校正而你觉得该动，看日志有没有 `~ 名字 800 m 内最高只有 X（标称 Y）` —— 那说明它周围 800 m 内没有高程相符的山头（多半点位偏得更远或 ele 本身有问题），脚本宁可不动。关掉用 `CFG["peak_snap"]=False` |
 | **冰川看不出范围 / 冰舌和雪原糊成一片** | `references/pitfalls-terrain.md` §12 ①（边界**绝不能画近白**，要冰蓝；填充透明度 ≤150 保住冰面晕渲） |
 | **峰名太多糊死山体，或"主峰没名、无名矮峰有名"** | `references/pitfalls-terrain.md` §12 ②（按 ele 降序 + 分三级；阈值用**本窗口分位数** `PEAK_TIER_PCT=(88,62)`，低档走 `fallback=False`） |
 | **换到新线路后主峰不突出 / 所有峰名都是小字** | `references/pitfalls-terrain.md` §12 ②（分级阈值写死过绝对米数就会这样，**必须相对**；样本 <8 自动免分级） |

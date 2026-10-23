@@ -27,6 +27,7 @@
 
 退出码 0 = 全部通过；1 = 有失败。
 """
+import json
 import math
 import sys
 from pathlib import Path
@@ -352,11 +353,71 @@ def t_pick_name():
         GC.cfg, GC.cfg_flag = old_cfg, old_flag
 
 
+# ---------------------------------------------------------------- ⑩ 峰点校正
+def t_peak_snap():
+    """OSM 峰点该不该被吸到 DEM 山顶，判据要能被离线验证。
+
+    这段逻辑的错误方式很隐蔽：**要么不动（看不出问题），要么把三角挪到邻峰头上**
+    （图上立刻变成"山名标在别的山上"）。所以这里用合成 DEM 逐条钉住四个判据。
+    """
+    print("⑩ 峰点校正（漂在山腰才吸、吸到别的高峰上要拒绝）")
+    import tempfile
+    import numpy as np
+    try:
+        import make_terrain as MT
+    except _IMPORT_ERR as e:                                        # noqa
+        check("make_terrain 可导入", False, f"{e}")
+        return
+
+    z = 14
+    dem = np.full((220, 220), 2000.0, np.float32)
+    dem[90:111, 90:111] = 3000.0            # 一个 21×21 的方顶"山"
+
+    def mk(tmp, ele, xi, yi):
+        lo, la = MT.px_to_lonlat(xi, yi, z)
+        p = Path(tmp) / "osm.json"
+        t = {"natural": "peak", "name": "测试峰"}
+        if ele is not None:
+            t["ele"] = str(ele)
+        p.write_text(json.dumps({"elements": [
+            {"type": "node", "lat": la, "lon": lo, "tags": t}]}, ensure_ascii=False),
+            encoding="utf-8")
+        return p
+
+    meta = {"z": z, "tx0": 0, "ty0": 0, "box": [0, 0, 220, 220]}
+    d = tempfile.mkdtemp()
+
+    # ① 点在山腰（离山顶 ~35 px≈240 m），标称 3000 与山顶相符 → 应吸附
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 135, 100), dem, meta, 43.0, verbose=False)
+    check("漂在山腰 → 吸附", len(got) == 1,
+          f"返回 {len(got)} 条")
+    if got:
+        lo, la = list(got.values())[0]
+        key = list(got)[0]
+        check("吸附后落在山头上（DEM ≥ 2900）",
+              float(dem[int(round(MT.lonlat_to_px(lo, la, z)[1])) ,
+                          int(round(MT.lonlat_to_px(lo, la, z)[0]))]) >= 2900)
+        check("key 是 7 位小数坐标（draw_osm 按同一格式查表）",
+              key.count(",") == 1 and all(len(p.split(".")[1]) == 7 for p in key.split(",")))
+
+    # ② 点本来就在山顶 → min_gain 拦住，不动
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 100, 100), dem, meta, 43.0, verbose=False)
+    check("本来就在山顶 → 不动", got == {}, f"却动了 {len(got)} 个")
+
+    # ③ 标称高程远低于周围山顶 → 说明是"别的更高的峰"，不能吸（tol / max_gap）
+    got = MT.snap_peaks_to_dem(mk(d, 2100, 135, 100), dem, meta, 43.0, verbose=False)
+    check("标称 2100 而山顶 3000 → 拒绝吸附", got == {}, f"却动了 {len(got)} 个")
+
+    # ④ 没有 ele → 没有判据，一律不动
+    got = MT.snap_peaks_to_dem(mk(d, None, 135, 100), dem, meta, 43.0, verbose=False)
+    check("没有 ele 的裸峰点 → 不动", got == {}, f"却动了 {len(got)} 个")
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
-               t_pick_name):
+               t_pick_name, t_peak_snap):
         try:
             fn()
         except Exception as e:                                      # noqa
