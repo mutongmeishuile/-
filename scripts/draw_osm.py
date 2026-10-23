@@ -455,6 +455,44 @@ def _clean_name(s):
     return "".join(out).strip(" ·-")
 
 
+# 取名的键顺序：先 `name`（OSM 的"通用名"，本地语），再各变体的中文标签。
+_NAME_KEYS = ("name", "name:zh", "name:zh-Hans", "name:zh-CN")
+
+
+def _pick_name(t):
+    """从 tags 里取一个**能画**的名字；取不到返回 ""。
+
+    为什么要多键
+    ------------
+    OSM 里存在一类要素**只有 `name:en`（甚至连 `name` 都没有）**，典型是峰：
+    博格达实测 91 个峰点里有 3 个是 `Nangfeng Peak` / `Xifeng Peak` / `Hongfeng Peak`
+    （4683 / 4613 / 4218 m）—— 中文名被录入英文栏，`name` 是空的。旧实现只看
+    `t.get("name")`，于是这三个**有名字的山头在图上是无名峰**，还会把"本区只有 7 个
+    有名字的峰"这种统计口径带偏。
+
+    不自动音译
+    ----------
+    `Nanfeng → 南峰` 看着显然，但同一套规则放到藏语/蒙古语地名上就会造出错名。
+    所以只认两条确定的路：
+      ① `CFG["name_map"] = {"Nangfeng Peak": "南峰", ...}` —— 线路配置里**逐条显式**给；
+      ② `CFG["label_foreign_names"] = True` —— 允许直接显示原文（默认关，中文图上不协调）。
+    """
+    for k in _NAME_KEYS:
+        v = (t.get(k) or "").strip()
+        if v:
+            return v
+    en = (t.get("name:en") or "").strip()
+    if not en:
+        return ""
+    mp = GC.cfg("name_map", None) or {}
+    for k, v in mp.items():                       # 大小写与首尾空格都不计较
+        if en.strip().lower() == str(k).strip().lower():
+            return str(v)
+    if GC.cfg_flag("label_foreign_names", False):
+        return en
+    return ""
+
+
 def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                  px_scale=1.0, proj_scale=None, seed_cells=None, verbose=True):
     """把 OSM 要素叠到 pil 上。
@@ -699,29 +737,29 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not (-m < x < size[0] + m and -m < y < size[1] + m):
             continue
         if t.get("natural") == "peak":
-            peaks.append((x, y, t.get("name", ""), t.get("ele", "")))
+            peaks.append((x, y, _pick_name(t), t.get("ele", "")))
         elif t.get("natural") == "saddle":
             # 哑口 / 垭口（2026-10-17 念青东补）。OSM 用 natural=saddle，
             # 也常带 mountain_pass=yes。高原线路的垭口是**关键地理标识**，
             # 而 peak 在非登山区（念青东/横断山腹地）常常一个都没有 ——
             # saddle 是那一带唯一稳的山口标注来源。
             # ⚠ 与攻略自己的垭口 POI 同名时由 skip_names 去重，不会画两遍。
-            saddles.append((x, y, t.get("name", ""), t.get("ele", "")))
+            saddles.append((x, y, _pick_name(t), t.get("ele", "")))
         elif "place" in t:
             # place=locality（小地名）也走这支：prio 里没有 locality 会排到最后，
             # 用 f_ham 画，无需单独分支。
-            places.append((t["place"], x, y, t.get("name", "")))
+            places.append((t["place"], x, y, _pick_name(t)))
         elif t.get("natural") == "water":
-            waters.append((x, y, t.get("name", ""), 0.0))
+            waters.append((x, y, _pick_name(t), 0.0))
         elif t.get("tourism") in ("attraction", "viewpoint", "alpine_hut"):
-            pois.append((x, y, t.get("name", ""), t["tourism"]))
+            pois.append((x, y, _pick_name(t), t["tourism"]))
         elif t.get("amenity") == "place_of_worship":
-            pois.append((x, y, t.get("name", ""), "temple"))
+            pois.append((x, y, _pick_name(t), "temple"))
 
     # 湖泊（面）与河流（线）的名字：锚点取要素顶点/最大环的重心，再交给 Labeller 动态避让
     for e in els:
         t = e.get("tags", {})
-        nm = t.get("name")
+        nm = _pick_name(t)
         if not nm:
             continue
         is_lake = t.get("natural") == "water" or t.get("landuse") == "reservoir"
@@ -756,7 +794,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         t = e.get("tags", {})
         if t.get("natural") != "glacier":
             continue
-        nm = _clean_name(t.get("name", ""))
+        nm = _clean_name(_pick_name(t))
         if not nm:
             continue
         rings = _rings_of(e, proj, size)

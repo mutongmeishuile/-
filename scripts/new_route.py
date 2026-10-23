@@ -447,6 +447,13 @@ CFG = {
     #     {"color": "#4E8CC4", "tag": "时令河", "desc": "仅暖季有水，旱季断流", "width": 1.5,
     #      "dash": ' stroke-dasharray="8 5"'},
     # ],
+    # "name_map": {"Nangfeng Peak": "南峰", "Xifeng Peak": "西峰"},
+    #   ↑ 给**只有 `name:en`、没有 `name`** 的要素补中文名（OSM 里这类峰不少，
+    #     `Nangfeng Peak` 就是中文名被录进了英文栏）。不配 = 该峰按无名峰处理，
+    #     图上只标高程数字。**必须逐条显式写** —— 脚本不自动音译（会造出错名）。
+    #     查法：grep '"name:en"' out/osm.json，或跑一遍看日志里「山峰名 x/N」少没少。
+    # "label_foreign_names": True,
+    #   ↑ 上面没配映射时，是否允许直接显示原文（默认关：中文图上混英文名不协调）。
 
     # ---- 关键点时间表 ----
     "sched_tag": "时刻取自轨迹时间戳（北京时间）",

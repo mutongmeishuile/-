@@ -310,10 +310,53 @@ def t_clean_guard():
           f"保留集 = {sorted(got)}")
 
 
+# ---------------------------------------------------------------- ⑨ 底图取名
+def t_pick_name():
+    """只有 `name:en` 的要素不能被当成"没名字"。
+
+    博格达实测：91 个峰点里 3 个是 `Nangfeng/Xifeng/Hongfeng Peak`（中文名进了英文栏，
+    `name` 为空）。旧实现只看 `name`，这三个有名字的山头在图上成了无名峰，
+    还让"本区只有 7 个有名字的峰"变成对外说法 —— 属于"错了不报错、只少标"的典型。
+    """
+    print("⑨ 底图取名（name / name:zh / name_map 回退链）")
+    import guide_common as GC
+    try:
+        import draw_osm as DO
+    except _IMPORT_ERR as e:                                        # noqa
+        check("draw_osm 可导入", False, f"{e}")
+        return
+
+    old_cfg, old_flag = GC.cfg, GC.cfg_flag
+
+    def with_cfg(mp, foreign=False):
+        GC.cfg = lambda k, d=None: (mp if k == "name_map" else d)
+        GC.cfg_flag = lambda k, d=False: (foreign if k == "label_foreign_names" else d)
+
+    try:
+        with_cfg({}, False)
+        check("取 name", DO._pick_name({"name": "博格达峰", "name:zh": "X"}) == "博格达峰")
+        check("没有 name 时退回 name:zh", DO._pick_name({"name:zh": "南峰"}) == "南峰")
+        check("只有 name:en 且没配映射 → 不标（不自动音译）",
+              DO._pick_name({"name:en": "Nangfeng Peak"}) == "")
+
+        with_cfg({"Nangfeng Peak": "南峰"})
+        check("name_map 显式映射生效",
+              DO._pick_name({"name:en": "Nangfeng Peak"}) == "南峰")
+        check("映射不分大小写与首尾空格",
+              DO._pick_name({"name:en": " nangfeng peak "}) == "南峰")
+
+        with_cfg({}, True)
+        check("label_foreign_names=True 时显示原文",
+              DO._pick_name({"name:en": "Haigou Peak"}) == "Haigou Peak")
+    finally:
+        GC.cfg, GC.cfg_flag = old_cfg, old_flag
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
-               t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard):
+               t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
+               t_pick_name):
         try:
             fn()
         except Exception as e:                                      # noqa
