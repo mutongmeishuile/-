@@ -528,6 +528,13 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
     return km
 
 
+# ---- 全局字号口径（2026-10-24）----
+# 用户要求：① 全图字体统一；② 轨迹标注（营地/垭口/海子…）只比底图地名大 2 px。
+# 两个值都可在 route_def.CFG 覆盖。深度/层级改由**颜色与白晕**承担，不再靠字号拉开。
+_FS_BASE = float(GC.cfg("label_fs_base", 10.5) or 10.5)
+_FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE + 2) or (_FS_BASE + 2))
+
+
 def _load_base_labels():
     """读取 draw_osm 记下的地名锚点 + 样式（栅格 px → 逻辑 px）。
 
@@ -550,7 +557,10 @@ def _load_base_labels():
         s0 = it["s"] / ss
         # 统一到 3 档字号：14+ 主峰 / 11.5–14 中档 / 其余小号。原来的 22–31（栅格）
         # 换算成逻辑像素是 11–15.5，跟 POI 标注（16）几乎同级，图上一片一样重。
-        fs = 11.4 if s0 >= 13.5 else (10.6 if s0 >= 11.5 else 10.0)
+        # 2026-10-24 用户要求「全局字体大小统一、再小一些」：底图地名**只用一个字号**
+        # （CFG["label_fs_base"]，默认 10.5），不再按文字宽度分 11.4/10.6/10.0 三档 ——
+        # 三档同屏时 0.6–1.4 px 的差异既不构成层级、又让同类地物看着不一样大。
+        fs = _FS_BASE
         out.append({
             "t": it["t"], "x": it["x"] / ss, "y": it["base"] / ss,
             "fs": fs, "w": it["s"] / ss, "pri": s0,
@@ -644,10 +654,27 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
             f, st = it["fill"], it["stroke"]
             c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
             c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
+            # 2026-10-24 用户反馈「看不出这个地名标的是哪个地方」：避让把字推离锚点后，
+            # 图上一根线都没有，读者无从对应。→ 位移 > 7 px 就补一条细引线 + 锚点小圆。
+            # 峰/垭口本身有三角符号（栅格层画的），不再叠圆点，否则像脏点。
+            _ax, _ay = it["x"], it["y"]
+            _cx = min(max(_ax, box[0]), box[2])
+            _cy = min(max(_ay, box[1]), box[3])
+            _is_peak = f[0] - f[2] > 12 and f[0] < 110     # 棕色系 = 峰名，锚点已有三角
+            if not _is_peak:
+                # **每个**地名都在锚点上打一个小圆 —— 这是"这个字标的是哪"最直接的答案。
+                # 只给被推远的那几个画圆是不够的：紧贴锚点的名字反而更让人怀疑它指哪儿。
+                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="1.6" '
+                           f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
+                           f'stroke-width="0.7"/>')
+            if math.hypot(_cx - _ax, _cy - _ay) > 7:
+                out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
+                           f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.9" '
+                           f'stroke-opacity="0.55"/>')
             t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            wt = 700 if fs >= 11.4 else 600
+            wt = 700          # 字号统一后不再靠字重区分主次（白晕 + 颜色承担）
             out.append(f'<text x="{x0:.1f}" y="{yb:.1f}" font-size="{fs:.1f}" '
-                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="1.7" '
+                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="1.5" '
                        f'stroke-opacity="0.92" paint-order="stroke" '
                        f'stroke-linejoin="round">{t}</text>')
             break
@@ -840,7 +867,7 @@ def build_map_overlay(mobile=False):
         # 标注字号**不跟符号缩放走**：图钉要小（0.66），字要读得清。
         # 2026-10-21 实测：字跟着 PS 缩到 9.6 之后，比底图地名（10–11.4）还小，
         # 白晕又占掉 1/4 笔画 —— POI 名看着发虚发灰，主次颠倒。
-        base = 15.6 if k in ("start", "end") else 14.4
+        base = _FS_POI          # 全图统一口径：轨迹标注 = 底图地名 + 2 px（起终点也不例外）
         col = D2_T if k in ("start", "end") else INK
         if mobile:
             txt = getattr(RD, "SHORT", {}).get(name, name)
