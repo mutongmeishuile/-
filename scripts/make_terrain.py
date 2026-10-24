@@ -1028,8 +1028,13 @@ def pick_contour_interval(dem_out, verbose=True):
     return fallback
 
 
-def _contour_tint(base, mode):
+def _contour_tint(base, mode, dmin=None):
     """由底图颜色**派生**等高线颜色：同色相 + 降饱和 + 明度分档（暗处自动提亮）。
+
+    dmin : 覆盖 CONTOUR_MIN_DELTA[mode]。线路级 `CFG["contour_min_delta"]` 用它把
+           "保证看得见"的最小明度差压小 —— 这是**降低等高线存在感**最直接的一刀
+           （线是否"跳"首先取决于它和底图差多少级明度，其次才是 alpha）。
+
 
     base : float32 (H, W, 3)  —— 已合成好、尚未画线的底图
     mode : 0 = 首曲线（浅），1 = 计曲线（深）
@@ -1047,7 +1052,8 @@ def _contour_tint(base, mode):
         强制拉开到最小差值，保证"处处看得到线"。
     """
     lum = base @ np.asarray([0.299, 0.587, 0.114], np.float32)
-    k, add, dmin = (CONTOUR_DARKEN[mode], CONTOUR_LIGHTEN[mode], CONTOUR_MIN_DELTA[mode])
+    k, add, _dm = (CONTOUR_DARKEN[mode], CONTOUR_LIGHTEN[mode], CONTOUR_MIN_DELTA[mode])
+    dmin = _dm if dmin is None else float(dmin)
     # 雪原减淡（2026-10-20 贡嘎大环）：亮度 >200 的像素把压暗系数往 SNOW_CONTOUR_DARKEN 收。
     # 不加这一步，240 的雪面 ×0.46 = 110 —— 近黑线压在纯白上，25 m 间距一密就成了"布纹"。
     snow = np.clip((lum - 200.0) / 45.0, 0.0, 1.0)
@@ -1063,7 +1069,8 @@ def _contour_tint(base, mode):
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
                    minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
-                   derived=CONTOUR_DERIVED, m_per_px=None):
+                   derived=CONTOUR_DERIVED, m_per_px=None,
+                   alpha=None, dmin=None):
     """在输出分辨率上栅格化等高线并写入 RGB 数组。
 
     原理：band = floor(elev / 间隔)，相邻像素 band 不同即该处有一条等高线。
@@ -1094,9 +1101,18 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     # alpha 融合写回（rgb 是 uint8，必须过 float，否则整数回绕会把线画成黑块）
     f = rgb.astype(np.float32)
     base = f.copy() if derived else None
-    for mask, mode, a in ((m_minor, 0, A_MINOR), (m_major, 1, A_MAJOR)):
+    # alpha / dmin 可被线路级 CFG 覆盖（`contour_alpha` / `contour_min_delta`）：
+    # 用户说"等高线太明显"时，这两个是**只调视觉强度、不动几何**的旋钮。
+    # 优先级：alpha 参数 > CFG > 全局常量。
+    if alpha is None:
+        alpha = _route_cfg("contour_alpha", None) or (A_MINOR, A_MAJOR)
+    if dmin is None:
+        dmin = _route_cfg("contour_min_delta", None)
+    _a = (float(alpha[0]), float(alpha[1]))
+    _d = None if dmin is None else tuple(dmin)
+    for mask, mode, a in ((m_minor, 0, _a[0]), (m_major, 1, _a[1])):
         if derived:
-            col = _contour_tint(base, mode)[mask]
+            col = _contour_tint(base, mode, None if _d is None else _d[mode])[mask]
         else:
             col = np.asarray(C_MINOR if mode == 0 else C_MAJOR, np.float32)
         f[mask] = f[mask] * (1 - a) + col * a
