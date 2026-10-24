@@ -438,6 +438,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **等高线太密（网格纸）/ 太深（抢眼）** | `references/pitfalls-terrain.md` §3（**密 → 降等高距；深 → 降 alpha + dmin，两件事分开调**；`contour_cov_min` 上下限动态） |
 | **地名标注指错地方**（名字飘在空地上） | `references/pitfalls-terrain.md` §26（锚点必须落在地物本身：线取垂足、面取内点） |
 | HTML 没出来但 QA 过了 / 时间表整列是 `—` | `references/track-prep.md` §10（`SCHEDULE` 必须 5 元组、时刻写 HH:MM） |
+| **长图/地图下半截空白（南北向长图缺脚注，QA 照样全绿）** | `references/efficiency.md` §8（无头浏览器 ~13700 行截白 → 两脚本已内建分带截图；目视长图末块是唯一防线） |
 | 做得慢 / 返工多 / 一小时还没完 | `references/efficiency.md` |
 
 

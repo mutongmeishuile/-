@@ -37,8 +37,29 @@ OUT_PNG = GC.ROOT / f"{STEM}-攻略长图.png"
 DESIGN_W = 1120                 # .page 版心宽（CSS px）
 SCALE = 2
 WIN_W = 1200                    # 比版心宽即可（.page 会居中），不参与裁剪
-WIN_H_TRY = 7000                # 开窗高度（CSS px），需 > 内容高；不够会重开大一档
 PAD_BOTTOM = 48                 # 成图底部留白（与版心同色，观感更稳）
+
+# ⚠ 超长页面会被无头浏览器**静默截白**：2026-10-24 库拉岗日实测，页面高约 8800 CSS
+#   （×2 = 17600 设备 px），内容只渲染到 ~13800 设备行就整幅变白；而"内容没顶到画布底"
+#   的旧判据把截白处当成了页底 —— 交付的长图直接缺了最后三分之一（时间表/提示/脚注全没）。
+#   → 与 render_map_hi 同一套解法：**分带截图**（body 相对定位上移 + 逐带裁剪拼接），
+#     每带 ≤ 12000 设备 px（实测 13700+ 处开始截白，留足余量），底边探测只在带内做。
+BAND = 6000                     # 每带设备像素高（SCALE=2 → 3000 CSS）。实测截白从窗口顶
+                                # ~13700 行起（窗口相关），6000 行留足余量
+OVERLAP = 400                   # 带间重叠（设备 px）：窗口底部总有 ~100–200 行"未画尾巴"，
+                                # 后一带的顶部（画好了）覆盖前一带的尾巴，消掉接缝白条
+MAX_BANDS = 12
+TAIL_ROWS = 400                 # 页底判定：带内内容底边距带底 ≥ 400 行才算真页底
+
+
+def _band_html(html_src, offset_px):
+    """给页面注入 body 相对定位偏移（负值上移），供第 offset_px 设备行所在带截图。
+
+    ⚠ CSS `top` 单位是 **CSS px**，offset 是设备 px —— 必须除以 SCALE，
+    否则带与带之间会跳过 SCALE×offset 的内容（2026-10-24 实测踩过）。
+    """
+    inject = f"<style>body{{position:relative;top:{-offset_px // SCALE}px}}</style></head>"
+    return html_src.replace("</head>", inject, 1)
 
 
 def _page_box_from_pixels(im, bg):
@@ -66,33 +87,49 @@ def _rm_quiet(p: Path):
 
 def render():
     raw = GC.ROOT / "_shoot_raw.png"
+    band_html = GC.ROOT / "_shoot_band.html"
+    html_src = HTML.read_text(encoding="utf-8")
+    win_h = BAND // SCALE + 80       # 每带开窗高（CSS px），略高于带高
     _rm_quiet(raw)
-    # ① 直接截整页（窗口给足高）；不再用 --dump-dom（本机 Edge 不输出）
-    win_h = WIN_H_TRY
-    for attempt in range(4):
-        t = time.time()
-        im = GC.browser_shot(HTML, raw, WIN_W, win_h, SCALE)
-        pg = _page_box_from_pixels(im, im.getpixel((2, 2)))
-        if pg is None:
-            raise RuntimeError("像素量不到版心（页面背景与 body 同色？）")
-        x0, x1, y0, y1 = pg
-        if y1 < im.height - 8:            # 内容没顶到画布底 → 高度够，收工
-            break
-        win_h = int(win_h * 1.4) + 200     # 顶到了 → 加高重截
-        print(f"  …内容顶到画布底（{y1}/{im.height}），开窗加高到 {win_h} 重试")
-    else:
-        raise RuntimeError(f"内容仍顶到画布底（{y1}/{im.height}）—— 长图异常，请检查 HTML")
-
-    want = DESIGN_W * SCALE
-    if abs((x1 - x0) - want) > 4:
-        print(f"  !! 量到版心宽 {x1-x0} px，应为 {want} px（CSS .page 被改过？）")
-    # 长图从纸面顶开始，x 锁定为几何值更稳（.page 居中，左右各 40 CSS × 倍率）
     x0 = (WIN_W - DESIGN_W) // 2 * SCALE
     x1 = x0 + DESIGN_W * SCALE
-    print(f"  截图 {im.size} · 版心 x {x0}–{x1}（宽 {want}）· 内容高 {y1} · 用时 {time.time()-t:.1f}s")
+    t = time.time()
 
-    im.crop((x0, 0, x1, y1 + PAD_BOTTOM * SCALE)).save(OUT_PNG, optimize=True)
+    # ① 逐带截图：body 相对定位上移 offset，每带取 (x0,0)-(x1,BAND)；
+    #    带内出现"页底留白"（内容底边距画布底 > 8 行）即认为找到真页底。
+    #    ⚠ 不能只靠"没顶到底 = 页底"：截白会把内容底边往前挪，必须每带显式验证。
+    parts, page_bottom, _BODY_BG = [], None, None
+    for bi in range(MAX_BANDS):
+        off = bi * (BAND - OVERLAP)
+        band_html.write_text(_band_html(html_src, off), encoding="utf-8")
+        _rm_quiet(raw)
+        im = GC.browser_shot(band_html, raw, WIN_W, win_h, SCALE)
+        bg = im.getpixel((2, 2)) if _BODY_BG is None else _BODY_BG
+        _BODY_BG = bg
+        a = np.asarray(im.convert("RGB")).astype(np.int16)
+        off_mask = np.abs(a - np.asarray(bg, np.int16)).sum(axis=2) > 14
+        rows = np.where(off_mask.sum(axis=1) > 0.02 * a.shape[1])[0]
+        band_h = min(BAND, im.height)
+        if not rows.size:
+            page_bottom = off                          # 整带都是页底留白 → 上一带已是页底
+        elif int(rows[-1]) + 1 < band_h - TAIL_ROWS:
+            page_bottom = off + int(rows[-1]) + 1     # 真页底（带内有足量留白）
+        parts.append(im.crop((x0, 0, x1, band_h)))
+        if page_bottom is not None:
+            break
+    else:
+        raise RuntimeError(f"超过 {MAX_BANDS} 带仍未找到页底 —— 页面异常，请检查 HTML")
+    _rm_quiet(band_html)
     _rm_quiet(raw)
+    print(f"  分带 {bi+1} 段（步进 {BAND-OVERLAP}）· 页底 @ {page_bottom}px · "
+          f"截图用时 {time.time()-t:.1f}s")
+
+    # ② 按绝对偏移拼接：后一带覆盖前一带底部可能未画的尾巴（OVERLAP 起作用）
+    total_h = page_bottom + PAD_BOTTOM * SCALE
+    out_im = Image.new("RGB", (x1 - x0, total_h), _BODY_BG)
+    for k, p in enumerate(parts):
+        out_im.paste(p, (0, k * (BAND - OVERLAP)))
+    out_im.save(OUT_PNG, optimize=True)
     out = Image.open(OUT_PNG)
     print(f"  -> {out.size} · {OUT_PNG.stat().st_size/1048576:.2f} MB · {OUT_PNG.name}")
 
