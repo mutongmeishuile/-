@@ -529,10 +529,10 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
 
 
 # ---- 全局字号口径（2026-10-24）----
-# 用户要求：① 全图字体统一；② 轨迹标注（营地/垭口/海子…）只比底图地名大 2 px。
+# 用户要求：① 全图字体统一（底图地名 8 px）；② 轨迹标注只比底图地名大 1 px。
 # 两个值都可在 route_def.CFG 覆盖。深度/层级改由**颜色与白晕**承担，不再靠字号拉开。
-_FS_BASE = float(GC.cfg("label_fs_base", 10.5) or 10.5)
-_FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE + 2) or (_FS_BASE + 2))
+_FS_BASE = float(GC.cfg("label_fs_base", 8) or 8)
+_FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE + 1) or (_FS_BASE + 1))
 
 
 def _load_base_labels():
@@ -634,12 +634,18 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
         w = GC.text_w(it["t"], fs) + 4
         h = fs * 1.22
         pad = fs * 0.55
-        tried = []
+        # 默认位（2026-10-24 用户要求）：**锚点右侧、垂直居中**。只有放不下才动态避让。
+        # x0 是文字左边界（text-anchor 默认 start），所以要摆到左边得用 -gap-w。
+        gap = 3.2
+        vmid = fs * 0.34            # 基线偏移：让文字中线对准锚点
+        tried = [(gap, vmid)]
         for k in (0, 1, 2):
-            r = fs * 0.75 * (k + 1)
-            tried += [(0, 0), (0, -r), (0, r), (-r, 0), (r, 0),
-                      (-r * 0.8, -r), (r * 0.8, -r), (-r * 0.8, r), (r * 0.8, r)] if k == 0                 else [(0, -r), (0, r), (-r, -r * 0.7), (r, -r * 0.7),
-                      (-r, r * 0.7), (r, r * 0.7), (-r, 0), (r, 0)]
+            r = fs * 0.8 * (k + 1)
+            tried += [(gap, vmid - r), (gap, vmid + r),                      # 右侧上/下错开
+                      (-gap - w, vmid),                                      # 左侧水平
+                      (-gap - w, vmid - r), (-gap - w, vmid + r),
+                      (-w * 0.5, vmid - fs * 1.15 - r * 0.55),               # 正上方
+                      (-w * 0.5, vmid + fs * 1.35 + r * 0.55)]               # 正下方
         for dx, dy in tried:
             x0 = it["x"] + dx
             yb = it["y"] + dy
@@ -655,7 +661,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
             c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
             c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
             # 2026-10-24 用户反馈「看不出这个地名标的是哪个地方」：避让把字推离锚点后，
-            # 图上一根线都没有，读者无从对应。→ 位移 > 7 px 就补一条细引线 + 锚点小圆。
+            # 图上一根线都没有，读者无从对应。→ 位移 > 5 px 就补一条 0.5 px 细引线。
             # 峰/垭口本身有三角符号（栅格层画的），不再叠圆点，否则像脏点。
             _ax, _ay = it["x"], it["y"]
             _cx = min(max(_ax, box[0]), box[2])
@@ -664,17 +670,17 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
             if not _is_peak:
                 # **每个**地名都在锚点上打一个小圆 —— 这是"这个字标的是哪"最直接的答案。
                 # 只给被推远的那几个画圆是不够的：紧贴锚点的名字反而更让人怀疑它指哪儿。
-                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="1.6" '
+                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="1.3" '
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
                            f'stroke-width="0.7"/>')
-            if math.hypot(_cx - _ax, _cy - _ay) > 7:
+            if math.hypot(_cx - _ax, _cy - _ay) > 5:
                 out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
-                           f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.9" '
+                           f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.5" '
                            f'stroke-opacity="0.55"/>')
             t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             wt = 700          # 字号统一后不再靠字重区分主次（白晕 + 颜色承担）
             out.append(f'<text x="{x0:.1f}" y="{yb:.1f}" font-size="{fs:.1f}" '
-                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="1.5" '
+                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="{max(0.8, fs * 0.13):.2f}" '
                        f'stroke-opacity="0.92" paint-order="stroke" '
                        f'stroke-linejoin="round">{t}</text>')
             break
@@ -906,7 +912,7 @@ def build_map_overlay(mobile=False):
         #   一圈白阴影（用户原话"字体看上去有白色的阴影"）。收到 2.4*PS ≈ 字号的 13%，
         #   读起来是"描边"而不是"发光"，同时仍能压住底图等高线。
         o.append(f'<text x="{tx}" y="{ty+7.4*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
-                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="2.1" '
+                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{max(1.1, fs * 0.17):.2f}" '
                  f'stroke-opacity="0.92" paint-order="stroke" stroke-linejoin="round">{t}</text>')
 
     # ---- 落位绘制 ----
