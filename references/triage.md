@@ -28,7 +28,7 @@
 | **村名/峰名后面跟一排黑框□□□（藏文等字体画不出）** | `references/pitfalls-terrain.md` §11 ⑤（`_clean_name` 收集阶段过滤，只留 CJK/拉丁/数字） |
 | **两条线的图"地名/山峰名差很多"，先怀疑技能没同步** | `references/pitfalls-terrain.md` §14。**先 `out count` 比 bbox + 比 `osm.json` 命名元素数**，多半是 OSM 数据源稀疏（非登山区 peak 常为 0），不是脚本；诊断查询**别用 overpass.osm.ch**（它没有亚洲数据，会返回假的 0） |
 | **某个峰/湖明显有名却显示成无名（只标高程数字）** | 先查它是不是**只有 `name:en`、没有 `name`**：`grep '"name:en"' out/osm.json`。OSM 里中文名被录进英文栏很常见（博格达 `Nangfeng/Xifeng/Hongfeng Peak`）。配 `CFG["name_map"] = {"Nangfeng Peak": "南峰"}` 显式补名 —— **脚本不自动音译**（会在别的语种上造错名）；`selftest.py` ⑨ 守这条 |
-| **峰名的三角符号不在山顶上、漂在山腰（和等高线对不上）** | 这是 OSM `natural=peak` **人工点位漂移**，不是投影错。`make_terrain.snap_peaks_to_dem()` 已自动校正（DEM 山顶 + 四条判据），日志 `峰点校正：N 个 …`。若某峰没被校正而你觉得该动，看日志有没有 `~ 名字 800 m 内最高只有 X（标称 Y）` —— 那说明它周围 800 m 内没有高程相符的山头（多半点位偏得更远或 ele 本身有问题），脚本宁可不动。关掉用 `CFG["peak_snap"]=False` |
+| **峰名的三角符号不在山顶上、漂在山腰（和等高线对不上）** | 这是 OSM `natural=peak` **人工点位漂移**，不是投影错。`make_terrain.snap_peaks_to_dem()` 已自动校正。⚠ **无 `ele` 标签的峰现在也会吸**（保守半径 ≤350 m + 纯 DEM 判据，不再跳过 → 亚丁 14/18 无 ele 峰此前全漏）；有 `ele` 的峰走"标注高程可信再吸"原逻辑。阈值 `CFG["peak_snap_min_gain"]`（默认 200，亚丁收 50 → 吸到 4 峰真顶）。日志看 `峰点校正：N 个 …`；某峰没动多半是周围无高程相符山头，脚本宁可不动。详细 `pitfalls-terrain.md` §28。关掉用 `CFG["peak_snap"]=False` |
 | **冰川看不出范围 / 冰舌和雪原糊成一片** | `references/pitfalls-terrain.md` §12 ①（边界**绝不能画近白**，要冰蓝；填充透明度 ≤150 保住冰面晕渲） |
 | **峰名太多糊死山体，或"主峰没名、无名矮峰有名"** | `references/pitfalls-terrain.md` §12 ②（按 ele 降序 + 分三级；阈值用**本窗口分位数** `PEAK_TIER_PCT=(88,62)`，低档走 `fallback=False`） |
 | **换到新线路后主峰不突出 / 所有峰名都是小字** | `references/pitfalls-terrain.md` §12 ②（分级阈值写死过绝对米数就会这样，**必须相对**；样本 <8 自动免分级） |
@@ -52,6 +52,7 @@
 | **用户说"去掉冰川层 / 冰川面把地形压平了"** | `references/pitfalls-terrain.md` §12 ①（**技能默认就不画冰川**；判据＝数有多少冰川末端伸到雪线以下（与雪线白重复就关）。要开按线路写 `CFG["glacier_layer"]=True`，⚠ 连带改图例与图注三处，否则自相矛盾） |
 | **切边扫描报警，但图其实没被裁** | `references/pitfalls-terrain.md` §13 ④（满幅底图边缘天然是地形暗部 → 阈值放宽到 0.40；先确认不是真裁再放宽） |
 | **用户说"等高线颜色要和这片地接近"** | `references/pitfalls-terrain.md` §3（**派生色** `_contour_tint()`：同色相 + 降饱和 0.30 + 明度分档；暗处反转成提亮；强制最小明度差） |
+| **用户说"等高线还嫌深、再淡一点"** | `references/pitfalls-terrain.md` §3（**只降 `contour_alpha`，别动 `contour_min_delta`**；亚丁 (0.24,0.55)→(0.19,0.47)，1 px 线 alpha<0.15 会消失，0.19 是可读下沿） |
 | **"比例尺越大等高线越密、地图难看"**（长线/大窗口） | `references/pitfalls-terrain.md` §3（`pick_contour_interval`：覆盖率 ≤30%，狼塔自动 20→50 m） |
 | **"如何更真实地反映地貌"**（背光侧一片黑、地形发平） | `references/pitfalls-terrain.md` §4（**MDOW 多向晕渲** + 阴阳分色）、`references/self-hosted-terrain.md` §3 |
 | **"谷底看起来像山脊" / 山体阴坡阳坡是反的** | `references/pitfalls-terrain.md` §16（坡向公式在图像坐标系被镜像；**`python scripts/check_hillshade.py` 一把判定**，退出码非 0 = 光反了） |
