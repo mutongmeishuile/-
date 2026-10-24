@@ -83,11 +83,11 @@ def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z):
 #   ② 放大到 200% 时仍有真实像素，不会立刻糊成一团。
 # 代价：底图 jpg 体积约 ×2.5，HTML 变大，但这是"放大能看清"唯一实际有效的做法。
 LOGICAL_W = 1504
-# 超采样倍率：`CFG["map_ss"]` 可按线路覆盖（默认 2 → 3008 px）。
+# 超采样倍率：`CFG["map_ss"]` 可按线路覆盖（**默认 3** → 4512 px，2026-10-24 由 2 上调）。
 # 放大窗口后"每公里像素变少 → 看着糊"的唯一正解是提高这个倍率：
 #   · 只影响栅格与独立高清图，HTML 内嵌仍降到 EMBED_MAX(1600)，页面体积不变；
 #   · 代价是 make_terrain 耗时/内存按像素数走（SS=3 约 2.2 倍）。
-SS = 2
+SS = 3
 try:
     SS = max(2, int(GC.cfg("map_ss", SS) or SS))
 except Exception:                                              # noqa

@@ -296,6 +296,7 @@ def track_bbox(extra=()):
     return min(lons), min(lats), max(lons), max(lats)
 
 
+BBOX_PAD_DEFAULT = 0.35      # 四周留白（占轨迹跨度）—— 0.35 → 窗口 = 跨度 ×1.70
 def resolve_bbox(pad_frac=None, min_pad=0.004):
     """地图窗口 = 轨迹包围盒 + 留白。返回 `(lon0, lat0, lon1, lat1, 来源说明)`。
 
@@ -305,6 +306,9 @@ def resolve_bbox(pad_frac=None, min_pad=0.004):
 
     `CFG["bbox_pad"]`：用户说「地图面积再大一点 / 多留点周边地形」时要的旋钮。
     写 0.20 就是四周各外扩轨迹跨度的 20%（窗口面积约 1.4²，不是 20%）。
+    **默认 0.35**（2026-10-24 由 0.08 上调，用户要求"后续路线统一放宽"）：
+    窗口 = 轨迹跨度 ×1.70，四周多出整整一个山头的余量 —— 8% 时轨迹几乎贴着边框，
+    放大看细节时周边什么都没有。单条线路仍可用 CFG["bbox_pad"] 盖掉。
     比手填 `CFG["bbox"]` 安全得多 —— 后者是死坐标，轨迹一改就漏山。
 
     ⚠ 窗口**必须**以真实轨迹为前提。曾经踩过：轨迹还没生成时，`route_def.POIS` 的
@@ -319,7 +323,7 @@ def resolve_bbox(pad_frac=None, min_pad=0.004):
             "      python scripts/prep_track.py <你的.kml>\n"
             "    （万一确实想要一个与轨迹无关的窗口，就在 route_def.CFG['bbox'] 里显式给。）")
     extra = []
-    pad = 0.08 if pad_frac is None else float(pad_frac)
+    pad = BBOX_PAD_DEFAULT if pad_frac is None else float(pad_frac)
     try:
         sys.path.insert(0, str(HERE))
         import route_def as RD

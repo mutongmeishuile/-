@@ -293,7 +293,7 @@ SS        = 2             # 超采样倍数
 RASTER_W  = LOGICAL_W * SS
 ```
 
-- `base_map.jpg` 出 **RASTER_W**（3008）宽；
+- `base_map.jpg` 出 **RASTER_W**（逻辑宽 × `map_ss`，默认 3× = 4512）宽；
 - `base_meta.json` 里 `size` 仍是 **[1504, 3775]**（逻辑），`scale` 按逻辑宽算；
 - `map_svg.py` 的 `<image x="0" y="0" width="{IW}" height="{IH}">` 里 IW 是逻辑宽 1504 ——
   **浏览器会把 3008 的 jpeg 缩到 1504 个单位渲染**，这等于免费得到 2× 超采样：
