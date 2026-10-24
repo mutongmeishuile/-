@@ -325,7 +325,7 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
     cx0, cy0 = meta["box"][0], meta["box"][1]
     H, W = dem.shape
     mpp = 156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)
-    out, moved, skipped_gap = {}, [], []
+    out, moved, skipped_gap, near_miss = {}, [], [], []
 
     # 其它具名峰的原点：吸附目标不许落在它们 300 m 内 —— 否则就是"张冠李戴"，
     # 把 A 峰的三角挪到 B 峰的头上（峰群密集区 800 m 窗口里常有邻峰）。
@@ -347,25 +347,27 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
             ele = float(str(t.get("ele", "")).replace("m", "").strip())
         except ValueError:
             ele = None
-        if ele is None:
-            # 没有 ele 的裸峰点（本窗口 43 个）不校正：没有标称高程就没有
-            # "该吸到哪座山头"的判据 —— 它们在图上也只标个高程数字，位置容差大。
-            continue
         gx, gy = lonlat_to_px(e["lon"], e["lat"], z)
         xi, yi = int(round(gx - tx0 * 256 - cx0)), int(round(gy - ty0 * 256 - cy0))
         if not (0 <= xi < W and 0 <= yi < H):
             continue
         base = float(dem[yi, xi])
-        r = int(radius_m / mpp)
+        # 没有 ele 的裸峰点：DEM 普遍低估雪峰高程，没标称高程就**无法**判断
+        # "吸过去是不是换了一座更高的峰"，所以只用更保守的半径（350 m）+ 纯 DEM 判据
+        # （节点处 DEM 比局部最高低 ≥min_gain 才动）。亚丁本窗口 18 个峰点里 14 个
+        # 没录 ele，靠这一步把三角从山腰吸到山顶（2026-10-24 用户：三角不在等高线高点）。
+        rad = (radius_m if ele is not None else min(radius_m, 350.0))
+        r = int(rad / mpp)
         hit = None
-        for _ in range(4):                       # 最多缩 3 次（800 → 400 → 200 → 100 m）
+        nm0 = t.get("name") or t.get("name:en") or "(无名)"
+        for _ in range(4):                       # 最多缩 3 次
             if r < 60:
                 break
             win = dem[max(0, yi - r):yi + r, max(0, xi - r):xi + r]
             iy, ix = np.unravel_index(np.nanargmax(win), win.shape)
             mx = float(win[iy, ix])
             ax, ay = ix + max(0, xi - r), iy + max(0, yi - r)
-            if mx > ele + tol:
+            if ele is not None and mx > ele + tol:
                 r //= 2                           # 窗口里有更高的别的峰 → 缩半径
                 continue
             # 目标点离"别的具名峰原点"太近 → 说明吸过去会盖在邻峰上，缩半径重试
@@ -374,12 +376,19 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
                    if math.hypot(nx - xi, ny - yi) > 1e-6):
                 r //= 2
                 continue
-            if mx - base >= min_gain:
-                if ele - mx > max_gap:
+            gain = mx - base
+            if gain >= min_gain:
+                if ele is None:
+                    hit = (ax, ay, mx)            # 无 ele：纯 DEM 判据，直接吸到局部最高
+                elif ele - mx > max_gap:
                     gap = (t.get("name") or t.get("name:en") or "(无名)", ele, mx)
                     skipped_gap.append(gap)
                 else:
                     hit = (ax, ay, mx)
+            elif 0 < gain < min_gain:
+                # 节点比局部最高低，但不到 min_gain 阈值 —— 往往是"在坡上但没到山腰"，
+                # 记录出来看量级（2026-10-24 用户：部分三角不在等高线高点）。
+                near_miss.append((nm0, base, mx, gain, r * mpp))
             break
         nm = t.get("name") or t.get("name:en") or "(无名)"
         if not hit:
@@ -398,6 +407,13 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
                 print(f"     · {nm:16s} DEM {base:5.0f} → {mx:5.0f} m   移 {dist:4.0f} m")
         else:
             print("   峰点校正：本窗口无需校正（所有峰点都在各自山顶附近）")
+        if near_miss:
+            print(f"     · 近未校正 {len(near_miss)} 个（节点比局部最高低 "
+                  f"{min(n[3] for n in near_miss):.0f}–{max(n[3] for n in near_miss):.0f} m，"
+                  f"阈值 {min_gain:.0f} m 未触发）：")
+            for nm, base, mx, gain, radm in sorted(near_miss, key=lambda n: -n[3]):
+                print(f"       - {nm:16s} DEM {base:5.0f} → 局部最高 {mx:5.0f} m"
+                      f"   差 {gain:4.0f} m（半径 {radm/1000:.1f} km 内）")
         for nm, ele, mx in skipped_gap:
             print(f"     ~ {nm:16s} 800 m 内最高只有 {mx:.0f} m（标称 {ele:.0f}），"
                   f"差的太多 —— 像是卫峰，保持 OSM 原点")
@@ -1962,7 +1978,12 @@ def build_terrain():
         snap = {}
         if GC.cfg_flag("peak_snap", True):
             try:
-                snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0)
+                # 校正灵敏度可由线路覆盖：CFG["peak_snap_min_gain"]（默认 200 m）。
+                # 200 m 太宽松 —— 节点在坡上、离真顶差 50–150 m 也不会动（亚丁 9 个峰点
+                # 实测差 12–137 m）。用户要求"三角在等高线高点"，收到 50 m 更贴合。
+                _min_gain = float(GC.cfg("peak_snap_min_gain", 200.0) or 200.0)
+                snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0,
+                                         min_gain=_min_gain)
                 (OUT / "peak_snap.json").write_text(
                     json.dumps(snap, ensure_ascii=False, indent=0), encoding="utf-8")
             except Exception as _e:                                    # noqa

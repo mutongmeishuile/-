@@ -427,34 +427,50 @@ class Labeller:
 
     def place(self, d, text, xy, font, fill, stroke=(255, 255, 255),
               anchor_center=True, force=False, pad=2, stroke_w=1.8, fallback=True,
-              kind=""):
-        """放注记。优先完全不压已有注记；**实在放不下也要放**（fallback）。
+              kind="", anchor_right=False, gap=5.0):
+        """放注记。
 
-        ⚠ 2026-10-09 亚丁线实测：等高线高程标注会先占用网格（104 个标注 ≈ 10% 单元，
-        且**恰好密集在山脊/峰顶**），而峰名/湖名本来就在同一片区域 —— 旧实现
-        "找不到空位就 return False"（静默丢弃），结果是 **15 个山峰名只画出来 2 个**，
-        用户看到的就是"底图没有地名"。地名被压在等高线数字上顶多是拥挤，
-        整条名字消失是信息缺失 —— 两害相权，宁可轻微重叠也要显示。
+        三种锚定（2026-10-24 用户：标注名称默认在标注点的正右侧，依然考虑动态避让）：
+          · anchor_right=True  → 默认紧贴锚点**右侧、垂直居中**（地图注记通用惯例：
+            峰名/湖名/地名/道路名统一走此默认位）。
+          · anchor_center=True  → 文本正中以锚点为中心（保留兼容，旧水系/道路行为）。
+          · 二者皆否           → 文本左上角落在锚点（旧峰名"下方偏右"行为）。
+
+        动态避让：理想位被占就向外做**紧凑**环形偏移（上限 ~12 逻辑 px），
+        优先保持右侧；旧实现最大偏移 28 px，会出现标签漂到几十像素外（"明显偏移"）。
+        记录时把**要素真实锚点** ax/ay 一起写进 records，供 map_svg 当矢量基准
+        （不再把文字框位置当成锚点，避免引出位置偏掉）。
         """
         W, H = self.size
         bb = d.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
         x0c, y0c = xy
-        offsets = [(0, 0)]
-        for r in (10, 18, 28):                 # 偏移量别太大：峰名离峰顶太远会误读
-            offsets += [(0, -r), (0, r), (-r, 0), (r, 0),
-                        (-r, -r), (r, -r), (-r, r), (r, r)]
+        S = self.cell / 14.0                      # 反推超采样倍率（cell = 14*S）
+        g = gap * S
+        if anchor_right:
+            ox0, oy0 = x0c + g, y0c - th / 2.0    # 右侧、垂直居中
+        elif anchor_center:
+            ox0, oy0 = x0c - tw / 2.0, y0c - th / 2.0
+        else:
+            ox0, oy0 = x0c, y0c
+        # 候选偏移：以默认位为基准向外做紧凑环形避让，右侧优先。
+        U = S
+        cand = [(0, 0)]
+        for r in (5, 9, 12):
+            cand += [(r, 0), (r, -r), (r, r),       # 右、右上、右下（保持右侧优先）
+                     (0, -r), (0, r),               # 正上、正下
+                     (-r, -r), (-r, r), (-r, 0)]    # 左上、左下、左侧（最后才用）
         best = None
-        for odx, ody in offsets:
-            x, y = x0c + odx, y0c + ody
-            if anchor_center:
-                x -= tw / 2
+        for odx, ody in cand:
+            dx, dy = odx * U, ody * U
+            x, y = ox0 + dx, oy0 + dy
             box = (x - pad, y - pad, x + tw + pad, y + th + pad)
             if box[0] < 0 or box[2] > W or box[1] < 0 or box[3] > H:
                 continue
             hits = self._hits(box)
             if hits == 0:                                  # 完美位置
-                self._emit(d, text, x, y, font, fill, stroke, stroke_w)
+                self._emit(d, text, x, y, font, fill, stroke, stroke_w,
+                           ax=x0c, ay=y0c)
                 self._mark(box)
                 self.boxes.append(box)
                 return True
@@ -466,13 +482,19 @@ class Labeller:
             return False
         self.n_overlap += 1            # 命中"两害相权"分支：记录一次挤放，供自检核对
         _, x, y, box = best
-        self._emit(d, text, x, y, font, fill, stroke, stroke_w)
+        self._emit(d, text, x, y, font, fill, stroke, stroke_w, ax=x0c, ay=y0c)
         self._mark(box)
         self.boxes.append(box)
         return True
 
-    def _emit(self, d, text, x, y, font, fill, stroke, stroke_w):
-        """画，或只记录（矢量模式）。位图用左上角，SVG 用基线 —— 两个都存。"""
+    def _emit(self, d, text, x, y, font, fill, stroke, stroke_w, ax=None, ay=None):
+        """画，或只记录（矢量模式）。位图用左上角，SVG 用基线 —— 两个都存。
+
+        ax/ay：要素**真实锚点**（栅格 px），与落位后的文字框无关 —— 专门留给
+        map_svg 当矢量标注的基准。旧实现把"文字框左上角"当成锚点传给 map_svg，
+        导致峰名/湖名的引线起点、避让基准都偏在文字位置，看着像"标注点偏移"
+        （2026-10-24 用户：部分标注地点存在明显偏移）。
+        """
         if self.draw_pixels:
             d.text((x, y), text, font=font, fill=fill,
                    stroke_width=stroke_w, stroke_fill=stroke)
@@ -484,7 +506,9 @@ class Labeller:
                              "base": round(float(y + asc), 1),
                              "s": int(getattr(font, "size", 12)),
                              "f": list(fill), "st": list(stroke),
-                             "sw": round(float(stroke_w), 1)})
+                             "sw": round(float(stroke_w), 1),
+                             "ax": round(float(ax if ax is not None else x), 1),
+                             "ay": round(float(ay if ay is not None else y), 1)})
 
 
 # ------------------------------------------------------------------ 主流程
@@ -934,8 +958,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 d.polygon([(x, y - 6 * S * k), (x - 5.4 * S * k, y + 3.6 * S * k),
                            (x + 5.4 * S * k, y + 3.6 * S * k)],
                           fill=(150, 140, 124), outline=(255, 255, 255))
-                if lab.place(d, f"{ev0:.0f}", (x, y + 7 * S), f_peak_lo, (120, 106, 88),
-                             anchor_center=False, stroke_w=1.8 * S, pad=LBL_PAD * S,
+                if lab.place(d, f"{ev0:.0f}", (x, y), f_peak_lo, (120, 106, 88),
+                             anchor_right=True, stroke_w=1.8 * S, pad=LBL_PAD * S,
                              fallback=False, kind="peak"):
                     n_peak += 1
             continue
@@ -965,7 +989,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                (x + 5.4 * S * tri_k, y + 3.6 * S * tri_k)]
         d.polygon(tri, fill=col, outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
-        if lab.place(d, txt, (x, y + 7 * S), f_peak_use, tcol, anchor_center=False,
+        if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD):
             n_peak += 1
 
@@ -996,7 +1020,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
                   fill=(255, 244, 232), outline=(176, 96, 32))
         txt = f"{name} {ele}m" if ele else name
-        if lab.place(d, txt, (x, y + 7 * S), f_water, (150, 78, 24), anchor_center=False,
+        if lab.place(d, txt, (x, y), f_water, (150, 78, 24), anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
             n_saddle += 1
 
@@ -1011,7 +1035,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # 点位符号跟着字号收一档（2026-10-17）：字缩 0.85 后，大圆点配小字会"头重脚轻"
         r = (2.7 if kind in ("city", "town") else 2.2) * S
         d.ellipse([x - r, y - r, x + r, y + r], fill=(70, 70, 70), outline=(255, 255, 255))
-        if lab.place(d, name, (x, y + 4 * S), f, col, anchor_center=False,
+        if lab.place(d, name, (x, y), f, col, anchor_right=True,
                      stroke_w=2 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
             n_place += 1
 
@@ -1028,7 +1052,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                       outline=(255, 255, 255))
         # 兴趣点名（观景点/民宿/寺庙）优先级最低：**不放 fallback** ——
         # 它们的价值远低于"被压住"的代价，而峰名/湖名/地名宁可轻微重叠也要显示。
-        if lab.place(d, name, (x, y + 4 * S), f_poi, (58, 66, 56), anchor_center=False,
+        if lab.place(d, name, (x, y), f_poi, (58, 66, 56), anchor_right=True,
                      stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
             n_poi += 1
 
@@ -1037,7 +1061,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     for x, y, name in waters:
         if not name or name in skip_names:
             continue
-        if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_center=True,
+        if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
             n_water += 1
 
@@ -1083,10 +1107,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                         my = y0 + (y1 - y0) * t
                         break
                     acc += seg
-                if lab.place(d, ref_clean, (mx, my),
-                             f_road_name if _is_name else f_road_ref, col,
-                             anchor_center=True, stroke_w=2.0 * S,
-                             pad=LBL_PAD * S, fallback=not NO_CROWD):
+            if lab.place(d, ref_clean, (mx, my),
+                         f_road_name if _is_name else f_road_ref, col,
+                         anchor_right=True, stroke_w=2.0 * S,
+                         pad=LBL_PAD * S, fallback=not NO_CROWD):
                     _ok = True
                     break
             if _ok:

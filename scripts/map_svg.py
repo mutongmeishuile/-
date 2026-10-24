@@ -562,7 +562,9 @@ def _load_base_labels():
         # 三档同屏时 0.6–1.4 px 的差异既不构成层级、又让同类地物看着不一样大。
         fs = _FS_BASE
         out.append({
-            "t": it["t"], "x": it["x"] / ss, "y": it["base"] / ss,
+            # 用 draw_osm 记录的**要素真实锚点** ax/ay 当基准（不再用文字框位置当锚点，
+            # 否则峰名/湖名的避让起点、引线落点都会偏到文字位置 → "明显偏移"）。
+            "t": it["t"], "x": (it.get("ax", it["x"])) / ss, "y": (it.get("ay", it["base"])) / ss,
             "fs": fs, "w": it["s"] / ss, "pri": s0,
             "fill": it["f"], "stroke": it["st"],
         })
