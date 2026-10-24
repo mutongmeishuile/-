@@ -77,8 +77,14 @@ def _page_box_from_pixels(im, bg):
 
 
 def _rm_quiet(p: Path):
-    """清理临时文件是尽力而为：环境层可能拦截大文件删除（SAFE_DELETE 钩子），
-    删不掉就留着并提示，绝不能让整条出图流水线因此 rc!=1 前功尽弃。"""
+    """清理临时文件是尽力而为：环境层可能拦截大文件删除（SAFE_DELETE 钩子，按 turn
+    内累计删除量阈值拦截且直接使进程退出、不可捕获）——
+    ① SHOOT_KEEP_RAW=1 时干脆不删（批量出图用，raw 最后统一清理）；
+    ② 删不掉就留着并提示，绝不能让整条出图流水线因此前功尽弃。"""
+    import os
+    if os.environ.get("SHOOT_KEEP_RAW"):
+        print(f"  ⏸ 保留临时文件 {p.name}（SHOOT_KEEP_RAW，稍后统一清理）")
+        return
     try:
         p.unlink(missing_ok=True)
     except OSError as e:
