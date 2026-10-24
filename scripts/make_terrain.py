@@ -104,6 +104,10 @@ RASTER_W = LOGICAL_W * SS
 #     小窗口仍得 20 m（保持细节），长窗口自动退到 50/100 m（保持可读）。
 CONTOUR_NICE = (10, 20, 25, 50, 100, 200, 250, 500)   # 候选等高距（米，都是好记的整数）
 CONTOUR_TARGET_COV = 0.30   # 线覆盖率上限。亚丁实测 20 m=21%（保留）；狼塔 50 m=29.8%（比 20 m 的 66% 好太多）
+# contour_coverage()（band 边缘估计）→ 真实像素线覆盖 的折算系数（2026-10-24 实测 12 条线路，
+# 比值 0.66–1.0、均值 ≈0.82）。用双阈值判据时必须折算到实际口径，否则用户配的 15–20%
+# 落到图上只有 9–13%。
+COV_EST_TO_ACTUAL = 0.82
 # ⚠ 该阈值可**按线路覆盖**：`route_def.CFG["contour_target_cov"]`。
 #   2026-10-16 希夏邦马实测：本区 20 m 覆盖率 28.6%（虽在 30% 以内，但山体陡坡处线仍成排、
 #   雪原上偏抢眼），用户要求"再细一些" → 本线把目标收到 **0.26**，自动退到 25 m（23.8%）。
@@ -1023,27 +1027,33 @@ def pick_contour_interval(dem_out, verbose=True):
     if lo is not None:
         lo = float(lo)
         if 0 < lo < target:
-            inside = [(iv, cv) for iv, cv in cands if lo <= cv <= target]
+            # 判据用「实际像素线覆盖」：contour_coverage() 是按 band 边缘的**估计**，
+            # 实测它比真实像素占比高 15–35%（陡坡省略会减线、计曲线加粗会增线），
+            # 所以比较时乘 COV_EST_TO_ACTUAL 折算到实际口径，
+            # 否则用户配的 15–20% 落到图上只有 9–13%（2026-10-24 实测）。
+            def _act(cv):
+                return cv * COV_EST_TO_ACTUAL
+            inside = [(iv, cv) for iv, cv in cands if lo <= _act(cv) <= target]
             if inside:
                 mid = (lo + target) * 0.5
-                iv, cov = min(inside, key=lambda x: abs(x[1] - mid))
+                iv, cov = min(inside, key=lambda x: abs(_act(x[1]) - mid))
                 if verbose:
                     print(f"   等高距动态 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
-                          f"线覆盖 {cov * 100:.1f}%（区间 {lo * 100:.0f}–{target * 100:.0f}%，"
-                          f"取最接近中点 {mid * 100:.0f}% 的一档）")
+                          f"预计实际线覆盖 {_act(cov) * 100:.1f}%"
+                          f"（区间 {lo * 100:.0f}–{target * 100:.0f}%，取最接近中点 {mid * 100:.0f}% 的一档）")
                 return iv, nice_major(iv), cov
-            below = [(iv, cv) for iv, cv in cands if cv < lo]
+            below = [(iv, cv) for iv, cv in cands if _act(cv) < lo]
             if below:
-                iv, cov = max(below, key=lambda x: x[1])      # 最接近下限的一档
+                iv, cov = max(below, key=lambda x: _act(x[1]))   # 最接近下限的一档
                 if verbose:
                     print(f"   等高距动态 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
-                          f"线覆盖 {cov * 100:.1f}%；区间 {lo * 100:.0f}–{target * 100:.0f}% 内"
-                          f"无候选，取 ≤ 上限里最接近下限的一档")
+                          f"预计实际线覆盖 {_act(cov) * 100:.1f}%；区间 {lo * 100:.0f}–"
+                          f"{target * 100:.0f}% 内无候选，取 ≤ 上限里最接近下限的一档")
                 return iv, nice_major(iv), cov
-            iv, cov = min(cands, key=lambda x: x[1])            # 连最小间隔都超上限 → 取最粗
+            iv, cov = min(cands, key=lambda x: _act(x[1]))          # 连最小间隔都超上限 → 取最粗
             if verbose:
                 print(f"   ⚠ 等高距动态：所有候选间隔的线覆盖都 > {target * 100:.0f}%，"
-                      f"取最粗的一档 {iv:g} m（线覆盖 {cov * 100:.1f}%）")
+                      f"取最粗的一档 {iv:g} m（预计实际线覆盖 {_act(cov) * 100:.1f}%）")
             return iv, nice_major(iv), cov
     fallback = (CONTOUR_NICE[-1], nice_major(CONTOUR_NICE[-1]), 1.0)
     for iv in CONTOUR_NICE:
