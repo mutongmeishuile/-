@@ -672,10 +672,19 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             d.line(pts, fill=ed, width=W(w) + W(2), joint="curve")   # 描边
             d.line(pts, fill=core, width=W(w), joint="curve")
             n_line += 1
-            # 收集带编号的道路，稍后在地名注记之后尝试标注（优先级低于地名）
-            ref = e.get("tags", {}).get("ref")
+            # 收集道路注记，稍后在地名注记之后尝试标注（优先级低于地名）。
+            # 2026-10-24 博罗科努补：**无 ref 但有 name 的道路也要标**。
+            # 徒步线上 track / tertiary 常常只有名字（「乌图精牧道」39 km、「则库北路」），
+            # 旧实现只收 ref，这类沟谷名一条都上不了图 —— 而它们恰恰是
+            # 「我现在在哪条沟里」的唯一线索（本窗口 27 个具名要素里，山名 0、垭口名 0）。
+            _t = e.get("tags", {})
+            ref = _t.get("ref")
             if ref and sub in ("motorway", "trunk", "primary", "secondary", "tertiary"):
-                road_refs.append((pts, ref, sub))
+                road_refs.append((pts, ref, sub, False))
+            elif sub in ("motorway", "trunk", "primary", "secondary", "tertiary", "track"):
+                _nm = _clean_name(_t.get("name") or "")
+                if _nm:
+                    road_refs.append((pts, _nm, sub, True))
 
     # ---------------- 注记 ----------------
     lab = Labeller(size, cell=14 * S)
@@ -844,8 +853,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 道路编号：同一条路拆几十段，ref 只在该路另一端才重复出现
     road_refs = _dedupe_by_name(
         [(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts),
-          str(ref).split(";")[0].strip(), pts)
-         for pts, ref, sub in road_refs],
+          str(txt).split(";")[0].strip(), pts, isn)
+         for pts, txt, sub, isn in road_refs],
         max(500.0, size[0] * 0.22) * S, 2)
     # 地名：村落常被录成多个相邻 node，sep 收窄到 1/8 图宽（同村只出一个名）
     places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * S, 3, x_idx=1, y_idx=2)
@@ -978,7 +987,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     n_road_ref = 0
     if road_refs:
         f_road_ref = _font(F(10.5), True)
-        for _cx, _cy, ref_clean, pts in road_refs:
+        f_road_name = _font(F(10.0), False)
+        for _cx, _cy, ref_clean, pts, _is_name in road_refs:
             if len(pts) < 2:
                 continue
             # 计算道路在图上的长度，太短不标
@@ -991,25 +1001,36 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 L += seg
             if L < 30 * S:                 # 图上不足约 30 px 不标
                 continue
-            half = L / 2.0
-            acc = 0.0
-            mx, my = pts[0]
-            for i, seg in enumerate(segs):
-                if acc + seg >= half:
-                    t = (half - acc) / seg if seg else 0.0
-                    x0, y0 = pts[i]
-                    x1, y1 = pts[i + 1]
-                    mx = x0 + (x1 - x0) * t
-                    my = y0 + (y1 - y0) * t
-                    break
-                acc += seg
             # ref 已在去重阶段 split(";") 取过首编号，这里只做空值兜底
             if not ref_clean:
                 continue
-            # 颜色与暖沙色道路芯形成对比，深棕近黑
-            col = (88, 60, 40)
-            if lab.place(d, ref_clean, (mx, my), f_road_ref, col, anchor_center=True,
-                         stroke_w=2.0 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
+            # 颜色与暖沙色道路芯形成对比，深棕近黑；路名（无编号）退一档
+            col = (104, 78, 58) if _is_name else (88, 60, 40)
+            # 沿路多点尝试（2026-10-24）：牧道动辄 30–40 km、纵贯全图，
+            # 只试"半程中点"太脆弱 —— 中点正好压在营地图钉群上就整条名字丢掉
+            # （实测「乌图精牧道」39 km 一条都没上）。按 中 → 3/4 → 1/4 → 两端 依次外移，
+            # 第一个放得下的位置胜出，读起来仍像"沿这条路标注"。
+            _ok = False
+            for _frac in (0.5, 0.34, 0.66, 0.2, 0.8, 0.1, 0.9):
+                _target = L * _frac
+                acc = 0.0
+                mx, my = pts[0]
+                for i, seg in enumerate(segs):
+                    if acc + seg >= _target:
+                        t = (_target - acc) / seg if seg else 0.0
+                        x0, y0 = pts[i]
+                        x1, y1 = pts[i + 1]
+                        mx = x0 + (x1 - x0) * t
+                        my = y0 + (y1 - y0) * t
+                        break
+                    acc += seg
+                if lab.place(d, ref_clean, (mx, my),
+                             f_road_name if _is_name else f_road_ref, col,
+                             anchor_center=True, stroke_w=2.0 * S,
+                             pad=LBL_PAD * S, fallback=not NO_CROWD):
+                    _ok = True
+                    break
+            if _ok:
                 n_road_ref += 1
 
     _tier = (f"[p{PEAK_TIER_PCT[0]}≥{q_hi:.0f}m/p{PEAK_TIER_PCT[1]}≥{q_mid:.0f}m]"
