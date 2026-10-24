@@ -133,6 +133,20 @@ def _cache_covers(d):
             min(lats) <= LAT0 + ty and max(lats) >= LAT1 - ty)
 
 
+
+def _route_cfg_osm(key, default=None):
+    """从 route_def.CFG 读一个键（失败就用默认值）—— fetch_osm 不整体 import route_def。"""
+    try:
+        import importlib
+        import sys as _sys
+        _sys.path.insert(0, str(HERE))
+        _rd = importlib.import_module("route_def")
+        _v = (getattr(_rd, "CFG", None) or {}).get(key)
+        return default if _v is None else _v
+    except Exception:
+        return default
+
+
 def fetch(force=False, soft=False, rounds=2):
     """抓取并缓存。soft=True 时，全镜像失败返回空要素集而不是抛错。
 
@@ -148,8 +162,18 @@ def fetch(force=False, soft=False, rounds=2):
 
     print(f"窗口 {LON0}, {LAT0} → {LON1}, {LAT1}")
     last = None
+    import time as _time
+    _t0 = _time.time()
+    _budget = float(_route_cfg_osm("osm_fetch_budget", 420))   # 本条线路的总抓取时限（秒）
     for rnd in range(rounds):                      # 多轮：每轮把镜像列表走一遍
         for host in MIRRORS:
+            if _time.time() - _t0 > _budget:
+                print(f"   ⚠ 抓取总时限 {_budget:.0f}s 已到，停止重试")
+                last = last or RuntimeError("抓取总时限已到")
+                break
+            else:
+                continue
+            break
             try:
                 print(f"→ {host}（第 {rnd + 1} 轮）", flush=True)
                 req = urllib.request.Request(
@@ -157,7 +181,7 @@ def fetch(force=False, soft=False, rounds=2):
                     data=urllib.parse.urlencode({"data": QUERY}).encode(),
                     headers={"User-Agent": UA,
                              "Content-Type": "application/x-www-form-urlencoded"})
-                with urllib.request.urlopen(req, timeout=200) as r:
+                with urllib.request.urlopen(req, timeout=90) as r:
                     d = json.loads(r.read().decode("utf-8"))
                 n = len(d.get("elements", []))
                 if n < 50:
@@ -171,9 +195,30 @@ def fetch(force=False, soft=False, rounds=2):
                 print("  失败:", repr(e)[:120], flush=True)
                 time.sleep(2 + 3 * rnd)
 
-    # 全挂：写一份空缓存，让下游"有文件可读"，只是没有矢量。
+    # ⚠ 全挂时**绝不能覆盖已有缓存**（2026-10-24 批量重出实测踩到）：
+    #   旧实现写一份空 osm.json，把原来好端端的矢量（几百 KB）冲掉，
+    #   后续所有出图都变成"没矢量层的裸底图"，而且**全程不报错**。
+    #   现在：缓存里还有非空要素 → 原样保留，失败信息另写 osm.json.failed；
+    #   缓存本来就不存在（首建线路）→ 才写空缓存，让下游"有文件可读"。
     empty = {"elements": [], "_failed": repr(last)[:200]}
-    CACHE.write_text(json.dumps(empty, ensure_ascii=False), encoding="utf-8")
+    keep = False
+    if CACHE.exists():
+        try:
+            _old = json.loads(CACHE.read_text(encoding="utf-8"))
+            keep = len(_old.get("elements") or []) > 0
+        except Exception:
+            keep = False
+    if keep:
+        try:
+            (CACHE.parent / (CACHE.stem + ".failed")).write_text(
+                json.dumps(empty, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        print(f"   ⚠ 抓取失败，**保留原缓存** {CACHE.name}"
+              f"（{len(_old.get('elements') or [])} 个要素）；失败详情见 "
+              f"{CACHE.stem}.failed")
+    else:
+        CACHE.write_text(json.dumps(empty, ensure_ascii=False), encoding="utf-8")
     msg = f"全部镜像失败（{len(MIRRORS)} 个 × {rounds} 轮）：{last}"
     if soft:
         print("!! " + msg + "\n   —— 已按 --soft 降级：本轮不叠加 OSM 矢量，底图照常出。")
