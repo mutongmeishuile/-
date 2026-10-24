@@ -123,6 +123,16 @@ CFG = {
 
     # ---- 剖面 ----
     "ele_range": (0, 1500),                 # 剖面 y 轴上下界；留空则按剖面数据自动取整
+    # ---- 等高线强度（2026-10-24 新增，详见 references/pitfalls-terrain.md §3）----
+    # 「密」和「深」是两件事，分开调：
+    #   密 → 降等高距（contour_minor）或用双阈值动态夹住（contour_cov_min）；
+    #   深 → 降线色融合度（contour_alpha）与最小明度差（contour_min_delta）。
+    # 不配 = 脚本默认（上限 0.30、alpha 0.45/0.82、dmin 15/34），一般偏抢眼。
+    # "contour_target_cov": 0.20,           # 线覆盖率上限（实测像素口径）
+    # "contour_cov_min": 0.15,              # 线覆盖率下限；配了则在 [下限,上限] 里动态取最接近中点的等高距
+    # "contour_alpha": (0.24, 0.55),        # 首/计曲线与底图的融合度（越小越不显眼）
+    # "contour_min_delta": (6, 14),         # 线与底图的最小明度差（越小线越贴底图；别记反）
+    # "contour_minor": 50,                  # 直接指定首曲线间隔、跳过自适应（不确定就别写）
     "aria_prof": "全程海拔剖面",
     "aria_map": "九华山南北穿越全线地图",
     "prof_right": f"最高点：十王峰 {fmt_ele(ELE_MAX)} m",

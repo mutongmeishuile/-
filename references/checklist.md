@@ -83,3 +83,20 @@
       还有 `_qa_*.png`、`out/*.bak`、`base_terrain.jpg` → 跑 `python scripts/clean.py`
       （`make_all` 成功收尾时会自动做；失败时故意保留，那是排错依据）
 
+
+### 2026-10-24 增补（十二条线批量后）
+
+- [ ] **等高距与覆盖率成对看**：`make_terrain` 打的「等高线 每 X m … 线覆盖 Y% 像素」——
+      X 是"密"的唯一决定项，Y 是实测口径（不是 `contour_coverage()` 的估计值）。
+      嫌密先降 X（`contour_minor` / `contour_cov_min`），嫌深再降 `contour_alpha` + `contour_min_delta`。
+      两者别混着调：只降 alpha 而不降 dmin 几乎没效果。
+- [ ] **底图地名锚点落在地物上**：放大抽查 2–3 个河名/湖名，标签指的必须是那条河/那个湖；
+      量化判据见 pitfalls-terrain §26（锚点到要素的最短距离应为 0）。
+- [ ] **改了 `draw_osm` / `make_terrain` 就必须重跑 `make_terrain`**，
+      否则 HTML / 长图还是旧底图（只有独立 JPG 变了）。
+- [ ] `SCHEDULE` 每行 5 个元素（用 `ast.parse` 查，别数逗号）；时刻写 HH:MM；
+      `BOT_LBL` 为空（起终点由 `MARKS` 承担）。
+- [ ] 逐日卡里的升降是**累计漂移**阈值重算的（见 track-prep §9），与数据条口径一致。
+- [ ] 雪线：7 月线要显式 `snow_month: 7`；若配了 `terrain_season="annual"`，
+      月份键不生效，**必须把折算值直接写进 `snowline_m`**（见 pitfalls-terrain §27）。
+- [ ] 批量出图时 `shoot_guide` / `render_map_hi` 偶发退出码 1 → 单独串行重跑该步（见 efficiency §7）。

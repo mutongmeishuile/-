@@ -411,6 +411,12 @@ CFG = {
 
     # ---- 剖面 ----
     "ele_range": (@@ELE_LO@@, @@ELE_HI@@),  # ★ 上下界：给得比实测范围略宽才不顶格
+    # ---- 等高线强度（2026-10-24；详见 references/pitfalls-terrain.md §3）----
+    # 「密」与「深」分开调：密 → 等高距；深 → alpha / dmin。不配 = 脚本默认，一般偏抢眼。
+    # "contour_target_cov": 0.20,           # 线覆盖率上限（实测像素口径）
+    # "contour_cov_min": 0.15,              # 下限；配了则在 [下限,上限] 里动态取最接近中点的等高距
+    # "contour_alpha": (0.24, 0.55),        # 线色融合度（越小越不显眼）
+    # "contour_min_delta": (6, 14),         # 线与底图的最小明度差（越小越贴底图）
     "aria_prof": "@@NAME@@全程海拔剖面",
     "aria_map": "@@NAME@@全线地图",
     "prof_right": f"最高点：{TOP_NAME} {fmt_ele(ELE_MAX)} m",

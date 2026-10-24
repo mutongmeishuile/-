@@ -288,3 +288,26 @@ python scripts/make_all.py --dry-run           # 先看分层认没认对脚本
   `invalid literal for int()`。
 - **build_route().pts 是 (lon,lat) 二元组**，高程在 `r["ele"]`——探针里 `p[2]` 直接
   IndexError。探针脚本落盘复用（如 `probe_xx.py`，用完别提交），不要每次 inline 重写。
+
+## 7. ⚠ `make_all` 的 wave4（长图 ∥ 地图）并行会偶发失败 → 批量出图改串行（2026-10-24）
+
+`make_all.py` 的 wave4 会**同时**起 `shoot_guide.py` 与 `render_map_hi.py`
+（两个无头浏览器 + 两份大图内存）。本机 12 条批量重出时，
+南天山 / 冈仁波齐 / 七穿九变连续出现 `shoot_guide.py 退出码 1`、`render_map_hi.py 退出码 1`，
+**但单独串行跑同一个脚本必过**（同图、同参数、exit 0、QA 通过）。
+症状特点：日志里 `!! xxx.py 退出码 1` 没有 traceback，且**重跑一次就好**。
+
+判定方法：把失败的那一步单独跑一次 —— 过了就是并发资源问题，不是脚本 bug。
+
+批量出图的稳妥写法（12 条 ≈ 6 分钟）：
+
+```bash
+for d in 线路A 线路B …; do
+  (cd "$d/scripts" && $PY build_guide.py && $PY shoot_guide.py && \
+                     $PY render_map_hi.py && $PY qa_guide.py)
+done
+```
+
+⚠ 另：`clean.py` / `shoot_guide.py` 收尾会删中间产物（`_qa_*.png`、`_shoot_raw.png`），
+在受保护的目录里可能触发删除确认（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`）——
+脚本会打印这行但**不影响成品**，用完手工 `rm` 掉即可，别以为失败了。
