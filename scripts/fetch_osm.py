@@ -171,9 +171,6 @@ def fetch(force=False, soft=False, rounds=2):
                 print(f"   ⚠ 抓取总时限 {_budget:.0f}s 已到，停止重试")
                 last = last or RuntimeError("抓取总时限已到")
                 break
-            else:
-                continue
-            break
             try:
                 print(f"→ {host}（第 {rnd + 1} 轮）", flush=True)
                 req = urllib.request.Request(
@@ -194,6 +191,9 @@ def fetch(force=False, soft=False, rounds=2):
                 last = e
                 print("  失败:", repr(e)[:120], flush=True)
                 time.sleep(2 + 3 * rnd)
+        else:
+            continue                      # 本轮镜像全部试完 → 下一轮
+        break                             # 因总时限而跳出 → 结束重试
 
     # ⚠ 全挂时**绝不能覆盖已有缓存**（2026-10-24 批量重出实测踩到）：
     #   旧实现写一份空 osm.json，把原来好端端的矢量（几百 KB）冲掉，
