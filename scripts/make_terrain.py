@@ -1001,8 +1001,12 @@ def pick_contour_interval(dem_out, verbose=True):
       但陡坡线成排、雪原上偏抢眼 → 线路级把目标收到 **0.26** → 退到 25 m（23.8%）。
 
     两级可配置（都在 `route_def.CFG`，只影响本线路，不动全局默认值）：
-      * `contour_target_cov`：本次的覆盖率上限（缺省 `CONTOUR_TARGET_COV`）；
-      * `contour_minor`：直接指定首曲线间隔，跳过自适应（缺省 None = 自适应）。
+      * `contour_target_cov`：本次的覆盖率**上限**（缺省 `CONTOUR_TARGET_COV`）；
+      * `contour_minor`：直接指定首曲线间隔，跳过自适应（缺省 None = 自适应）；
+      * `contour_cov_min`（2026-10-24 新增）：覆盖率**下限**。配了之后不是"越细越好"，
+        而是**在 [下限, 上限] 区间里挑一个覆盖率最接近中点的等高距** —— 疏密随地形自适应，
+        但被夹在一个可读区间里（用户 2026-10-24："线覆盖上限 20%、下限 15%，动态调整"）。
+        区间内没有候选时退到"≤ 上限里最接近下限的一档"；连最小间隔都超上限时取最粗的一档并告警。
     计曲线由 `nice_major()` 取规范值（不一定是 ×5，见该函数注释）。
     """
     target = float(_route_cfg("contour_target_cov", CONTOUR_TARGET_COV))
@@ -1014,6 +1018,33 @@ def pick_contour_interval(dem_out, verbose=True):
             print(f"   等高距由线路指定 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
                   f"线覆盖 {cov * 100:.1f}%")
         return iv, nice_major(iv), cov
+    cands = [(iv, contour_coverage(dem_out, iv)) for iv in CONTOUR_NICE]
+    lo = _route_cfg("contour_cov_min", None)
+    if lo is not None:
+        lo = float(lo)
+        if 0 < lo < target:
+            inside = [(iv, cv) for iv, cv in cands if lo <= cv <= target]
+            if inside:
+                mid = (lo + target) * 0.5
+                iv, cov = min(inside, key=lambda x: abs(x[1] - mid))
+                if verbose:
+                    print(f"   等高距动态 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
+                          f"线覆盖 {cov * 100:.1f}%（区间 {lo * 100:.0f}–{target * 100:.0f}%，"
+                          f"取最接近中点 {mid * 100:.0f}% 的一档）")
+                return iv, nice_major(iv), cov
+            below = [(iv, cv) for iv, cv in cands if cv < lo]
+            if below:
+                iv, cov = max(below, key=lambda x: x[1])      # 最接近下限的一档
+                if verbose:
+                    print(f"   等高距动态 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
+                          f"线覆盖 {cov * 100:.1f}%；区间 {lo * 100:.0f}–{target * 100:.0f}% 内"
+                          f"无候选，取 ≤ 上限里最接近下限的一档")
+                return iv, nice_major(iv), cov
+            iv, cov = min(cands, key=lambda x: x[1])            # 连最小间隔都超上限 → 取最粗
+            if verbose:
+                print(f"   ⚠ 等高距动态：所有候选间隔的线覆盖都 > {target * 100:.0f}%，"
+                      f"取最粗的一档 {iv:g} m（线覆盖 {cov * 100:.1f}%）")
+            return iv, nice_major(iv), cov
     fallback = (CONTOUR_NICE[-1], nice_major(CONTOUR_NICE[-1]), 1.0)
     for iv in CONTOUR_NICE:
         cov = contour_coverage(dem_out, iv)
@@ -1023,7 +1054,7 @@ def pick_contour_interval(dem_out, verbose=True):
                     f"（{CONTOUR_MINOR:.0f} m 覆盖率 " \
                     f"{contour_coverage(dem_out, CONTOUR_MINOR) * 100:.0f}% 超出目标，自动退到 {iv:g} m）"
                 print(f"   等高距自适应 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
-                      f"线覆盖 {cov * 100:.1f}% ≤ 目标 {target * 100:.0f}% {tag}")
+                  f"线覆盖 {cov * 100:.1f}% ≤ 目标 {target * 100:.0f}% {tag}")
             return iv, nice_major(iv), cov
     return fallback
 
