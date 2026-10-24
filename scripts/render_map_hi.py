@@ -29,7 +29,8 @@ CFG = getattr(RD, "CFG", {})
 STEM = CFG.get("file_stem", "线路")
 OUT_JPG = GC.ROOT / f"{STEM}-全线地图.jpg"
 
-W = MS.IW * 2                       # 与 make_terrain 的超采样一致（逻辑宽 ×2 = 栅格宽）
+_SS = max(2, int(CFG.get("map_ss", 2) or 2))
+W = MS.IW * _SS                     # 与 make_terrain 的超采样一致（逻辑宽 × SS = 栅格宽）
 # ⚠ 独立高清图**要带名称带**（map_svg.TITLE_H = 132 逻辑 px）：这张图是单独发出去的，
 #   没有标题就只剩一片地形与几根彩色线，收到的人不知道这是哪条线、几天、多长。
 #   HTML 内嵌版不加（页面已有 h1），所以这里显式 with_title=True，画布高也必须用

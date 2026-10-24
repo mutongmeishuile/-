@@ -83,7 +83,15 @@ def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z):
 #   ② 放大到 200% 时仍有真实像素，不会立刻糊成一团。
 # 代价：底图 jpg 体积约 ×2.5，HTML 变大，但这是"放大能看清"唯一实际有效的做法。
 LOGICAL_W = 1504
+# 超采样倍率：`CFG["map_ss"]` 可按线路覆盖（默认 2 → 3008 px）。
+# 放大窗口后"每公里像素变少 → 看着糊"的唯一正解是提高这个倍率：
+#   · 只影响栅格与独立高清图，HTML 内嵌仍降到 EMBED_MAX(1600)，页面体积不变；
+#   · 代价是 make_terrain 耗时/内存按像素数走（SS=3 约 2.2 倍）。
 SS = 2
+try:
+    SS = max(2, int(GC.cfg("map_ss", SS) or SS))
+except Exception:                                              # noqa
+    pass
 RASTER_W = LOGICAL_W * SS
 
 # ---- 等高距：**按窗口自适应**，不写死 ----
@@ -1821,11 +1829,15 @@ def build_terrain():
     dem_out = np.asarray(Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS),
                          dtype=np.float32)
     c_minor, c_major, c_cov = pick_contour_interval(dem_out)
+    _w_major = max(CONTOUR_DILATE[1], SS - 2)
     print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-          f"线宽 {CONTOUR_DILATE}@{RASTER_W}px）…")
+          f"线宽 {_w_major}@{RASTER_W}px）…")
     arr = np.asarray(pil).copy()
     _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
-    paint_contours(arr, dem_out, *CONTOUR_DILATE, minor=c_minor, major=c_major,
+    # 线宽补偿：SS>2 时等高线像素数不跟着涨，缩到 1600 内嵌/长图后会发虚
+    # （4512→1600 只有 0.35×，1 px 线只盖住 35% 像素）。计曲线补 1 px。
+    _w_major = max(CONTOUR_DILATE[1], SS - 2)
+    paint_contours(arr, dem_out, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
                    m_per_px=_m_per_px)
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     scale_raster_y = RASTER_H / dh
