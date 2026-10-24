@@ -209,6 +209,55 @@ def _ring_area(ring):
     return s / 2.0
 
 
+# ------------------------------------------------------------------ 标注锚点精度
+# 用户 2026-10-24："OSM 地名标注点要绝对精确"。
+# 实测（百错千寻，8 条具名水系）：**顶点算术质心**离河道中位 320 m、最远 5955 m ——
+# 弯曲/分叉的河，质心落在河道外的空地上，图上"桑曲"三个字指着几公里外的地方。
+# 面状要素（湖、冰川）同理：环质心对凹形湖可能落在湖外。
+# → 线状要素取「离质心最近的线上的点」，面状要素取「多边形内部的点」。
+
+def _nearest_on_polyline(cx, cy, pts):
+    """离 (cx,cy) 最近的折线上的点（像素坐标）。线状要素的标注锚点必须落在要素本身。"""
+    best, bd = None, None
+    for i in range(len(pts) - 1):
+        ax, ay = pts[i]
+        bx, by = pts[i + 1]
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        t = 0.0 if L == 0 else max(0.0, min(1.0, ((cx - ax) * dx + (cy - ay) * dy) / L))
+        px, py = ax + t * dx, ay + t * dy
+        dd = (px - cx) ** 2 + (py - cy) ** 2
+        if bd is None or dd < bd:
+            bd, best = dd, (px, py)
+    return best
+
+
+def _point_in_ring(px, py, ring):
+    """射线法判点是否在环内。"""
+    inside = False
+    n = len(ring)
+    for i in range(n):
+        x0, y0 = ring[i]
+        x1, y1 = ring[(i + 1) % n]
+        if (y0 > py) != (y1 > py):
+            xin = x0 + (py - y0) * (x1 - x0) / (y1 - y0)
+            if px < xin:
+                inside = not inside
+    return inside
+
+
+def _anchor_in_ring(cx, cy, ring):
+    """面状要素的标注锚点：保证落在多边形**内部**（质心在面内就用质心，否则取离质心最近的边并向内收）。"""
+    if _point_in_ring(cx, cy, ring):
+        return (cx, cy)
+    if not ring:
+        return (cx, cy)
+    bx, by = min(ring, key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
+    # 向质心方向收一点，避免锚点正好压在边界线上（抗锯齿后会看起来在面外）
+    mx, my = (bx + cx) * 0.5, (by + cy) * 0.5
+    return (mx, my) if _point_in_ring(mx, my, ring) else (bx, by)
+
+
 _STITCH_STATS = {"ok": 0, "dropped": 0, "dropped_pts": 0}
 
 
@@ -794,6 +843,15 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
+        # ⚠ 锚点必须落在要素**本身**上（2026-10-24 用户"标注点要绝对精确"）：
+        #   线状（河）取离质心最近的线上点；面状（湖/水库）取多边形内部的点。
+        if is_river:
+            _a = _nearest_on_polyline(cx, cy, pts)
+        else:
+            _a = _anchor_in_ring(cx, cy, pts)
+        if _a is None:
+            continue
+        cx, cy = _a
         if not (-40 * S < cx < size[0] + 40 * S and -40 * S < cy < size[1] + 40 * S):
             continue
         # size = 该段几何的尺寸（河长 / 湖面积），供下面按名去重时排序：
@@ -818,9 +876,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not rings:
             continue
         ring = max(rings, key=lambda r: abs(_ring_area(r)))
-        glaciers.append((sum(p[0] for p in ring) / len(ring),
-                         sum(p[1] for p in ring) / len(ring), nm,
-                         abs(_ring_area(ring))))
+        _gcx = sum(p[0] for p in ring) / len(ring)
+        _gcy = sum(p[1] for p in ring) / len(ring)
+        _a = _anchor_in_ring(_gcx, _gcy, ring)          # 锚点必须落在冰川面内
+        glaciers.append((_a[0], _a[1], nm, abs(_ring_area(ring))))
 
     # 山峰：▲ + 名 + 高程
     #
