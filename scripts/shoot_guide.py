@@ -55,9 +55,18 @@ def _page_box_from_pixels(im, bg):
     return int(cols[0]), int(cols[-1]) + 1, y0, y1
 
 
+def _rm_quiet(p: Path):
+    """清理临时文件是尽力而为：环境层可能拦截大文件删除（SAFE_DELETE 钩子），
+    删不掉就留着并提示，绝不能让整条出图流水线因此 rc!=1 前功尽弃。"""
+    try:
+        p.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"  ⚠ 临时文件 {p.name} 清理失败（不影响成图，可手动删）: {e}")
+
+
 def render():
     raw = GC.ROOT / "_shoot_raw.png"
-    raw.unlink(missing_ok=True)
+    _rm_quiet(raw)
     # ① 直接截整页（窗口给足高）；不再用 --dump-dom（本机 Edge 不输出）
     win_h = WIN_H_TRY
     for attempt in range(4):
@@ -83,7 +92,7 @@ def render():
     print(f"  截图 {im.size} · 版心 x {x0}–{x1}（宽 {want}）· 内容高 {y1} · 用时 {time.time()-t:.1f}s")
 
     im.crop((x0, 0, x1, y1 + PAD_BOTTOM * SCALE)).save(OUT_PNG, optimize=True)
-    raw.unlink(missing_ok=True)
+    _rm_quiet(raw)
     out = Image.open(OUT_PNG)
     print(f"  -> {out.size} · {OUT_PNG.stat().st_size/1048576:.2f} MB · {OUT_PNG.name}")
 
