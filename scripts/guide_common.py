@@ -586,7 +586,8 @@ def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
                 sz = out_path.stat().st_size
                 if sz == prev and sz > 0:
                     stable += 1
-                    if stable >= 4:
+                    if stable >= 2:       # 2 次足够：本机实测文件是"完成后一次性出现"，
+                                          # 旧值 4 次 = 每次截图白等 0.6 s，一轮要截 4 张
                         break
                 else:
                     stable = 0

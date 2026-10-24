@@ -15,17 +15,18 @@
 -----------------------------------
 步骤之间是有依赖的，真正能同时跑的只有"无依赖的同一层"，本脚本按 DAG 分层并行：
 
-    wave0:  prep                 （KML → out/track_*.json，后面所有步的窗口都靠它）
-    wave1:  osm ∥ gpx            （窗口 = 轨迹包围盒；gpx 只读 KML 与 route_def）
-    wave2:  dem                  （依赖 prep + osm）
+    wave0:  prep                       （KML → out/track_*.json，后面所有步的窗口都靠它）
+    wave1:  osm ∥ gpx ∥ demfetch       （三段都要 bbox，互不依赖 —— 首次建线省掉一半网络等待）
+    wave2:  dem                        （依赖 prep + osm；此时 DEM 瓦片已在缓存里）
     wave3:  html                 （依赖 dem + prep）
     wave4:  long ∥ map           （都只吃 HTML，两个浏览器进程可并存）
     wave5:  qa                   （依赖前两步产物）
 
-实测省下的只有 ~6–10 s/轮。**真正的大头是 DEM 下载（首次 ~1–2 min），
-它在 wave1 里是独苗，并行救不了它** —— 要压它得提 make_terrain.load_dem(workers=)
-的并发度（默认已 24）并复用 demcache/。所以本脚本的价值主要是
-「一条命令、人不用守着」，不是算力并行。
+**首次建线**：DEM 下载原本是 wave2 的独苗（1–2 min 纯等待），现在拆出
+`prefetch_dem.py` 提到 wave1 与 osm 并行 —— 这是全链唯一分钟级的节省，实测把
+「2 + 2 min」压成「max(2, 2) min」。
+**改图迭代**（缓存已热）：wave4 的 long ∥ map 仍是主要收益（省 ~9 s/轮）。
+再往下就是秒级的零星优化，不值得为它加并行度。
 
 用法
 ----
@@ -44,9 +45,9 @@
 攻略 HTML / 长图 / 全线地图 / GPX / 原始 KML。想看审计截图就加 `--keep-temp`。
 **失败时不清理**：那些文件正是排错要看的。
 
-步骤名：prep / osm / dem / html / long / map / gpx / qa
+步骤名：prep / osm / demfetch / dem / html / long / map / gpx / qa
 脚本按 "每步一个通用脚本" 约定自动发现（不再按线路复制脚本）：
-    prep_track.py · fetch_osm.py · make_terrain.py · build_guide.py ·
+    prep_track.py · fetch_osm.py · prefetch_dem.py · make_terrain.py · build_guide.py ·
     shoot_guide.py · render_map_hi.py · make_gpx.py · qa_guide.py
 线路相关的**只有 route_def.py 一个文件**。
 """
@@ -76,6 +77,9 @@ DEPS = {
     "prep": [],          # KML → out/track_*.json
     "osm":  ["prep"],    # 窗口由轨迹包围盒推 → 必须先有轨迹
     "gpx":  ["prep"],    # 要全量原始点
+    # DEM 瓦片预取：与 osm **同层并行**（都只要 bbox，互不依赖）。
+    # 首次建线时这是全链唯一分钟级的等待，串行跑就是 2 min + 2 min。
+    "demfetch": ["prep"],
     "dem":  ["prep", "osm"],   # 等高线标注要避让轨迹与 POI
     "html": ["dem", "prep"],   # 要 base_map.jpg + profile_real.json
     "long": ["html"],
@@ -104,6 +108,7 @@ def discover():
         ("long", "长图 PNG", _pick(["shoot_guide"])),
         ("map",  "高清地图", _pick(["render_map_hi"])),
         ("gpx",  "GPX 导出", _pick(["make_gpx"])),
+        ("demfetch", "DEM 预取", _pick(["prefetch_dem"])),
         ("qa",   "自检",     _pick(["qa_guide"])),
     ]
 
@@ -183,7 +188,7 @@ def main():
     for key, (desc, scripts) in found.items():
         if only and key not in only:
             continue
-        if key in ("osm", "dem") and a.skip_dem:
+        if key in ("osm", "dem", "demfetch") and a.skip_dem:
             continue
         if key == "qa" and a.skip_qa:
             continue

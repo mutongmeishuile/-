@@ -164,8 +164,8 @@ agent_created: true
 
 ```
 wave0:  prep                        （唯一的根：后面所有步的**地图窗口**都从它的轨迹推）
-wave1:  osm ∥ gpx                   （窗口 = 轨迹包围盒；gpx 只读全量点与 route_def）
-wave2:  dem                         （依赖 prep + osm）
+wave1:  osm ∥ gpx ∥ demfetch        （窗口 = 轨迹包围盒；三段互不依赖）
+wave2:  dem                         （依赖 prep + osm；DEM 瓦片已在 demfetch 阶段下好）
 wave3:  html                        （依赖 dem + prep）
 wave4:  long ∥ map                  （都只吃 HTML，可并存两个浏览器进程）
 wave5:  qa                          （依赖前两步产物）
