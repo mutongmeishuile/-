@@ -303,7 +303,8 @@ def load_dem(z, lon0, lat0, lon1, lat1, workers=24):
 
 
 def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
-                      min_gain=200.0, tol=100.0, max_gap=400.0, verbose=True):
+                      min_gain=200.0, tol=100.0, max_gap=400.0,
+                      max_shift_m=400.0, verbose=True):
     """把 OSM 峰点吸附到 DEM 的局部山顶，返回 `{"lon,lat": [lon, lat]}`。
 
     为什么需要（2026-10-23 博格达实测，用户指着截图问"这个三角标的不准确"）
@@ -329,6 +330,12 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
 
     只借 DEM 定位置，不借它改高程：DEM 对 5000 m 级雪峰普遍低估 200–400 m
     （雪面反照 + 30 m 分辨率抹平尖顶），图上印的仍是 OSM 的 `ele`。
+
+    ⑤ 位移不得超过 `max_shift_m`（默认 400 m）→ 超出说明找到的是**另一座山**。
+       2026-10-25 全库核验：把 `min_gain` 降到 50 后，多数线路会冒出 800–1100 m 的
+       "吸附"，且几乎全是 `(无名)` 峰点 —— 那是 800 m 方窗的角落（对角线 1131 m），
+       即邻峰顶，不是校正。真正该修的是几十到两百米的小漂移；几百米以上的属于
+       OSM 坐标本身录错，脚本不应替它搬家。
     """
     try:
         d = json.loads(Path(osm_path).read_text(encoding="utf-8"))
@@ -340,6 +347,7 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
     mpp = 156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)
     out, moved, skipped_gap, near_miss = {}, [], [], []
     skipped_rad = []
+    skipped_shift = []
 
     # 其它具名峰的原点：吸附目标不许落在它们 300 m 内 —— 否则就是"张冠李戴"，
     # 把 A 峰的三角挪到 B 峰的头上（峰群密集区 800 m 窗口里常有邻峰）。
@@ -401,6 +409,12 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
                    for k, nx, ny in named_px):
                 r //= 2
                 continue
+            # 位移护栏：几百米以上的"最高点"通常已经是另一座山，宁可不动。
+            # 不缩半径重试 —— 缩完找到的会是坡上随便一个点，比原点更离谱。
+            _shift = math.hypot(ax - xi, ay - yi) * mpp
+            if max_shift_m is not None and _shift > float(max_shift_m):
+                skipped_shift.append((nm0, _shift))
+                break
             gain = mx - base
             if gain >= min_gain:
                 if ele is None:
@@ -445,6 +459,11 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
         if skipped_rad:
             print(f"     ~ 半径缩到 <60 px 仍被邻峰挡住 {len(skipped_rad)} 个（保持原点）："
                   f"{'、'.join(skipped_rad)}")
+        if skipped_shift:
+            print(f"     ~ 位移超 {max_shift_m:.0f} m 未吸附 {len(skipped_shift)} 个"
+                  f"（多半是 OSM 坐标本身录错，需人工核对）：")
+            for nm, sh in sorted(skipped_shift, key=lambda x: -x[1])[:8]:
+                print(f"       - {nm:16s} 最近山顶在 {sh:.0f} m 外")
     return out
 
 
@@ -2078,8 +2097,19 @@ def build_terrain():
                 # 200 m 太宽松 —— 节点在坡上、离真顶差 50–150 m 也不会动（亚丁 9 个峰点
                 # 实测差 12–137 m）。用户要求"三角在等高线高点"，收到 50 m 更贴合。
                 _min_gain = float(GC.cfg("peak_snap_min_gain", 200.0) or 200.0)
+                # 位移上限：默认 400 m，`None` 表示不限（单线验证过再开 —— 冈仁波齐
+                # 9 个峰点位移 93–1081 m 全是真实漂移）。
+                # ⚠ 这里**不能**用 GC.cfg()：它把显式 None 当"没配"返回 default，
+                #   于是"写 None 想关掉护栏"会静默变回 400。必须查键是否存在。
+                try:
+                    import route_def as _RD
+                    _raw = getattr(_RD, "CFG", None) or {}
+                    _max_shift = _raw["peak_snap_max_shift"] \
+                        if "peak_snap_max_shift" in _raw else 400.0
+                except Exception:                                  # noqa
+                    _max_shift = 400.0
                 snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0,
-                                         min_gain=_min_gain)
+                                         min_gain=_min_gain, max_shift_m=_max_shift)
                 (OUT / "peak_snap.json").write_text(
                     json.dumps(snap, ensure_ascii=False, indent=0), encoding="utf-8")
             except Exception as _e:                                    # noqa

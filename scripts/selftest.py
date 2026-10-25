@@ -436,6 +436,18 @@ def t_peak_snap():
     got = MT.snap_peaks_to_dem(p2, dem, meta, 43.0, verbose=False)
     check("吸附目标 300 m 内有别的具名峰 → 放弃", got == {}, f"却动了 {len(got)} 个")
 
+    # ⑦ 位移护栏：几百米外的"最高点"通常已是另一座山，宁可不动。
+    #    2026-10-25 全库实测：min_gain 降到 50 后各线冒出 800–1100 m 的"吸附"
+    #    （800 m 方窗的对角线才 1131 m），且几乎全是无名峰点 —— 那是邻峰顶。
+    #    z14/lat43 下 1 px ≈ 7 m：把 min_gain 放到 50，点放在 100 px（≈700 m）外仍要拒绝。
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 200, 100), dem, meta, 43.0,
+                               min_gain=50.0, max_shift_m=400.0, verbose=False)
+    check("位移超 max_shift（400 m）→ 不动", got == {}, f"却动了 {len(got)} 个")
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 200, 100), dem, meta, 43.0,
+                               min_gain=50.0, max_shift_m=None, verbose=False)
+    check("max_shift_m=None → 护栏可关（单线覆盖）", len(got) == 1,
+          f"返回 {len(got)} 条")
+
 
 # ---------------------------------------------------------------- ⑪ 等高距下限兜底
 def t_contour_cov_min():
