@@ -1050,7 +1050,10 @@ def pick_contour_interval(dem_out, verbose=True):
                   f"线覆盖 {cov * 100:.1f}%")
         return iv, nice_major(iv), cov
     cands = [(iv, contour_coverage(dem_out, iv)) for iv in CONTOUR_NICE]
-    lo = _route_cfg("contour_cov_min", None)
+    # ⚠ 缺省必须是 CONTOUR_COV_MIN（0.15），不能是 None：2026-10-25 首发版在这里
+    # 写了 None，未配 contour_cov_min 的 18 条线路静默走回旧单阈值行为，
+    # 「下限 0.15」对它们形同未配（报告口径与实物不符）。
+    lo = _route_cfg("contour_cov_min", CONTOUR_COV_MIN)
     if lo is not None:
         lo = float(lo)
         if 0 < lo < target:

@@ -413,11 +413,78 @@ def t_peak_snap():
     check("没有 ele 的裸峰点 → 不动", got == {}, f"却动了 {len(got)} 个")
 
 
+# ---------------------------------------------------------------- ⑪ 等高距下限兜底
+def t_contour_cov_min():
+    print("⑪ 等高距下限默认兜底（未配 contour_cov_min = 0.15，不是 None）")
+    try:
+        import numpy as np
+        import make_terrain as MT
+        import route_def as RD
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+    if not hasattr(MT, "pick_contour_interval"):
+        print("         （跳过：make_terrain 无 pick_contour_interval）")
+        return
+
+    # 三角波 DEM（沿 x 方向、行方向恒定）：每档覆盖率 ≈ 2A/(iv·P)，
+    # 调振幅 A 就能造出「旧单阈值与区间判据答案不同」的样本。
+    # bug 现场（2026-10-25 首发版）：pick_contour_interval 里写成
+    #   lo = _route_cfg("contour_cov_min", None)
+    # 未配键的 18 条线路静默走回单阈值，"下限 0.15" 形同未配。
+    saved = {k: RD.CFG.pop(k, None) for k in
+             ("contour_cov_min", "contour_target_cov", "contour_minor")}
+    try:
+        def _sawtooth(A, P=24.0, n=512, rows=64):
+            x = np.arange(n, dtype=np.float32)
+            tri = np.abs((x / P) % 2.0 - 1.0) * A
+            return np.repeat(tri[None, :], rows, axis=0).astype(np.float32)
+
+        def _policies(dem):
+            cands = [(iv, MT.contour_coverage(dem, iv)) for iv in MT.CONTOUR_NICE]
+            tgt = MT.CONTOUR_TARGET_COV
+            single = next((iv for iv, cv in cands if cv <= tgt), MT.CONTOUR_NICE[-1])
+            lo, K = MT.CONTOUR_COV_MIN, MT.COV_EST_TO_ACTUAL
+            act = lambda cv: cv * K                                  # noqa: E731
+            inside = [(iv, cv) for iv, cv in cands if lo <= act(cv) <= tgt]
+            if inside:
+                mid = (lo + tgt) * 0.5
+                dyn = min(inside, key=lambda x: abs(act(x[1]) - mid))[0]
+            else:
+                below = [(iv, cv) for iv, cv in cands if act(cv) < lo]
+                dyn = (max(below, key=lambda x: act(x[1]))[0] if below
+                       else min(cands, key=lambda x: act(x[1]))[0])
+            return single, dyn
+
+        found = None
+        for A in range(60, 321, 10):
+            dem = _sawtooth(float(A))
+            single, dyn = _policies(dem)
+            if single != dyn:
+                got = MT.pick_contour_interval(dem, verbose=False)[0]
+                found = (A, got, single, dyn)
+                break
+        if found is None:
+            check("扫描到两种判据分叉的样本", False, "振幅 60–320 m 全部一致，测试失去区分度")
+            return
+        A, got, single, dyn = found
+        check(f"未配下限时走区间判据（A={A} m：区间选 {dyn:g} m ≠ 旧单阈值 {single:g} m）",
+              got == dyn, f"实选 {got:g} m")
+        # 反向：显式配一个很宽的下限（0 < lo < target 仍成立）不应抛异常
+        RD.CFG["contour_cov_min"] = 0.10
+        MT.pick_contour_interval(_sawtooth(100.0), verbose=False)
+        check("显式配下限也能跑（不抛异常）", True)
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                RD.CFG[k] = v
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
-               t_pick_name, t_peak_snap):
+               t_pick_name, t_peak_snap, t_contour_cov_min):
         try:
             fn()
         except Exception as e:                                      # noqa
