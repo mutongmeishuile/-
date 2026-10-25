@@ -412,6 +412,30 @@ def t_peak_snap():
     got = MT.snap_peaks_to_dem(mk(d, None, 135, 100), dem, meta, 43.0, verbose=False)
     check("没有 ele 的裸峰点 → 不动", got == {}, f"却动了 {len(got)} 个")
 
+    # ⑤ 真山顶就在本点 300 m 内 → 不能因为"离自己太近"被挡
+    #    bug 现场（2026-10-25 冈仁波齐）：自身排除写成
+    #        if math.hypot(nx - xi, ny - yi) > 1e-6
+    #    nx,ny 是未取整浮点、xi,yi 是 int(round(...))，恒差 0–0.5 px（远大于 1e-6），
+    #    于是**自己永远不算自己**。候选山顶落在本点 300 m 内时被判"会盖住邻峰"，
+    #    半径一路减半到 <60 px 后静默放弃 → peak_snap.json 写 `{}`；日志只说
+    #    "本窗口无需校正"，图上三角漂在山肩（主峰只需移 175 m 也救不回来）。
+    #    这里 z14/lat43 下 1 px ≈ 7 m，节点在 (120,100)、方顶在 x≤110，相距约 70 m。
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 120, 100), dem, meta, 43.0, verbose=False)
+    check("山顶距本点 <300 m → 仍要吸附", len(got) == 1, f"返回 {len(got)} 条")
+
+    # ⑥ 但"吸附目标 300 m 内另有具名峰"这条护栏仍须生效（张冠李戴）
+    lo1, la1 = MT.px_to_lonlat(120, 100, z)
+    lo2, la2 = MT.px_to_lonlat(88, 100, z)
+    p2 = Path(d) / "osm2.json"
+    p2.write_text(json.dumps({"elements": [
+        {"type": "node", "lat": la1, "lon": lo1,
+         "tags": {"natural": "peak", "name": "甲峰", "ele": "3000"}},
+        {"type": "node", "lat": la2, "lon": lo2,
+         "tags": {"natural": "peak", "name": "乙峰", "ele": "3000"}},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    got = MT.snap_peaks_to_dem(p2, dem, meta, 43.0, verbose=False)
+    check("吸附目标 300 m 内有别的具名峰 → 放弃", got == {}, f"却动了 {len(got)} 个")
+
 
 # ---------------------------------------------------------------- ⑪ 等高距下限兜底
 def t_contour_cov_min():

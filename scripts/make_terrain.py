@@ -339,9 +339,16 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
     H, W = dem.shape
     mpp = 156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)
     out, moved, skipped_gap, near_miss = {}, [], [], []
+    skipped_rad = []
 
     # 其它具名峰的原点：吸附目标不许落在它们 300 m 内 —— 否则就是"张冠李戴"，
     # 把 A 峰的三角挪到 B 峰的头上（峰群密集区 800 m 窗口里常有邻峰）。
+    # ⚠ 自己是按 `lon,lat` **键**排除的，不能按"距离≈0"排除：
+    #   曾经写 `math.hypot(nx - xi, ny - yi) > 1e-6`，而 nx,ny 是未取整浮点、
+    #   xi,yi 是 `int(round(...))`，两者恒差 0.0–0.5 px（远大于 1e-6）→ 自己永远
+    #   不算"自己"。后果：候选山顶落在**本点 300 m 内**的峰全部被判"会盖住邻峰"，
+    #   半径一路减半到 <60 px 后**静默放弃**（2026-10-25 冈仁波齐：主峰只需移 175 m
+    #   就被自己的原坐标挡下，`peak_snap.json` 写成 `{}`，图上三角漂在山肩）。
     named_px = []
     for e in d.get("elements", []):
         t = e.get("tags", {})
@@ -350,7 +357,8 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
         if not (t.get("name") or t.get("name:en")):
             continue
         gx, gy = lonlat_to_px(e["lon"], e["lat"], z)
-        named_px.append((gx - tx0 * 256 - cx0, gy - ty0 * 256 - cy0))
+        named_px.append((f"{e['lon']:.7f},{e['lat']:.7f}",
+                         gx - tx0 * 256 - cx0, gy - ty0 * 256 - cy0))
 
     for e in d.get("elements", []):
         t = e.get("tags", {})
@@ -375,6 +383,9 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
         nm0 = t.get("name") or t.get("name:en") or "(无名)"
         for _ in range(4):                       # 最多缩 3 次
             if r < 60:
+                # 半径缩到 <60 px 仍被挡 → 静默放弃曾经完全不可见（冈仁波齐踩过：
+                # 主峰被自己的坐标挡下，日志只说"无需校正"）。留一条记录便于复查。
+                skipped_rad.append(nm0)
                 break
             win = dem[max(0, yi - r):yi + r, max(0, xi - r):xi + r]
             iy, ix = np.unravel_index(np.nanargmax(win), win.shape)
@@ -384,9 +395,10 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
                 r //= 2                           # 窗口里有更高的别的峰 → 缩半径
                 continue
             # 目标点离"别的具名峰原点"太近 → 说明吸过去会盖在邻峰上，缩半径重试
-            if any(math.hypot(ax - nx, ay - ny) * mpp < 300.0
-                   for nx, ny in named_px
-                   if math.hypot(nx - xi, ny - yi) > 1e-6):
+            # （按 lon,lat 键排除自己，见 above：不要用像素距离判"是不是自己"）
+            _self_key = f"{e['lon']:.7f},{e['lat']:.7f}"
+            if any(k != _self_key and math.hypot(ax - nx, ay - ny) * mpp < 300.0
+                   for k, nx, ny in named_px):
                 r //= 2
                 continue
             gain = mx - base
@@ -430,6 +442,9 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
         for nm, ele, mx in skipped_gap:
             print(f"     ~ {nm:16s} 800 m 内最高只有 {mx:.0f} m（标称 {ele:.0f}），"
                   f"差的太多 —— 像是卫峰，保持 OSM 原点")
+        if skipped_rad:
+            print(f"     ~ 半径缩到 <60 px 仍被邻峰挡住 {len(skipped_rad)} 个（保持原点）："
+                  f"{'、'.join(skipped_rad)}")
     return out
 
 
