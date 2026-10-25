@@ -70,24 +70,37 @@ def _page_html(svg_path_svg, offset=0, band_h=None):
         f'</style></head><body><div class="clip">{svg_path_svg}</div></body></html>')
 
 
+# 白底外圈：SVG 被浏览器缩放到几千 px 宽时，最外 1–2 px 会因插值露出页面白底
+# （2026-10-24 大横断实测：仅第 0 列与最后一列 >60% 白，其余全有内容 —— 不是裁切）。
+# 判白带时忽略外圈；真被裁时白带宽几十 px，照样抓得到。
+_EDGE_IGNORE = 3
+
+
+def _white_ratio(a):
+    """去掉外圈后的最白行 / 最白列比例。"""
+    if a.shape[0] <= 2 * _EDGE_IGNORE or a.shape[1] <= 2 * _EDGE_IGNORE:
+        white = (a > 246).all(2)
+    else:
+        white = (a[_EDGE_IGNORE:-_EDGE_IGNORE, _EDGE_IGNORE:-_EDGE_IGNORE] > 246).all(2)
+    return white.mean(1).max(), white.mean(0).max()
+
+
 def _assert_full_frame(a, tag):
     """断言：没有整行/整列近乎纯白（白带 = 内容被裁，页面白底露出来了）。"""
-    white = (a > 246).all(2)
-    worst_row = white.mean(1).max()
-    worst_col = white.mean(0).max()
+    worst_row, worst_col = _white_ratio(a)
     if worst_row > 0.6 or worst_col > 0.6:
         raise RuntimeError(f"{tag}：有整行/整列近乎全白（行 {worst_row:.0%} / 列 {worst_col:.0%}）"
                            f"—— 内容被裁了，别交付")
-    print(f"  满幅校验：最白行 {worst_row:.0%} · 最白列 {worst_col:.0%}（均应 < 60%）")
+    print(f"  满幅校验：最白行 {worst_row:.0%} · 最白列 {worst_col:.0%}（均应 < 60%，"
+          f"外圈 {_EDGE_IGNORE}px 不计）")
 
 
 def _has_white_band(im):
     """单带快速白带检查：Chromium 软件光栅在高分幅下会**随机**丢瓦片
     （同参数重截即消失，2026-10-24 库拉岗日实测），所以这里不做断言、
     只返回布尔值供 main() 重试。"""
-    a = np.asarray(im).astype(np.int16)
-    white = (a > 246).all(2)
-    return bool(white.mean(1).max() > 0.6 or white.mean(0).max() > 0.6)
+    worst_row, worst_col = _white_ratio(np.asarray(im).astype(np.int16))
+    return bool(worst_row > 0.6 or worst_col > 0.6)
 
 
 def main():
