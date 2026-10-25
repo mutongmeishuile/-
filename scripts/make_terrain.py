@@ -103,7 +103,9 @@ RASTER_W = LOGICAL_W * SS
 #   → 判据落到**实测线覆盖率**：从最细的候选间隔往上试，第一个覆盖率 ≤ 目标值的就是它。
 #     小窗口仍得 20 m（保持细节），长窗口自动退到 50/100 m（保持可读）。
 CONTOUR_NICE = (10, 20, 25, 50, 100, 200, 250, 500)   # 候选等高距（米，都是好记的整数）
-CONTOUR_TARGET_COV = 0.30   # 线覆盖率上限。亚丁实测 20 m=21%（保留）；狼塔 50 m=29.8%（比 20 m 的 66% 好太多）
+CONTOUR_TARGET_COV = 0.20   # 线覆盖率上限（2026-10-25 用户定：全局默认对齐 37 条线路在用的 0.20 口径）
+CONTOUR_COV_MIN = 0.15      # 覆盖率下限（2026-10-25 用户定）：与上限组成 [0.15, 0.20] 动态区间，
+                            # 区间内取最接近中点的一档；缺省 None = 旧的"≤上限"单阈值行为
 # contour_coverage()（band 边缘估计）→ 真实像素线覆盖 的折算系数（2026-10-24 实测 12 条线路，
 # 比值 0.66–1.0、均值 ≈0.82）。用双阈值判据时必须折算到实际口径，否则用户配的 15–20%
 # 落到图上只有 9–13%。
@@ -111,8 +113,9 @@ COV_EST_TO_ACTUAL = 0.82
 # ⚠ 该阈值可**按线路覆盖**：`route_def.CFG["contour_target_cov"]`。
 #   2026-10-16 希夏邦马实测：本区 20 m 覆盖率 28.6%（虽在 30% 以内，但山体陡坡处线仍成排、
 #   雪原上偏抢眼），用户要求"再细一些" → 本线把目标收到 **0.26**，自动退到 25 m（23.8%）。
-#   ⚠ 别直接改这个全局默认：狼塔的 50 m 正好是 29.8%，阈值一收到 0.26 会被误判超限、
-#     继续退到 100 m（过疏）——**全局默认要留给"最坏情况仍可读"，收紧只在线路级做**。
+#   2026-10-25 用户拍板：全局默认收紧到 0.20 + 下限 0.15（= 37 条线路已在用的口径），
+#   "最坏情况仍可读"交给下限兜底；狼塔等自有显式配置的线路不受影响。
+#   仍需更疏/更密的线路继续在线路级覆盖（上限下限都可单独配）。
 # 下面两个只作**兜底缺省值**（调用方没传间隔时用），实际间隔由 pick_contour_interval() 定。
 CONTOUR_MINOR = 20.0    # 首曲线缺省间隔
 CONTOUR_MAJOR = 100.0   # 计曲线缺省间隔（正常由 nice_major() 从首曲线推：20→100 是 ×5，25→100 是 ×4）
@@ -158,7 +161,7 @@ STEEP_SKIP_MAJOR = 2.0
 #   —— 在白雪上显得脏、在草甸上显得跳。**正解是派生色**（CONTOUR_DERIVED=True）：
 #   线色由该像素的底图色算出（同色相 + 降饱和 + 明度分档），线就永远"长在地里"。
 C_MINOR, C_MAJOR = (152, 144, 132), (100, 90, 80)     # 仅 CONTOUR_DERIVED=False 时用
-A_MINOR, A_MAJOR = 0.45, 0.82                          # 派生色的融合度（色相已贴近，可给足）
+A_MINOR, A_MAJOR = 0.19, 0.47                          # 派生色融合度（2026-10-25 用户定默认 = 27 条线路在用的轻量档）
 # --- 派生色参数（首, 计）---
 CONTOUR_DERIVED   = True      # True = 随底图派生（推荐）；False = 用上面的固定灰棕（旧行为）
 CONTOUR_DARKEN    = (0.74, 0.46)   # 亮底（亮度 ≥ 阈值）处的明度系数：越高压得越狠
@@ -718,7 +721,8 @@ def hypso(dem, snowline=None):
 # 低海拔段（森林 / 灌丛）给绝对高程带：本窗口含南部深切河谷（DEM 实测低至 ~2900 m，
 #  吉隆沟方向是有林区），只画 4200 m 以上会把整片南谷 clip 成一块平色。
 # 季节档（2026-10-20 用户要求：后续所有出图都基于夏季地貌）
-#   summer = 植被更绿、雪线整体上移 SUMMER_SNOW_SHIFT 米；annual = 旧的年常态配色。
+#   summer = 植被更绿；雪线偏移看 CFG["snow_month"]（**默认 7 月档 −150 m**，
+#     见 MONTH_SNOW_SHIFT / DEFAULT_SNOW_MONTH）；annual = 旧的年常态配色（月份键不生效）。
 #   CFG["terrain_season"] 可按线路覆盖。
 SEASON = "summer"
 SUMMER_SNOW_SHIFT = 350.0
@@ -734,6 +738,10 @@ MONTH_SNOW_SHIFT = {
     9: 200.0,    # 9 月：最少年积雪
     10: 350.0,   # 10 月：新雪开始，视觉雪线回升
 }
+# 未配 CFG["snow_month"] 时的默认档（2026-10-25 用户定：**默认 7 月**，−150 m）。
+# 例外在线路级单独配：孟克特-那拉提 / 喀拉峻 / 托乎拉苏赛里木湖山脊线 = 6 月（残雪期）。
+# ⚠ terrain_season="annual" 时月份键整体不生效（走年常态，无偏移）。
+DEFAULT_SNOW_MONTH = 7
 BELT_DENSIFY_M = 100.0   # 密化步长：段间每 ~100 m 插一个中间色，过渡更自然
 
 
@@ -823,8 +831,9 @@ def belt_stops(dem, snowline, verbose=True, season=None):
       两条曲线只在 s−1300 处交接、不再交叉，整条色带绿度单调递减。
 
     season：
-      · "summer"（默认）：植被更绿更饱和、雪线由调用方整体上移 SUMMER_SNOW_SHIFT 米；
-      · "annual"：旧的年常态配色。
+      · "summer"（默认）：植被更绿更饱和；雪线按 CFG["snow_month"] 偏移
+        （默认 7 月档 −150 m，见 DEFAULT_SNOW_MONTH）；
+      · "annual"：旧的年常态配色（无月份偏移）。
     """
     dmin, dmax = float(np.nanmin(dem)), float(np.nanmax(dem))
     s = float(snowline)                       # 调用方已按季节偏移过
@@ -1020,12 +1029,14 @@ def pick_contour_interval(dem_out, verbose=True):
     * 高海拔雪原线（希夏邦马，2026-10-16）：20 m → 28.6% 仍在默认阈值内，
       但陡坡线成排、雪原上偏抢眼 → 线路级把目标收到 **0.26** → 退到 25 m（23.8%）。
 
-    两级可配置（都在 `route_def.CFG`，只影响本线路，不动全局默认值）：
-      * `contour_target_cov`：本次的覆盖率**上限**（缺省 `CONTOUR_TARGET_COV`）；
+    两级可配置（都在 `route_def.CFG`；2026-10-25 起全局默认即 0.20/0.15，
+    未配的线路也走同一区间，线路级覆盖只为个别调整）：
+      * `contour_target_cov`：本次的覆盖率**上限**（缺省 `CONTOUR_TARGET_COV`=0.20）；
       * `contour_minor`：直接指定首曲线间隔，跳过自适应（缺省 None = 自适应）；
-      * `contour_cov_min`（2026-10-24 新增）：覆盖率**下限**。配了之后不是"越细越好"，
-        而是**在 [下限, 上限] 区间里挑一个覆盖率最接近中点的等高距** —— 疏密随地形自适应，
-        但被夹在一个可读区间里（用户 2026-10-24："线覆盖上限 20%、下限 15%，动态调整"）。
+      * `contour_cov_min`（2026-10-24 新增）：覆盖率**下限**（缺省 `CONTOUR_COV_MIN`=0.15）。
+        配了之后不是"越细越好"，而是**在 [下限, 上限] 区间里挑一个覆盖率最接近中点的等高距**
+        —— 疏密随地形自适应，但被夹在一个可读区间里（用户 2026-10-24："线覆盖上限 20%、
+        下限 15%，动态调整"）。
         区间内没有候选时退到"≤ 上限里最接近下限的一档"；连最小间隔都超上限时取最粗的一档并告警。
     计曲线由 `nice_major()` 取规范值（不一定是 ×5，见该函数注释）。
     """
@@ -1838,7 +1849,10 @@ def build_terrain():
             _shift = float(MONTH_SNOW_SHIFT.get(_m, MONTH_SNOW_SHIFT[9]))
             print(f"   月份档 {_m} 月：雪线偏移 {_shift:+.0f} m（相对现代雪线）")
         else:
-            _shift = float(_route_cfg("summer_snow_shift", SUMMER_SNOW_SHIFT))
+            # 2026-10-25 用户定：未配月份 = 默认 7 月档（−150 m）。
+            # 旧行为是沿用 SUMMER_SNOW_SHIFT(+350，≈10 月)，会把雪线画得过高。
+            _shift = float(_route_cfg("summer_snow_shift",
+                                      MONTH_SNOW_SHIFT[DEFAULT_SNOW_MONTH]))
         _why = "季节性积雪已退" if _shift >= 0 else "仍处残雪期，雪线低于平衡线"
         print(f"   季节档 summer：雪线 {snow_m:.0f} → {snow_m + _shift:.0f} m"
               f"（{_shift:+.0f} m，{_why}）")
