@@ -155,6 +155,7 @@ agent_created: true
 | map | `render_map_hi.py` | `<file_stem>-全线地图.jpg` |
 | gpx | `make_gpx.py` | `<file_stem>.gpx` |
 | qa | `qa_guide.py` | 数值化自检（不产文件，只判成败） |
+| — | `check_window.py` | 窗口自检：名峰是否被切在图外（exit 1 = 图外有个比图里更高的峰）。线路名带峰名的线必跑 |
 
 **线路相关的只有一个文件：`scripts/route_def.py`。** 其余 8 个脚本一句线路名都不认，
 全部从 `route_def` 读（`CFG` 文案 / `POIS` 点位 / 里程爬升 / `CFG["kml"]`）。

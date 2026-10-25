@@ -100,6 +100,9 @@
 - [ ] 雪线：7 月线要显式 `snow_month: 7`；若配了 `terrain_season="annual"`，
       月份键不生效，**必须把折算值直接写进 `snowline_m`**（见 pitfalls-terrain §27）。
 - [ ] 批量出图时 `shoot_guide` / `render_map_hi` 偶发退出码 1 → 单独串行重跑该步（见 efficiency §7）。
+- [ ] **窗口有没有切掉线路名里那座峰**：`python scripts/check_window.py`，
+      exit 1 就说明「图外有个比图里更高的名峰」（珠峰东坡 2026-10-25：珠峰差 663 m 在图外，
+      用户直接问"这里没有珠峰吗"）。窗口是自动推的线路尤其要跑（见 pitfalls-terrain §21.6）。
 - [ ] **批量同步技能脚本时绝不覆盖项目 `route_def.py`**（2026-10-24 晚实测事故：
       同步循环漏掉 `if f.name != "route_def.py"` 过滤，33 个项目的线路文案被技能示例
       （九华山模板）整体覆盖 —— 症状就是第 39 条：交付物全叫「九华山南北穿越-*」。

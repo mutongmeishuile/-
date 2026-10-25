@@ -18,6 +18,7 @@
 | **指北针/比例尺/图例压住轨迹，或太大挡视线** | `scripts/map_svg.py` 的 `FURN_*` 系数 + `guide_common.Placer`；`references/pitfalls-map-svg.md` §9 |
 | **图例压住了冰川/山体（用户："遮住想看的山峰了"）、或"下半幅图例占比太大、喧宾夺主"** | `references/pitfalls-map-svg.md` **§21**（满幅地形没有空白角 → `CFG["legend_outside"]=True` 走「标题带 + 地图 + 图例带」，图例带通栏密排；口径 地图≥75% / 标题≈11% / 图例≤15%） |
 | **用户说"字体统一 / 精细 / 线太粗 / 符号太大 / 地名太密太抢眼 / 要动态避让"** | `references/pitfalls-map-svg.md` **§22**（`<svg>` 根节点声明一次字体；POI 字号固定 14.4 **不乘 PS**；线宽 3.0/4.9、符号 0.66；底图地名最后统一排位 + 按"垭口>村>湖>峰"取舍 + 与 POI 同名去重） |
+| **用户问「这里怎么没有 XX 峰 / 没有珠峰吗」、线路名里的主峰图上找不到** | **先跑 `python scripts/check_window.py`**（窗口外 km 内有名峰且高于图内最高峰 → 报红）。多半是**峰被窗口切在图外**，不是数据缺：`osm.json` 里峰名高程都齐。判据/修法见 `pitfalls-terrain.md` **§21.6**（留白是「轨迹跨度的百分比」，紧凑环线差一点就切主峰；珠峰东坡 2026-10-25 差 663 m）。⚠ 改 bbox 必须 `fetch_osm --force` 且**先备份 `osm.json`** |
 | **高清地图"没有标题" / 要求扩大窗口、把周边知名山峰包进来** | `references/pitfalls-terrain.md` **§21**（`bbox` 显式给、按轨迹居中、只包必要的山；⚠ 换窗口 = `osm.json` 作废，**重抓前必须先备份**，否则全镜像失败会写空缓存覆盖） |
 | 底图取源、合规、瓦片站挂了 | `references/pitfalls-terrain.md` §1 |
 | **图上一整块区域完全没有起伏、只剩等高线（不是水体却是一个色）** | `references/pitfalls-terrain.md` **§8a / §8a-2**（先量 `fill_voids` 前后 `diff>0.5` 的像素占比，>0.5% 就要警惕：§8a = 「低于参考面 900 m」在几百 km 窗口的误判；§8a-2 = 「`dem < med−2500` 坏瓦片兜底」把高海拔窗口的低谷整片抹平） |
