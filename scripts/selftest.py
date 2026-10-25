@@ -480,11 +480,43 @@ def t_contour_cov_min():
                 RD.CFG[k] = v
 
 
+def t_snowline_legend():
+    print("⑫ 图例雪线 desc 必须含出图值（meta['snowline']）—— 贡嘎 fork 图文打架守卫")
+    try:
+        import contextlib
+        import io
+        import guide_common as GC
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+    if not hasattr(GC, "check_snowline_legend"):
+        print("         （跳过：guide_common 无 check_snowline_legend）")
+        return
+
+    # monkeypatch load_meta：不碰磁盘，也不依赖当前目录是哪个项目
+    saved = GC.load_meta
+    GC.load_meta = lambda: {"snowline": 4950.0}
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            GC.check_snowline_legend("≈4950 m · 7 月档（ELA 5100 −150 m）以上为积雪白")
+        check("desc 含出图值 4950 时不告警", "不一致" not in buf.getvalue(), buf.getvalue())
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            GC.check_snowline_legend("西坡雪线 ≈5100 m（ELA 5000–5200 m）")
+        out = buf.getvalue()
+        check("desc 只有旧值 5100 时告警且点出 4950",
+              "不一致" in out and "4950" in out, out)
+    finally:
+        GC.load_meta = saved
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
-               t_pick_name, t_peak_snap, t_contour_cov_min):
+               t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend):
         try:
             fn()
         except Exception as e:                                      # noqa

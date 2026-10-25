@@ -1954,6 +1954,10 @@ def build_terrain():
          "box": meta["box"], "bbox": [LON0, LAT0, LON1, LAT1], "z": meta["z"],
          "tx0": meta["tx0"], "ty0": meta["ty0"],
          "contour": {"minor": c_minor, "major": c_major},   # 本次自适应选定的等高距
+         # 出图雪线（已含月档偏移）：图例 desc 是手写的，没有这个键就没法自动比对 ——
+         # 2026-10-25 贡嘎 fork 实测 desc 写 5100 / 图上画 4950 的图文打架就是这么来的。
+         # 下游 build_guide / map_svg / qa_guide 经 GC.check_snowline_legend 比对告警。
+         "snowline": snow_m,
          "source": f"本地自渲染：地形 DEM z{z_use} + OSM 矢量（非瓦片服务）",
          "attribution": "Elevation: SRTM/Copernicus DEM (AWS Open Data, 免费开放) · "
                         "Map data: © OpenStreetMap contributors (ODbL) · "

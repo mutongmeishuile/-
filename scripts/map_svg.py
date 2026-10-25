@@ -317,6 +317,8 @@ def _legend_rows():
     extra = _CFG.get("legend_extra")
     if extra:
         for it in extra:
+            if "雪线" in str(it.get("tag", "")):
+                GC.check_snowline_legend(it.get("desc", ""), "（地图图例）")
             rows.append((it.get("color", "#563A8A"), it.get("tag", ""),
                          it.get("desc", ""), _legend_km_txt(it.get("dist_label", "")),
                          it.get("width", 1.5), it.get("dash", ' stroke-dasharray="8 5"')))

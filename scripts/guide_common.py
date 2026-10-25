@@ -24,6 +24,7 @@ Placer 的设计目标（对应技能要求「缩小 + 动态放在合适位置�
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -203,6 +204,33 @@ def load_meta():
             f"      python scripts/make_terrain.py    # 出 base_map.jpg + base_meta.json\n"
             f"    或者直接：python scripts/make_all.py")
     return json.loads(f.read_text(encoding="utf-8"))
+
+
+def check_snowline_legend(desc, where=""):
+    """图例雪线行的 desc 数字必须与 base_meta.json 的**出图雪线**一致。
+
+    2026-10-25 贡嘎 fork 实测：desc 手写「≈5100 m」而出图画 4950（ELA 5100 −150 m），
+    图文打架。根因是图例文案全手工、没有任何环节比对过出图值。现在
+    make_terrain 把出图值写进 meta["snowline"]，这里做渲染期比对：
+    desc 里出现过的 3–5 位数字中**没有**出图值 → 打印警告（不抛异常，
+    交接中的链路不该被一行文案卡住；警告足够醒目）。
+
+    判据说明：desc 里可以同时有 ELA（5100）和出图值（4950），只要**包含**出图值即通过；
+    一个都没有才算不一致（例如整条文案还是上季度的旧值）。
+    """
+    try:
+        m = load_meta() or {}
+        s = m.get("snowline")
+        if s is None or not desc:
+            return
+        val = int(round(float(s)))
+        nums = {int(x) for x in re.findall(r"\d{3,5}", str(desc))}
+        if val not in nums:
+            print(f"  ⚠ 图例雪线行与出图值不一致{where}：meta.snowline={val} m，"
+                  f"desc 里只有 {sorted(nums) or '无数字'} —— "
+                  f"去 route_def.CFG['legend_extra'] 改 desc（出图值 = ELA ± 月档偏移）")
+    except Exception:                                              # noqa
+        pass
 
 
 def mercator_px(lon, lat, z, tile=256):

@@ -225,6 +225,39 @@ def todo_guard():
     return n
 
 
+def snowline_legend_guard():
+    """图例雪线 desc 与出图雪线一致性守卫（2026-10-25 增）。
+
+    渲染期 build_guide / map_svg 已经各检一次（GC.check_snowline_legend），
+    这里再独立检一次：qa_guide 常被单独跑（`make_all` 里也是独立步骤），
+    不能假设同一次运行里渲染步骤恰好也跑过。
+    """
+    try:
+        import route_def as RD
+        cfg = getattr(RD, "CFG", {}) or {}
+        m = GC.load_meta() or {}
+        s = m.get("snowline")
+        if s is None:
+            return
+        val = int(round(float(s)))
+        bad = []
+        for it in cfg.get("legend_extra") or []:
+            if "雪线" not in str(it.get("tag", "")):
+                continue
+            nums = {int(x) for x in re.findall(r"\d{3,5}", str(it.get("desc", "")))}
+            if val not in nums:
+                bad.append(str(it.get("desc", "")))
+        if bad:
+            print(f"  !! 图例雪线 desc 与出图值 {val} m 不符：{bad}")
+            print("     → 改 route_def.CFG['legend_extra'] 的 desc（出图值 = ELA ± 月档偏移）")
+        else:
+            print(f"  [OK]  图例雪线 desc 与出图值 {val} m 一致")
+    except SystemExit:
+        raise
+    except Exception as _e:                                        # noqa
+        print(f"  [..]  雪线图例检查跳过：{_e}")
+
+
 if __name__ == "__main__":
     # 本技能**只出宽屏长图**（手机版长图已废弃，手机阅读直接看 HTML）。
     # 所以 600 px 那趟只是"看手机换行有没有崩"的探针，不是产物 —— 不想看就 --no-phone，
@@ -289,6 +322,7 @@ if __name__ == "__main__":
     print("③ 三件套压轨迹：见 make_all 日志里 map_svg.self_check 的「压轨迹点/家具互相重叠」")
     n_todo = todo_guard()
     allok &= (n_todo == 0)
+    snowline_legend_guard()
     if overlay_paths:
         print("  → 请在下方审计截图中确认：桌面版无红/橙/品红轮廓（低对比度/越界/被裁）")
     print("\n结论：" + ("全部通过 ✓" if allok else "有问题，见上 ↑"))

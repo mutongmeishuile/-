@@ -459,8 +459,11 @@ def _legend_html():
     extra = CFG.get("legend_extra")
     if extra:
         for it in extra:
+            desc = it.get("desc", "")
+            if "雪线" in str(it.get("tag", "")):
+                GC.check_snowline_legend(desc, "（HTML 图例）")
             rows.append((it.get("color", "#8C8C86"), it.get("tag", ""),
-                         it.get("desc", ""), it.get("dist_label", ""),
+                         desc, it.get("dist_label", ""),
                          bool(it.get("dash"))))
     elif CFG.get("extra_legend_desc"):
         rows.append((CFG.get("extra_legend_color", "#8C8A86"),
