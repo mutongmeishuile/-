@@ -106,10 +106,20 @@ CONTOUR_NICE = (10, 20, 25, 50, 100, 200, 250, 500)   # 候选等高距（米，
 CONTOUR_TARGET_COV = 0.20   # 线覆盖率上限（2026-10-25 用户定：全局默认对齐 37 条线路在用的 0.20 口径）
 CONTOUR_COV_MIN = 0.15      # 覆盖率下限（2026-10-25 用户定）：与上限组成 [0.15, 0.20] 动态区间，
                             # 区间内取最接近中点的一档；缺省 None = 旧的"≤上限"单阈值行为
-# contour_coverage()（band 边缘估计）→ 真实像素线覆盖 的折算系数（2026-10-24 实测 12 条线路，
-# 比值 0.66–1.0、均值 ≈0.82）。用双阈值判据时必须折算到实际口径，否则用户配的 15–20%
-# 落到图上只有 9–13%。
+# contour_coverage()（band 边缘估计，**不扣陡坡省略**）→ 真实像素线覆盖 的折算系数。
+# 2026-10-25 起选档改用 `contour_actual_coverage()`（逐像素复刻 paint_contours 的判据，
+# 含陡坡省略），这个常数只留给"拿不到 m_per_px 的老调用/自检"当兜底。
+# 为什么废掉它当主判据：它是**地形相关的**——陡坡线省略多的高山区实际只有 0.66–0.75，
+# 而巴丹吉林这种缓沙丘几乎没有省略、比值 ≈1.0，用一个常数 0.82 必然两头都不准
+# （2026-10-25 普查：6 条高山线本该选更细一档被挡掉，1 条沙漠线被低估）。
 COV_EST_TO_ACTUAL = 0.82
+# 上限的**容忍带**：覆盖率允许超出 `contour_target_cov` 这么多（绝对值，3 个百分点）。
+# 为什么要容忍：候选等高距是离散规范档，20.3% 与 10.2% 之间没有中间态——
+# 死守 20% 会把密度砍掉一半（他念-梅里、狼塔、KBC 等实测 10.2–11.4%，
+# 而更细一档只超 0.3–2.7 pp）。取 3 pp 而不是 2.5 pp：北天山中线更细一档是 22.66%，
+# 2.5 pp 时以 0.16 pp 之差被挡在外面（实测仍是 50 m / 11.4%），同一批线路里
+# 22.16% 的梅里北坡却能进 —— 阈值卡在数据堆中间，纯粹是指标巧合，不是制图判断。
+COV_OVER_TOL = 0.03
 # ⚠ 该阈值可**按线路覆盖**：`route_def.CFG["contour_target_cov"]`。
 #   2026-10-16 希夏邦马实测：本区 20 m 覆盖率 28.6%（虽在 30% 以内，但山体陡坡处线仍成排、
 #   雪原上偏抢眼），用户要求"再细一些" → 本线把目标收到 **0.26**，自动退到 25 m（23.8%）。
@@ -992,6 +1002,37 @@ def contour_coverage(dem_out, interval):
     return float(e.mean())
 
 
+def _steep_keep(dem_out, m_per_px):
+    """陡坡省略的**保留掩膜**（True = 该像元的首曲线仍画）。与 paint_contours 同一判据。"""
+    gy, gx = np.gradient(dem_out.astype(np.float32))
+    tan_slope = np.hypot(gx, gy) / float(m_per_px)
+    return tan_slope < STEEP_SKIP_MINOR
+
+
+def _cov_masked(dem_out, interval, keep=None):
+    """band 边缘覆盖率；给了 keep 就只数保留下来的像元。"""
+    b = np.floor(dem_out / interval).astype(np.int32)
+    e = np.zeros(b.shape, bool)
+    e[1:, :] |= b[1:, :] != b[:-1, :]
+    e[:, 1:] |= b[:, 1:] != b[:, :-1]
+    if keep is not None:
+        e &= keep
+    return float(e.mean())
+
+
+def contour_actual_coverage(dem_out, interval, m_per_px=None, keep=None):
+    """给定等高距，返回**图上真实的**线像元占比 —— 逐像素复刻 paint_contours 的判据。
+
+    与 `contour_coverage()` 的唯一差别：扣掉陡坡省略（tan ≥ `STEEP_SKIP_MINOR` 不画首曲线）。
+    2026-10-25 改用这个做选档判据，理由见 `COV_EST_TO_ACTUAL` / `COV_OVER_TOL` 的注释：
+    缓坡地区两者几乎相等，陡峭山区能差 3–8 个百分点，用一个常数折算必然两头都不准。
+    只算首曲线（与 paint_contours 打印的「线覆盖 X% 像素」同口径，计曲线是它的子集）。
+    """
+    if keep is None and m_per_px:
+        keep = _steep_keep(dem_out, m_per_px)
+    return _cov_masked(dem_out, interval, keep)
+
+
 def _route_cfg(key, default):
     """读 route_def.CFG 里的线路级渲染配置（取不到就回退默认，脚本可独立运行）。
 
@@ -1016,7 +1057,7 @@ def nice_major(minor, ratio=5):
     return minor * ratio
 
 
-def pick_contour_interval(dem_out, verbose=True):
+def pick_contour_interval(dem_out, verbose=True, m_per_px=None):
     """按窗口自适应选等高距（首曲线, 计曲线, 覆盖率）。
 
     ⚠ 这是"比例尺越大、等高线越密、地图越难看"的正解（2026-10-10 狼塔 C+V 踩坑）：
@@ -1039,17 +1080,34 @@ def pick_contour_interval(dem_out, verbose=True):
         下限 15%，动态调整"）。
         区间内没有候选时退到"≤ 上限里最接近下限的一档"；连最小间隔都超上限时取最粗的一档并告警。
     计曲线由 `nice_major()` 取规范值（不一定是 ×5，见该函数注释）。
+
+    `m_per_px`（栅格米/像素）**决定判据口径**：给了就用 `contour_actual_coverage()`
+    逐像素复刻绘制判据（含陡坡省略），这是唯一与"图上看到的密度"一致的口径；
+    不给（老调用/自检）退回 band 边缘估计 × `COV_EST_TO_ACTUAL`，只作兜底。
+    2026-10-25 普查结论：`COV_EST_TO_ACTUAL` 是**地形相关的**，用常数必然偏差
+    —— 6 条高山线本该进更细一档、3 条该退档，都是它算错的。
     """
     target = float(_route_cfg("contour_target_cov", CONTOUR_TARGET_COV))
     forced = _route_cfg("contour_minor", None)
     if forced:
         iv = float(forced)
-        cov = contour_coverage(dem_out, iv)
+        cov = contour_actual_coverage(dem_out, iv, m_per_px)
         if verbose:
             print(f"   等高距由线路指定 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
                   f"线覆盖 {cov * 100:.1f}%")
         return iv, nice_major(iv), cov
-    cands = [(iv, contour_coverage(dem_out, iv)) for iv in CONTOUR_NICE]
+    # 判据用**图上真实的**线覆盖（含陡坡省略）。拿不到 m_per_px 时退回旧估计 × 常数折算。
+    if m_per_px:
+        _keep = _steep_keep(dem_out, m_per_px)          # 斜率只算一次，8 个候选共用
+        cands = [(iv, _cov_masked(dem_out, iv, _keep)) for iv in CONTOUR_NICE]
+
+        def _act(cv):
+            return cv                                   # 已经是实测口径，不再折算
+    else:
+        cands = [(iv, contour_coverage(dem_out, iv)) for iv in CONTOUR_NICE]
+
+        def _act(cv):
+            return cv * COV_EST_TO_ACTUAL
     # ⚠ 缺省必须是 CONTOUR_COV_MIN（0.15），不能是 None：2026-10-25 首发版在这里
     # 写了 None，未配 contour_cov_min 的 18 条线路静默走回旧单阈值行为，
     # 「下限 0.15」对它们形同未配（报告口径与实物不符）。
@@ -1057,20 +1115,20 @@ def pick_contour_interval(dem_out, verbose=True):
     if lo is not None:
         lo = float(lo)
         if 0 < lo < target:
-            # 判据用「实际像素线覆盖」：contour_coverage() 是按 band 边缘的**估计**，
-            # 实测它比真实像素占比高 15–35%（陡坡省略会减线、计曲线加粗会增线），
-            # 所以比较时乘 COV_EST_TO_ACTUAL 折算到实际口径，
-            # 否则用户配的 15–20% 落到图上只有 9–13%（2026-10-24 实测）。
-            def _act(cv):
-                return cv * COV_EST_TO_ACTUAL
-            inside = [(iv, cv) for iv, cv in cands if lo <= _act(cv) <= target]
+            # 上限带容忍：`target + COV_OVER_TOL` 也算候选（见该常量注释）。
+            hi = target + COV_OVER_TOL
+            inside = [(iv, cv) for iv, cv in cands if lo <= _act(cv) <= hi]
             if inside:
+                # 排序中点仍取**目标区间**的中点（不含容忍带）：
+                # 容忍带只负责"别把超 1–2 pp 的好档扔掉"，不负责把最优往右拉。
                 mid = (lo + target) * 0.5
                 iv, cov = min(inside, key=lambda x: abs(_act(x[1]) - mid))
                 if verbose:
+                    _o = "（超上限 ≤%.1f pp，在容忍带内）" % (COV_OVER_TOL * 100) \
+                        if _act(cov) > target else ""
                     print(f"   等高距动态 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
                           f"预计实际线覆盖 {_act(cov) * 100:.1f}%"
-                          f"（区间 {lo * 100:.0f}–{target * 100:.0f}%，取最接近中点 {mid * 100:.0f}% 的一档）")
+                          f"（区间 {lo * 100:.0f}–{target * 100:.0f}%，取最接近中点 {mid * 100:.0f}% 的一档{_o}）")
                 return iv, nice_major(iv), cov
             below = [(iv, cv) for iv, cv in cands if _act(cv) < lo]
             if below:
@@ -1087,14 +1145,14 @@ def pick_contour_interval(dem_out, verbose=True):
             return iv, nice_major(iv), cov
     fallback = (CONTOUR_NICE[-1], nice_major(CONTOUR_NICE[-1]), 1.0)
     for iv in CONTOUR_NICE:
-        cov = contour_coverage(dem_out, iv)
-        if cov <= target:
+        cov = contour_actual_coverage(dem_out, iv, m_per_px)
+        if _act(cov) <= target:
             if verbose:
                 tag = "（缺省）" if iv == CONTOUR_MINOR else \
                     f"（{CONTOUR_MINOR:.0f} m 覆盖率 " \
-                    f"{contour_coverage(dem_out, CONTOUR_MINOR) * 100:.0f}% 超出目标，自动退到 {iv:g} m）"
+                    f"{_act(contour_actual_coverage(dem_out, CONTOUR_MINOR, m_per_px)) * 100:.0f}% 超出目标，自动退到 {iv:g} m）"
                 print(f"   等高距自适应 → 首曲线 {iv:g} m / 计曲线 {nice_major(iv):g} m，"
-                  f"线覆盖 {cov * 100:.1f}% ≤ 目标 {target * 100:.0f}% {tag}")
+                  f"线覆盖 {_act(cov) * 100:.1f}% ≤ 目标 {target * 100:.0f}% {tag}")
             return iv, nice_major(iv), cov
     return fallback
 
@@ -1918,12 +1976,14 @@ def build_terrain():
 
     dem_out = np.asarray(Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS),
                          dtype=np.float32)
-    c_minor, c_major, c_cov = pick_contour_interval(dem_out)
+    # m_per_px 必须**先算**：选档判据要用它复刻陡坡省略（2026-10-25），否则算出来的
+    # 覆盖率是"没省略的线数"，高山线会系统性低估实际密度、选粗一档。
+    _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
+    c_minor, c_major, c_cov = pick_contour_interval(dem_out, m_per_px=_m_per_px)
     _w_major = max(CONTOUR_DILATE[1], SS - 2)
     print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
           f"线宽 {_w_major}@{RASTER_W}px）…")
     arr = np.asarray(pil).copy()
-    _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
     # 线宽补偿：SS>2 时等高线像素数不跟着涨，缩到 1600 内嵌/长图后会发虚
     # （4512→1600 只有 0.35×，1 px 线只盖住 35% 像素）。计曲线补 1 px。
     _w_major = max(CONTOUR_DILATE[1], SS - 2)

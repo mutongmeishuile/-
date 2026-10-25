@@ -446,7 +446,8 @@ def t_contour_cov_min():
             single = next((iv for iv, cv in cands if cv <= tgt), MT.CONTOUR_NICE[-1])
             lo, K = MT.CONTOUR_COV_MIN, MT.COV_EST_TO_ACTUAL
             act = lambda cv: cv * K                                  # noqa: E731
-            inside = [(iv, cv) for iv, cv in cands if lo <= act(cv) <= tgt]
+            hi = tgt + MT.COV_OVER_TOL                               # 上限容忍带（2026-10-25）
+            inside = [(iv, cv) for iv, cv in cands if lo <= act(cv) <= hi]
             if inside:
                 mid = (lo + tgt) * 0.5
                 dyn = min(inside, key=lambda x: abs(act(x[1]) - mid))[0]
@@ -474,6 +475,51 @@ def t_contour_cov_min():
         RD.CFG["contour_cov_min"] = 0.10
         MT.pick_contour_interval(_sawtooth(100.0), verbose=False)
         check("显式配下限也能跑（不抛异常）", True)
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                RD.CFG[k] = v
+
+
+def t_contour_actual():
+    print("⑮ 选档判据改为实测覆盖（含陡坡省略）+ 上限容忍带 3 pp")
+    try:
+        import numpy as np
+        import make_terrain as MT
+        import route_def as RD
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+    if not hasattr(MT, "contour_actual_coverage") or not hasattr(MT, "COV_OVER_TOL"):
+        check("make_terrain 有 contour_actual_coverage / COV_OVER_TOL", False, "缺失")
+        return
+
+    # ① 陡坡省略必须真的减线：同一 DEM 传 m_per_px（tan 远超 1.0）后覆盖率应明显下降
+    x = np.arange(256, dtype=np.float32)
+    tri = np.abs((x / 24.0) % 2.0 - 1.0) * 200.0        # 振幅 200 m、周期 24 px
+    dem = np.repeat(tri[None, :], 32, axis=0).astype(np.float32)
+    plain = MT.contour_coverage(dem, 20)
+    skipped = MT.contour_actual_coverage(dem, 20, m_per_px=0.5)
+    check("陡坡省略后实测覆盖 < band 边缘估计（差值 > 20%）",
+          skipped < plain * 0.8, f"估计 {plain * 100:.1f}% / 实测 {skipped * 100:.1f}%")
+    check("不传 m_per_px 时退回 band 估计（逐位相等）",
+          abs(MT.contour_actual_coverage(dem, 20) - plain) < 1e-12,
+          f"{MT.contour_actual_coverage(dem, 20)} vs {plain}")
+
+    # ② 上限容忍带：等坡度斜面，覆盖率 = 坡度/等高距（精确可算）
+    #    m_per_px 取极大 → tan≈0，不触发陡坡省略，只考察"选档策略"本身。
+    saved = {k: RD.CFG.pop(k, None) for k in
+             ("contour_cov_min", "contour_target_cov", "contour_minor")}
+    try:
+        def _ramp(s):
+            return np.repeat((x * s)[None, :], 16, axis=0).astype(np.float32)
+
+        # s=5.25：25 m → 21.0%（超上限 1.0 pp，在容忍带内，应被选中）
+        got = MT.pick_contour_interval(_ramp(5.25), verbose=False, m_per_px=1e9)[0]
+        check("超上限 1.0 pp 的档仍在容忍带内 → 选 25 m", got == 25, f"实选 {got:g} m")
+        # s=6.0：25 m → 24.0%（超上限 4.0 pp，超出 3 pp 容忍带 → 退到 50 m / 12%）
+        got = MT.pick_contour_interval(_ramp(6.0), verbose=False, m_per_px=1e9)[0]
+        check("超上限 4.0 pp 超出容忍带 → 退到 50 m", got == 50, f"实选 {got:g} m")
     finally:
         for k, v in saved.items():
             if v is not None:
@@ -665,7 +711,7 @@ def main():
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
-               t_day_palette_and_trail_legend, t_keep_raw_batch):
+               t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual):
         try:
             fn()
         except Exception as e:                                      # noqa
