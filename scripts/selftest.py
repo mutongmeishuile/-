@@ -512,11 +512,56 @@ def t_snowline_legend():
         GC.load_meta = saved
 
 
+def t_day_palette_and_trail_legend():
+    print("⑬ 分日配色回退 + 图例步道色守卫（2026-10-25 用户实测两项）")
+    try:
+        import contextlib
+        import io
+        import guide_common as GC
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+    if not (hasattr(GC, "day_colors") and hasattr(GC, "check_trail_legend")):
+        print("         （跳过：guide_common 无 day_colors / check_trail_legend）")
+        return
+
+    # --- 分日配色：days 没写 color 时必须按色板取，且相邻两天不同色 ---
+    # bug 现场：17 条线路的 days 把每天显式写成同一个 #E4572E（数据问题），
+    # 而 map_svg 的 d.get("color", D1_C) 让没写色的天也全落回第一天橙。
+    days_no_color = [{"tag": f"D{i+1}"} for i in range(7)]
+    cols, txts = GC.day_colors(days_no_color)
+    check("缺 color 的 7 天取到 7 个不同色", len(set(cols)) == 7, str(cols))
+    check("相邻两天永不撞色（含 >7 天循环）",
+          all(cols[i] != cols[i + 1] for i in range(len(cols) - 1)) and
+          all(a != b for a, b in zip(GC.day_colors(
+              [{"tag": f"D{i+1}"} for i in range(13)])[0],
+              GC.day_colors([{"tag": f"D{i+1}"} for i in range(13)])[0][1:])))
+    check("文字色与线段色成对（非同色）",
+          all(c != t for c, t in zip(cols, txts)))
+    # 显式写了 color 的仍按配置来（不强行覆盖用户选择）
+    cols2, _ = GC.day_colors([{"color": "#123456"}, {"tag": "D2"}])
+    check("显式 color 优先，其余按色板", cols2[0] == "#123456" and cols2[1] != "#123456", str(cols2))
+
+    # --- 图例步道色：必须与图上 TRAIL_STYLE 芯色一致 ---
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        GC.check_trail_legend("#563A8A", "（自检）")
+    check("图例步道色 = #563A8A 时不告警", "不一致" not in buf.getvalue(), buf.getvalue())
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        GC.check_trail_legend("#8C8A86", "（自检）")
+    out = buf.getvalue()
+    check("图例步道色写成灰色时告警且点出 #563A8A",
+          "不一致" in out and "563A8A" in out, out)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
-               t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend):
+               t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
+               t_day_palette_and_trail_legend):
         try:
             fn()
         except Exception as e:                                      # noqa

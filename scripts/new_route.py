@@ -36,12 +36,10 @@ OUT = HERE / "out"
 TODO = "★ TODO"          # 待办标记：生成的文件里靠它计数
 TODO_A, TODO_B = "★", " TODO"   # 同一标记的两半（供生成文件里的 _todo_count 拼接，见 gen）
 
-# 分日配色（7 色，够 7 天连穿不重复）。第二项是浅底上的深色文字色。
-# 色相分布：暖红→翠绿→紫→蓝→金橙→玫红→青绿，两两可辨，与植被/岩石底色错开。
-DAY_PALETTE = [("#E4572E", "#B23A1C"), ("#1E9E76", "#0F6E5C"),
-               ("#6C4FD8", "#4A33A8"), ("#2D7FF9", "#1B5FB8"),
-               ("#E8A838", "#B07818"), ("#D4568A", "#A03060"),
-               ("#00B8A9", "#00807A")]
+# 分日配色：2026-10-25 起收敛到 guide_common.DAY_PALETTE（单一来源，
+# build_guide / map_svg 的回退也读它）。这里保留同名导出供模板引用。
+import guide_common as _GC
+DAY_PALETTE = _GC.DAY_PALETTE
 
 # POI 类型推断：按名字里的关键词猜 pin 图形（只影响图标，猜错也不致命）
 _KIND_RULES = [

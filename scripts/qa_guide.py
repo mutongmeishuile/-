@@ -258,6 +258,42 @@ def snowline_legend_guard():
         print(f"  [..]  雪线图例检查跳过：{_e}")
 
 
+def trail_legend_guard():
+    """图例「步道」行颜色与图上步道芯色一致性守卫（2026-10-25 增）。
+
+    2026-10-25 用户实测「osm 步道为灰色」：全库 23 条线路的图例步道色
+    （#8C8A86 ×13 / #9658A4 ×8 / #96849F ×2）没有一条与 draw_osm.TRAIL_STYLE
+    的芯色 #563A8A 一致，build_guide 旧单行键的缺省值也是那个灰。
+    """
+    try:
+        import route_def as RD
+        cfg = getattr(RD, "CFG", {}) or {}
+        bad = []
+        n = 0
+        for it in cfg.get("legend_extra") or []:
+            if "步道" not in str(it.get("tag", "")):
+                continue
+            n += 1
+            c = str(it.get("color", "")).strip().upper()
+            if c and c != GC.C_TRAIL_LEGEND.upper():
+                bad.append((str(it.get("tag", "")), c))
+        if cfg.get("extra_legend_desc"):
+            n += 1
+            c = str(cfg.get("extra_legend_color", "")).strip().upper()
+            if c and c != GC.C_TRAIL_LEGEND.upper():
+                bad.append((str(cfg.get("extra_legend_tag", "步道")), c))
+        if bad:
+            for tag, c in bad:
+                print(f"  !! 图例「{tag}」行颜色 {c} 与图上步道 {GC.C_TRAIL_LEGEND} 不符")
+            print(f"     → 改 route_def.CFG 里对应行的 color 为 {GC.C_TRAIL_LEGEND}")
+        elif n:
+            print(f"  [OK]  图例步道行颜色与图上一致（{GC.C_TRAIL_LEGEND}，{n} 行）")
+    except SystemExit:
+        raise
+    except Exception as _e:                                        # noqa
+        print(f"  [..]  步道图例检查跳过：{_e}")
+
+
 if __name__ == "__main__":
     # 本技能**只出宽屏长图**（手机版长图已废弃，手机阅读直接看 HTML）。
     # 所以 600 px 那趟只是"看手机换行有没有崩"的探针，不是产物 —— 不想看就 --no-phone，
@@ -322,6 +358,8 @@ if __name__ == "__main__":
     print("③ 三件套压轨迹：见 make_all 日志里 map_svg.self_check 的「压轨迹点/家具互相重叠」")
     n_todo = todo_guard()
     allok &= (n_todo == 0)
+    snowline_legend_guard()
+    trail_legend_guard()
     snowline_legend_guard()
     if overlay_paths:
         print("  → 请在下方审计截图中确认：桌面版无红/橙/品红轮廓（低对比度/越界/被裁）")

@@ -233,6 +233,59 @@ def check_snowline_legend(desc, where=""):
         pass
 
 
+# ---------------------------------------------------------------------------
+# 分日配色（2026-10-25 收敛到本处，原先散在 new_route.py 的 DAY_PALETTE）
+# 每项 = (线段色, 同色浅底上的深色文字色)。7 色相两两可辨，且与植被/岩石底色错开。
+# ⚠ 这是**缺省回退**色板：CFG["days"][i]["color"] 没写时按 i % 7 取，
+#    保证相邻两日必然不同色（7 色循环，i 与 i+1 永不相等）。
+#    2026-10-25 实测：17 条线路的 days 把每天都显式写成同一个 #E4572E
+#    （早期模板只写第一天），分日界在图上完全看不见 —— 那种显式同色
+#    只能改 route_def 数据，代码兜底管不了「写了但写错」。
+# ---------------------------------------------------------------------------
+DAY_PALETTE = [
+    ("#E4572E", "#B23A1C"),   # 暖红
+    ("#1E9E76", "#0F6E5C"),   # 翠绿
+    ("#6C4FD8", "#4A33A8"),   # 紫
+    ("#2D7FF9", "#1B5FB8"),   # 蓝
+    ("#E8A838", "#B07818"),   # 金橙
+    ("#D4568A", "#A03060"),   # 玫红
+    ("#00B8A9", "#00807A"),   # 青绿
+]
+
+# OSM 步道（path/footway/bridleway/steps）的图例色。**必须与 draw_osm.py
+# TRAIL_STYLE 的芯色 (86,58,138) 一致** —— 2026-10-25 用户实测发现图例
+# 色块是灰的（#8C8A86，早期「中性灰芯」时代的残留），而图上画的是深紫，
+# 图文对不上。build_guide 的旧缺省值也正是这个灰，已一并改掉。
+C_TRAIL_LEGEND = "#563A8A"
+
+
+def day_colors(days):
+    """按天数取分日线段色 / 文字色，缺 color 的按 DAY_PALETTE 回退。"""
+    cols, txts = [], []
+    for i, d in enumerate(days or []):
+        c = d.get("color") or DAY_PALETTE[i % len(DAY_PALETTE)][0]
+        cols.append(c)
+        txts.append(d.get("text_color") or DAY_PALETTE[i % len(DAY_PALETTE)][1])
+    return cols, txts
+
+
+def check_trail_legend(color, where=""):
+    """图例「步道」行的色块必须与图上步道同色（C_TRAIL_LEGEND）。
+
+    2026-10-25 用户实测「osm 步道为灰色」：13 条线路 legend_extra 写
+    #8C8A86、8 条写 #9658A4、2 条写 #96849F，全库没有一条与图上深紫一致；
+    build_guide 的旧单行键缺省值也是这个灰。根因同上——图例颜色全靠手写、
+    没有任何环节与 draw_osm.TRAIL_STYLE 比对过。
+    """
+    if not color:
+        return
+    c = str(color).strip().upper()
+    if c != C_TRAIL_LEGEND.upper():
+        print(f"  ⚠ 图例步道行颜色与图上不一致{where}：图例 {color}，"
+              f"图上步道为 {C_TRAIL_LEGEND} —— "
+              f"去 route_def.CFG['legend_extra']（或 extra_legend_color）改成 {C_TRAIL_LEGEND}")
+
+
 def mercator_px(lon, lat, z, tile=256):
     """经纬度 → 全球 Web Mercator 像素。**全技能唯一权威实现。**
 

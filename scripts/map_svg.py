@@ -319,11 +319,14 @@ def _legend_rows():
         for it in extra:
             if "雪线" in str(it.get("tag", "")):
                 GC.check_snowline_legend(it.get("desc", ""), "（地图图例）")
-            rows.append((it.get("color", "#563A8A"), it.get("tag", ""),
+            if "步道" in str(it.get("tag", "")):
+                GC.check_trail_legend(it.get("color", GC.C_TRAIL_LEGEND), "（地图图例）")
+            rows.append((it.get("color", GC.C_TRAIL_LEGEND), it.get("tag", ""),
                          it.get("desc", ""), _legend_km_txt(it.get("dist_label", "")),
                          it.get("width", 1.5), it.get("dash", ' stroke-dasharray="8 5"')))
     elif _CFG.get("extra_legend_desc"):
-        rows.append((_CFG.get("extra_legend_color", "#563A8A"),
+        GC.check_trail_legend(_CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND), "（地图图例·旧键）")
+        rows.append((_CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND),
                      _CFG.get("extra_legend_tag", "步道"),
                      _CFG["extra_legend_desc"], "", 1.5, ' stroke-dasharray="8 5"'))
     return rows
@@ -729,7 +732,10 @@ def build_map_overlay(mobile=False):
              f'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
     # ---- 分日配色：支持 N 天。优先 CFG["days"] 的 color + CFG["day_bounds"]（km），
     #      没有 day_bounds 时退回单分界 split1（两天）的老行为。
-    _day_cols = [d.get("color", D1_C) for d in _CFG.get("days", [])] or [D1_C, D2_C]
+    #      2026-10-25：缺 color 的按 DAY_PALETTE 回退（原先 d.get("color", D1_C)
+    #      让 17 条没写色的线路全日同一个橙，分日界在图上完全看不见）。
+    _day_cols, _day_txts = GC.day_colors(_CFG.get("days", []))
+    _day_cols = _day_cols or [D1_C, D2_C]
     _bounds_km = [0.0] + [float(b) for b in _CFG.get("day_bounds", [])] + [float(TOTAL_KM)]
     if len(_bounds_km) == 2:                      # 无 day_bounds → 老的两段行为
         _bounds_km = [0.0, float(KM[SPLIT_I]), float(TOTAL_KM)]

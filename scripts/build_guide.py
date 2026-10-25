@@ -31,12 +31,13 @@ SPLIT_I = _r["split1"]
 KM = _r["km"]
 
 DAYS = CFG.get("days", [])
-D1_C = DAYS[0]["color"] if DAYS else "#E4572E"
-D2_C = DAYS[1]["color"] if len(DAYS) > 1 else "#1E9E76"
-D1_T = DAYS[0].get("text_color", D1_C) if DAYS else "#B23A1C"
-D2_T = DAYS[1].get("text_color", D2_C) if len(DAYS) > 1 else "#0F6E5C"
-DAY_COLS = [d["color"] for d in DAYS] or [D1_C, D2_C]
-DAY_TXT = [d.get("text_color", d["color"]) for d in DAYS] or [D1_T, D2_T]
+# 2026-10-25：缺 color 按 DAY_PALETTE 回退（原先 `d["color"]` 直接 KeyError /
+# map_svg 里 `d.get("color", D1_C)` 让没写色的天全落回第一天橙，分日界消失）。
+DAY_COLS, DAY_TXT = GC.day_colors(DAYS)
+D1_C = DAY_COLS[0] if DAY_COLS else "#E4572E"
+D2_C = DAY_COLS[1] if len(DAY_COLS) > 1 else "#1E9E76"
+D1_T = DAY_TXT[0] if DAY_TXT else "#B23A1C"
+D2_T = DAY_TXT[1] if len(DAY_TXT) > 1 else "#0F6E5C"
 STEM = CFG.get("file_stem", "线路")
 
 def _find(name):
@@ -462,11 +463,16 @@ def _legend_html():
             desc = it.get("desc", "")
             if "雪线" in str(it.get("tag", "")):
                 GC.check_snowline_legend(desc, "（HTML 图例）")
-            rows.append((it.get("color", "#8C8C86"), it.get("tag", ""),
+            if "步道" in str(it.get("tag", "")):
+                # 2026-10-25：图例步道色块必须与 draw_osm.TRAIL_STYLE 芯色一致
+                GC.check_trail_legend(it.get("color", GC.C_TRAIL_LEGEND), "（HTML 图例）")
+            rows.append((it.get("color", GC.C_TRAIL_LEGEND), it.get("tag", ""),
                          desc, it.get("dist_label", ""),
                          bool(it.get("dash"))))
     elif CFG.get("extra_legend_desc"):
-        rows.append((CFG.get("extra_legend_color", "#8C8A86"),
+        # 旧单行键：缺省色同步道芯色（原是 #8C8A86 灰，与图上深紫不符）
+        GC.check_trail_legend(CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND), "（HTML 图例·旧键）")
+        rows.append((CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND),
                      CFG.get("extra_legend_tag", "步道"), CFG["extra_legend_desc"], "", True))
     out = []
     for r in rows:
