@@ -14,6 +14,7 @@
 """
 import base64
 import io
+import os
 import json
 import math
 import re
@@ -648,6 +649,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
     if pois:
         items = [it for it in items if not _poi_dup(it, pois, pin_xy)]
     out, dropped = [], 0
+    _drop_names = []
     for it in items:
         fs = it["fs"]
         w = GC.text_w(it["t"], fs) + 4
@@ -705,8 +707,13 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
             break
         else:
             dropped += 1
+            _drop_names.append(it["t"])
     if dropped:
         print(f"   底图地名：落位 {len(out)} 条 · 拥挤丢弃 {dropped} 条")
+        # 丢的是谁？"落位 131 / 丢弃 11" 这种汇总数看不出丢掉的是主峰还是次要湖名 ——
+        # 用户报「图上怎么没有珠峰」时，第一件事就是确认它是否在这一行里。
+        if os.environ.get("MAP_LBL_DEBUG"):
+            print("      丢弃：" + "、".join(_drop_names))
     return "".join(out)
 
 
