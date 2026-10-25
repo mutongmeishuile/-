@@ -11,6 +11,9 @@
 - [ ] **地图窗口盖住轨迹**：`make_terrain.py` 打印的窗口来自 `轨迹包围盒 + 35% 留白（自动）`，
       且 `assert_bbox_covers` 没抛错；**若显式给了 `CFG["bbox"]`**，确认窗口里有线路名提到的地标
       （"珠峰东坡"就得看得见珠峰），且南北按轨迹居中
+- [ ] **边境线路（西藏/新疆/云南）确认过国界**：`osm.json` 里有 `boundary=administrative`
+      且 `admin_level=2` 的 relation。珠峰东坡实测原本 **0 条** —— 缺国界不是渲染问题，
+      是 `fetch_osm` 的 QUERY 从来没抓过 `boundary`；补法是 `fetch_osm.py --border`（§29.2）
 - [ ] **换过窗口就一定重抓过 OSM**：`fetch_osm.py` 要素数应与新窗口匹配
       （珠峰东坡扩窗后 128 → 1212）；**重抓前备份 `out/osm.json`**（§21.4）
 - [ ] **独立高清图有标题带**：`render_map_hi.py` 必须 `build_svg(..., with_title=True)` 且画布高用

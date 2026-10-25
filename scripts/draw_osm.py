@@ -49,6 +49,13 @@ C_STREAM    = (138, 182, 216, 255)
 # 希夏邦马窗口实测：333 条 stream 里 79 条 intermittent=yes（24%）。
 C_STREAM_SEASON = (152, 192, 222, 200)
 
+# 国界（2026-10-25 用户：珠峰东坡「缺少国界」）。
+# 取**深赭红**而不是地图册上常见的紫红：本图步道层已定案紫罗兰、冰川注记是深冰蓝，
+# 再来一层紫会和步道糊成一片（用户此前就嫌"步道太浓"）。
+# 赭红在这张暖调地形底图上对比度足够，又不与等高线的褐色数字混淆（那是不透明小字）。
+C_BORDER      = (150, 64, 56, 255)
+C_BORDER_HALO = (252, 249, 243, 225)   # 纸色描边：压到雪线白/深色林地上都能看清
+
 # ⚠ 冰川层开关（2026-10-17 希夏邦马：默认 **关闭**）。
 # 要不要这一层，判据是「DEM 雪线白 + 等高线是否已经把冰雪范围说清楚了」：
 #   * 开：冰川面能把冰舌范围一眼圈出来（登山线有用）；
@@ -197,6 +204,94 @@ def _pts_of(e, proj, size):
     if max(xs) < 0 or min(xs) > size[0] or max(ys) < 0 or min(ys) > size[1]:
         return None
     return [(round(x, 1), round(y, 1)) for x, y in pts]
+
+
+def _chain_open(segs, tol=1.2):
+    """把首尾相接的开放折线贪心串成尽量长的**开放**链（不要求闭合）。
+
+    与 `_stitch` 的区别：那个只保留能闭合成环的（面要素用），
+    而国界在窗口里必然是一段**开口**的线 —— 用它会把整条边界丢光。
+    """
+    segs = [list(s) for s in segs if len(s) >= 2]
+    used = [False] * len(segs)
+    chains = []
+
+    def same(a, b):
+        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+    for i, s in enumerate(segs):
+        if used[i]:
+            continue
+        used[i] = True
+        chain = list(s)
+        progress = True
+        while progress:
+            progress = False
+            for j, t in enumerate(segs):
+                if used[j]:
+                    continue
+                if same(chain[-1], t[0]):
+                    chain.extend(t[1:])
+                elif same(chain[-1], t[-1]):
+                    chain.extend(reversed(t[:-1]))
+                elif same(chain[0], t[-1]):
+                    chain[:0] = t[:-1]
+                elif same(chain[0], t[0]):
+                    chain[:0] = list(reversed(t[1:]))
+                else:
+                    continue
+                used[j] = True
+                progress = True
+                break
+        chains.append(chain)
+    return chains
+
+
+def _line_parts(e, proj, size, seen=None):
+    """线状要素 → 若干像素点列。
+
+    way：顶层 geometry 一条。
+    relation（国界常组织成 relation）：各 member way 的 geometry 先转像素，
+    再**串成尽量长的开放链** —— 逐段画会让虚线节拍在每段重头开始，
+    边界线变成"一截截红点"；也避免短于 dash 的 member 全退化成点。
+    ⚠ 这里**不做画布裁剪**（只丢整段都在图外的），裁断会让串链接不上，
+    与 `_poly_rings` 对 relation 的处理同理。
+
+    `seen`：几何指纹集合，用于**跨要素去重**。国界在 OSM 里是「一个国家一个
+    relation」，中尼边界会同时属于 relation 184633(नेपाल) 和 270056(中国) ——
+    同一段画两遍，虚线相位不同，看上去从"点划线"变成"实线"。
+    两个 relation 的 member 在 `out geom` 里**没有 id**（实测为 None），
+    只能按端点 + 点数做指纹。
+    """
+    parts = []
+    if e.get("type") == "relation":
+        for m in e.get("members") or []:
+            g = m.get("geometry") or []
+            pts = [proj(p["lon"], p["lat"]) for p in g if p.get("lon") is not None]
+            if len(pts) < 2:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            if max(xs) < 0 or min(xs) > size[0] or max(ys) < 0 or min(ys) > size[1]:
+                continue
+            parts.append([(round(x, 1), round(y, 1)) for x, y in pts])
+        chains = [c for c in _chain_open(parts) if len(c) >= 2]
+    else:
+        p = _pts_of(e, proj, size)
+        chains = [p] if p else []
+    if seen is None:
+        return chains
+    out = []
+    for c in chains:
+        a, b = c[0], c[-1]
+        # 端点排序后再做指纹 → 同一段无论正向反向都算重复
+        fp = (len(c),) + tuple(sorted([(round(a[0]), round(a[1])),
+                                       (round(b[0]), round(b[1]))]))
+        if fp in seen:
+            continue
+        seen.add(fp)
+        out.append(c)
+    return out
 
 
 def _ring_area(ring):
@@ -624,6 +719,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # 地图把湖画成平地（2026-10-17 年宝玉则仙女湖踩坑）。
         if e["type"] == "node":
             return None
+        # 国界：admin_level=2 才算国界；3/4/6 是省/地/县界，只做 2（见 fetch_osm 的说明）。
+        # 必须排在 highway/waterway 之前 —— 界桩附近的道路 way 偶尔也带 boundary 标签。
+        if t.get("boundary") == "administrative" and str(t.get("admin_level")) == "2":
+            return ("border", None)
         if "highway" in t:
             h = t["highway"]
             if h in ROAD_STYLE:
@@ -646,8 +745,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 面 → 线 → 注记（保证层次）。冰川画在林地/草地之上、水体之下——
     # 冰川湖（终碛阻塞湖）坐在冰川面上，必须能透出来。
     order = {"wood": 0, "meadow": 1, "glacier": 2, "waterbody": 3, "water": 4,
-             "trail": 5, "road": 6}
+             "trail": 5, "road": 6, "border": 7}
     drawable = []
+    _border_seen = set()    # 国界几何指纹（见 _line_parts 的 seen 说明）
     _STITCH_STATS.update(ok=0, dropped=0, dropped_pts=0)
     for e in els:
         b = bucket(e)
@@ -667,6 +767,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             for ring in outs:
                 drawable.append((order[b[0]], b[0], b[1], ring, e,
                                  tuple(ins) if b[0] == "waterbody" else ()))
+            continue
+        if b[0] == "border":
+            # `_border_seen` 跨要素共享：中尼边界同时属于中国和尼泊尔两个 relation
+            for part in _line_parts(e, proj, size, _border_seen):
+                drawable.append((order["border"], "border", None, part, e, ()))
             continue
         pts = _pts_of(e, proj, size)
         if pts:
@@ -703,6 +808,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     land_fill = _cfg_flag("landuse_fill", LANDUSE_FILL)
     n_poly = n_line = n_glacier = 0
+    n_border = 0            # 国界：已绘折线段数（用于日志核对「到底画上了没有」）
     road_refs = []          # (pts, ref, highway_class) 道路编号标注候选
     for _, kind, sub, pts, e, holes in drawable:
         if kind in ("wood", "meadow"):
@@ -740,6 +846,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             # 不加纸色描边（见 C_TRAIL_CASING 的说明）
             _dashed(d, pts, core, W(w), dash * S, gap * S)
             n_line += 1
+        elif kind == "border":
+            # 国界：纸色描边 + 赭红虚线。节拍特意比步道疏（步道 5/4）——
+            # 国界是"读一眼就够"的背景信息，不该比徒步轨迹更抢眼。
+            # 2026-10-25 实测第一版 W(1.6)/11·6 在 4512 px 图上只有 3 px 宽，
+            # 压在雪线白上几乎看不出是"界线"；加到 2.0 并把节拍压到 9/5.5。
+            _dashed(d, pts, C_BORDER, W(2.0), 9.0 * S, 5.5 * S,
+                    casing=C_BORDER_HALO, casing_w=W(2.0) + W(1.4))
+            n_border += len(pts)
         elif kind == "road":
             core, w, ed = ROAD_STYLE[sub]
             d.line(pts, fill=ed, width=W(w) + W(2), joint="curve")   # 描边
@@ -1125,7 +1239,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # ⚠ 挤放数（n_overlap）是"有没有重叠"的**唯一可测指标**：
         #   落位率高不代表排得好（可能全是挤出来的），必须看这个数。
         #   2026-10-17 希夏邦马：字号 ×0.85 + 留白 2→2.8 后由 挤放 N 降到 M。
-        print(f"   OSM 叠加：面 {n_poly} · 线 {n_line}{gl} · "
+        bd = f" · 国界 {n_border} 段" if n_border else ""
+        print(f"   OSM 叠加：面 {n_poly} · 线 {n_line}{gl}{bd} · "
               f"山峰名 {n_peak}/{len(peaks)}" + _tier + " · "
               f"哑口名 {n_saddle}/{len(saddles)} · "
               f"地名 {n_place}/{len(places)} · "

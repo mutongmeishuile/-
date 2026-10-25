@@ -72,6 +72,27 @@ QUERY = f"""
   node["natural"="saddle"]({BBOX});
   node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({BBOX});
   node["amenity"="place_of_worship"]({BBOX});
+  way["boundary"="administrative"]["admin_level"="2"]({BBOX});
+  relation["boundary"="administrative"]["admin_level"="2"]({BBOX});
+);
+out geom;
+"""
+# 国界（admin_level=2）2026-10-25 补：用户看珠峰东坡地图问「缺少国界」。
+# 珠峰/洛子/马卡鲁全骑在中尼边界上，窗口里国界是所有地理要素里**信息量最大的那条线**
+# （哪座山在境外、徒步终点离边界多远），但原 QUERY 只抓 highway/waterway/自然要素，
+# boundary 一条都没抓 → 图上完全看不出这是边境。
+# 只在 admin_level=2 抓，**不抓 4（省界）/6（地市界）**：省界在山区多沿山脊/河谷走，
+# 画上去与等高线、步道混在一起，看图的人分不清哪条是山脊哪条是界线；
+# 而国界是徒步攻略里唯一"必须知道"的行政界。
+# way 与 relation 都要（国界两端常被切成 many way，整条也常组织成 relation）。
+
+# 单独抓国界的查询（供 `--border` 用，见 fetch_borders()）。
+# 不带 natural/highway 那些标签 —— 查询越小越快，Overpass 越不容易超时。
+BORDER_QUERY = f"""
+[out:json][timeout:90];
+(
+  way["boundary"="administrative"]["admin_level"="2"]({BBOX});
+  relation["boundary"="administrative"]["admin_level"="2"]({BBOX});
 );
 out geom;
 """
@@ -226,6 +247,95 @@ def fetch(force=False, soft=False, rounds=2):
     raise SystemExit(msg)
 
 
+def _trim_admin_members(el, pad=0.03):
+    """把国家 relation 的 members 裁到窗口内（只留几何与窗口相交的）。
+
+    为什么必须裁（2026-10-25 珠峰东坡实测）：
+      国界在 OSM 上是「一个国家一个 relation」—— 中国 relation 270056 有 1663 个
+      member（全国陆上边界 2.2 万 km），尼泊尔 184633 有 657 个。`out geom` 会把
+      **整条边界所有成员**的几何全抓回来，即使窗口只有 50×20 km。
+      实测 osm.json 从 2.96 MB 涨到 **10.01 MB**，而其中真正落在窗口里的只有 5+5 段。
+      缓存是**按窗口**服务的（换窗口就重抓），留着全国边界的点毫无用处。
+    """
+    ms = []
+    for m in el.get("members") or []:
+        g = m.get("geometry") or []
+        if not g:
+            continue
+        los = [p["lon"] for p in g if p.get("lon") is not None]
+        las = [p["lat"] for p in g if p.get("lat") is not None]
+        if not los:
+            continue
+        if (max(los) < LON0 - pad or min(los) > LON1 + pad or
+                max(las) < LAT0 - pad or min(las) > LAT1 + pad):
+            continue
+        ms.append(m)
+    out = dict(el)
+    out["members"] = ms
+    return out
+
+
+def fetch_borders(soft=True):
+    """只抓**国界**（admin_level=2）并合并进现有缓存，其余要素原样保留。
+
+    为什么要单独一个入口（2026-10-25）：
+      ① 老线路的 `osm.json` 里一条 boundary 都没有（QUERY 现在才加上），
+         但整盘 `--force` 重抓代价极高 —— 竞态实测会撞 `osm_fetch_budget` 拿到残缺数据
+         （珠峰东坡那次只回 500/1212 个要素，而 `_cache_covers()` 还判"覆盖"）。
+      ② 国界是小查询（十几到几十条 way），几十秒就能回来，失败也不该动主缓存。
+
+    ⚠ **不走 `MIRRORS` 的原顺序**：首位 overpass.osm.ch 实测**没有亚洲数据**，
+       返回的是一个语法合法的空集。对整盘查询这无妨（`n < 50` 会判限流换下一个），
+       但国界本来就可能只有十几条 —— 空集在这条查询上**判不出真假**，
+       会把"镜像没数据"误当成"这里没有国界"。所以 osm.ch 排到最后。
+    """
+    order = [h for h in MIRRORS if "osm.ch" not in h] + \
+            [h for h in MIRRORS if "osm.ch" in h]
+    last = None
+    for rnd in range(2):
+        for host in order:
+            try:
+                print(f"→ 国界 {host}（第 {rnd + 1} 轮）", flush=True)
+                req = urllib.request.Request(
+                    host,
+                    data=urllib.parse.urlencode({"data": BORDER_QUERY}).encode(),
+                    headers={"User-Agent": UA,
+                             "Content-Type": "application/x-www-form-urlencoded"})
+                with urllib.request.urlopen(req, timeout=90) as r:
+                    bd = json.loads(r.read().decode("utf-8"))
+                els = bd.get("elements") or []
+                if not els:
+                    raise RuntimeError("返回 0 条国界要素（可能该镜像无亚洲数据）")
+                # 合并：按 (type, id) 去重，新抓的覆盖旧的同名要素
+                cur = {"elements": []}
+                if CACHE.exists():
+                    try:
+                        cur = json.loads(CACHE.read_text(encoding="utf-8"))
+                    except Exception:
+                        cur = {"elements": []}
+                keep = {}
+                for e in cur.get("elements") or []:
+                    keep[(e.get("type"), e.get("id"))] = e
+                for e in els:
+                    if e.get("type") == "relation" and                             (e.get("tags") or {}).get("admin_level") == "2":
+                        e = _trim_admin_members(e)
+                    keep[(e.get("type"), e.get("id"))] = e
+                cur["elements"] = list(keep.values())
+                CACHE.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+                print(f"OK 国界 {len(els)} 个要素，已合并进 {CACHE.name}"
+                      f"（共 {len(cur['elements'])} 个）")
+                return els
+            except Exception as e:                                   # noqa
+                last = e
+                print("  失败:", repr(e)[:110], flush=True)
+                time.sleep(2 + 3 * rnd)
+    msg = f"国界要素全部镜像失败：{last}"
+    if soft:
+        print("!! " + msg + "\n   —— 已降级：底图不画国界，其余不变。")
+        return []
+    raise SystemExit(msg)
+
+
 def summarize(d):
     from collections import Counter
     kind, names = Counter(), []
@@ -268,7 +378,19 @@ if __name__ == "__main__":
     ap.add_argument("--force", action="store_true", help="忽略缓存重新抓取")
     ap.add_argument("--soft", action="store_true",
                     help="全镜像失败也算成功（流水线不中断，只是底图少一层矢量）")
+    ap.add_argument("--border", action="store_true",
+                    help="只补抓国界（admin_level=2）并合并进现有缓存；"
+                         "老线路加国界线用这个，不必整盘 --force")
     a = ap.parse_args()
+    if a.border:
+        els = fetch_borders(soft=True)
+        print(f"\n国界要素 {len(els)} 个：")
+        for e in els[:20]:
+            t = e.get("tags", {})
+            print(f"  {e['type']:<8} {e['id']:<12} {t.get('name') or t.get('name:en') or '(未命名)'}"
+                  f"  {len(e.get('geometry') or [])} 点 / {len(e.get('members') or [])} 成员")
+        print("\n⚠ 缓存已改动 → 必须重跑 make_terrain（底图叠加层在底图里烘焙）。")
+        sys.exit(0)
     data = fetch(a.force, a.soft)
     if not data.get("elements"):
         print("\n（无矢量要素，跳过汇总）")

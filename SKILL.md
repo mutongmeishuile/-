@@ -148,7 +148,7 @@ agent_created: true
 | 步骤 | 脚本 | 产出（一律落 `scripts/out/`） |
 |---|---|---|
 | prep | `prep_track.py` | `track_full.json`（全量原始点）· `track_real.json`（简化点）· `profile_real.json`（等距剖面）· `kml_pois.json` |
-| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级） |
+| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级）。`--border` 只补国界并合并，老线路加国界用这个 |
 | dem | `make_terrain.py` | `base_terrain.jpg` · `base_map.jpg` · `base_meta.json`（窗口 / 投影） |
 | html | `build_guide.py` | `<file_stem>-攻略.html` |
 | long | `shoot_guide.py` | `<file_stem>-攻略长图.png` |
