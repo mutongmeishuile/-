@@ -461,18 +461,28 @@ def _legend_html():
     if extra:
         for it in extra:
             desc = it.get("desc", "")
-            if "雪线" in str(it.get("tag", "")):
+            tag = str(it.get("tag", ""))
+            if "雪线" in tag:
                 GC.check_snowline_legend(desc, "（HTML 图例）")
-            if "步道" in str(it.get("tag", "")):
-                # 2026-10-25：图例步道色块必须与 draw_osm.TRAIL_STYLE 芯色一致
+            # 2026-10-25：步道类行（步道 / 村道 / 牧道 / 既有道路…）的色块**一律**跟
+            # draw_osm.TRAIL_STYLE 芯色，不读配置里的手写值 —— 图上没有 per-route
+            # 覆盖，图例也不该有；否则改一条线就要记得改两处（实测漏了 7 条）。
+            is_trail = GC.is_trail_legend(tag, desc)
+            if is_trail:
                 GC.check_trail_legend(it.get("color", GC.C_TRAIL_LEGEND), "（HTML 图例）")
-            rows.append((it.get("color", GC.C_TRAIL_LEGEND), it.get("tag", ""),
-                         desc, it.get("dist_label", ""),
+            color = GC.C_TRAIL_LEGEND if is_trail else it.get("color", GC.C_TRAIL_LEGEND)
+            rows.append((color, tag, desc, it.get("dist_label", ""),
                          bool(it.get("dash"))))
+        # 列表里没有步道行 → 用旧单行键回补（否则图上的紫线在图例里没有名字）
+        if not any(GC.is_trail_legend(it.get("tag"), it.get("desc", "")) for it in extra):
+            leg = GC.legacy_trail_legend(CFG)
+            if leg:
+                GC.check_trail_legend(leg["color"], "（HTML 图例·旧键回补）")
+                rows.append((leg["color"], leg["tag"], leg["desc"], "", True))
     elif CFG.get("extra_legend_desc"):
-        # 旧单行键：缺省色同步道芯色（原是 #8C8A86 灰，与图上深紫不符）
+        # 旧单行键：色块同步道芯色（原是 #8C8A86 灰，与图上深紫不符）
         GC.check_trail_legend(CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND), "（HTML 图例·旧键）")
-        rows.append((CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND),
+        rows.append((GC.C_TRAIL_LEGEND,
                      CFG.get("extra_legend_tag", "步道"), CFG["extra_legend_desc"], "", True))
     out = []
     for r in rows:

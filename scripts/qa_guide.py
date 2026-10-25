@@ -264,6 +264,11 @@ def trail_legend_guard():
     2026-10-25 用户实测「osm 步道为灰色」：全库 23 条线路的图例步道色
     （#8C8A86 ×13 / #9658A4 ×8 / #96849F ×2）没有一条与 draw_osm.TRAIL_STYLE
     的芯色 #563A8A 一致，build_guide 旧单行键的缺省值也是那个灰。
+
+    ⚠ 判据走 GC.is_trail_legend（tag 命中 步道/村道/牧道/公路…，或 desc 写「非本次轨迹」）：
+    只认 tag == "步道" 会漏掉 7 条把它叫 村道 / 牧道 / 既有道路 的线路。
+    注：渲染期这两行已强制取 C_TRAIL_LEGEND，本检查只负责把配置里的手写值
+    不一致喊出来（配置该同步成干净值，别让它继续骗人）。
     """
     try:
         import route_def as RD
@@ -271,7 +276,7 @@ def trail_legend_guard():
         bad = []
         n = 0
         for it in cfg.get("legend_extra") or []:
-            if "步道" not in str(it.get("tag", "")):
+            if not GC.is_trail_legend(it.get("tag"), it.get("desc", "")):
                 continue
             n += 1
             c = str(it.get("color", "")).strip().upper()
@@ -292,6 +297,41 @@ def trail_legend_guard():
         raise
     except Exception as _e:                                        # noqa
         print(f"  [..]  步道图例检查跳过：{_e}")
+
+    # ② 反向检查：图上画了紫线、图例里却没有这一行（2026-10-25 实测 6 条）。
+    #    draw_osm 不看配置、有数据就画；图例却要人手写 → 「图例覆盖图上所有符号」失效。
+    try:
+        import json
+        from pathlib import Path
+        import route_def as RD
+        cfg = getattr(RD, "CFG", {}) or {}
+        has_row = any(GC.is_trail_legend(it.get("tag"), it.get("desc", ""))
+                      for it in (cfg.get("legend_extra") or [])) or bool(cfg.get("extra_legend_desc"))
+        if has_row:
+            return
+        p = Path(GC.ROOT) / "out" / "osm.json"
+        if not p.exists():
+            return
+        j = json.loads(p.read_text(encoding="utf-8"))
+        els = j.get("elements", j if isinstance(j, list) else [])
+        n = 0
+        for e in els:
+            h = (e.get("tags") or {}).get("highway")
+            if h in ("path", "footway", "track", "steps", "bridleway", "cycleway",
+                     "service", "residential", "unclassified", "pedestrian"):
+                n += 1
+                if n >= 5:
+                    break
+        if n >= 5:
+            print(f"  !! 图上会画 OSM 既有步道（osm.json 有 {n}+ 条道路类要素），"
+                  f"但图例没有步道行")
+            print(f"     → 在 route_def.CFG['legend_extra'] 加一行 "
+                  f'{{"color": "{GC.C_TRAIL_LEGEND}", "tag": "步道", '
+                  f'"desc": "OSM 测绘的既有步道 / 公路（非本次轨迹）", "dash": True}}')
+    except SystemExit:
+        raise
+    except Exception as _e:                                        # noqa
+        print(f"  [..]  步道图例缺行检查跳过：{_e}")
 
 
 if __name__ == "__main__":

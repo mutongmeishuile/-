@@ -317,16 +317,28 @@ def _legend_rows():
     extra = _CFG.get("legend_extra")
     if extra:
         for it in extra:
-            if "雪线" in str(it.get("tag", "")):
-                GC.check_snowline_legend(it.get("desc", ""), "（地图图例）")
-            if "步道" in str(it.get("tag", "")):
+            tag = str(it.get("tag", ""))
+            desc = it.get("desc", "")
+            if "雪线" in tag:
+                GC.check_snowline_legend(desc, "（地图图例）")
+            # 2026-10-25：步道类行色块一律跟 TRAIL_STYLE 芯色（图上无 per-route 覆盖）
+            is_trail = GC.is_trail_legend(tag, desc)
+            if is_trail:
                 GC.check_trail_legend(it.get("color", GC.C_TRAIL_LEGEND), "（地图图例）")
-            rows.append((it.get("color", GC.C_TRAIL_LEGEND), it.get("tag", ""),
-                         it.get("desc", ""), _legend_km_txt(it.get("dist_label", "")),
+            color = GC.C_TRAIL_LEGEND if is_trail else it.get("color", GC.C_TRAIL_LEGEND)
+            rows.append((color, tag,
+                         desc, _legend_km_txt(it.get("dist_label", "")),
                          it.get("width", 1.5), it.get("dash", ' stroke-dasharray="8 5"')))
+        # 列表里没有步道行 → 用旧单行键回补（图上紫线在图例里必须有名字）
+        if not any(GC.is_trail_legend(it.get("tag"), it.get("desc", "")) for it in extra):
+            leg = GC.legacy_trail_legend(_CFG)
+            if leg:
+                GC.check_trail_legend(leg["color"], "（地图图例·旧键回补）")
+                rows.append((leg["color"], leg["tag"], leg["desc"], "", 1.5,
+                             ' stroke-dasharray="8 5"'))
     elif _CFG.get("extra_legend_desc"):
         GC.check_trail_legend(_CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND), "（地图图例·旧键）")
-        rows.append((_CFG.get("extra_legend_color", GC.C_TRAIL_LEGEND),
+        rows.append((GC.C_TRAIL_LEGEND,
                      _CFG.get("extra_legend_tag", "步道"),
                      _CFG["extra_legend_desc"], "", 1.5, ' stroke-dasharray="8 5"'))
     return rows

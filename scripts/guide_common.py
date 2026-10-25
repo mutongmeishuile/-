@@ -269,6 +269,37 @@ def day_colors(days):
     return cols, txts
 
 
+_TRAIL_TAG_RE = re.compile(r"步道|村道|牧道|公路|马道|机耕道|既有道路")
+
+
+def is_trail_legend(tag, desc=""):
+    """legend_extra 的某一行是不是「OSM 既有道路 / 步道」那一层（= 图上紫色细虚线）。
+
+    ⚠ 不能只认 tag == "步道"：2026-10-25 实测有 7 条线路把它叫 村道 / 牧道 /
+    既有道路，守卫和批量改色脚本都按 tag 匹配，于是全库漏改 —— 图上深紫、
+    图例灰（用户看到的就是「步道是灰的」）。
+    判据：tag 命中道路类词，或 desc 里写着「非本次轨迹」（这一层与轨迹的唯一区别）。
+    """
+    if _TRAIL_TAG_RE.search(str(tag or "")):
+        return True
+    return "非本次轨迹" in str(desc or "")
+
+
+def legacy_trail_legend(cfg):
+    """旧单行键（extra_legend_desc / _tag / _color）描述的步道图例行。
+
+    ⚠ 2026-10-25 实测：`legend_extra` 列表一旦存在，旧键就被**整段忽略** ——
+    22 条线路因此图上、HTML 里都丢了步道图例行（只剩雪线一行），而紫色步道
+    照样画在图上（draw_osm 不看配置）。所以列表里没有步道行时必须回补一行。
+    返回 dict；没有旧键时返回 None。色块恒取 C_TRAIL_LEGEND（图上唯一值）。
+    """
+    desc = str(cfg.get("extra_legend_desc") or "").strip()
+    if not desc:
+        return None
+    return {"tag": cfg.get("extra_legend_tag", "步道"), "desc": desc,
+            "color": C_TRAIL_LEGEND}
+
+
 def check_trail_legend(color, where=""):
     """图例「步道」行的色块必须与图上步道同色（C_TRAIL_LEGEND）。
 
@@ -647,8 +678,15 @@ def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
     out_path = Path(out_path)
     prof = _browser_profiles()
     last_err = None
+    # 环境层的 SAFE_DELETE 钩子按「单轮累计删除量」拦截（超阈值直接杀进程、抛不出去）
+    # → 批量出图（≥25 条）必须设 SHOOT_KEEP_RAW=1：不删旧图，改用 mtime 判新旧。
+    # ⚠ 只靠"尺寸稳定"不够：相邻两带/两次重截的 PNG 尺寸可能完全相同，
+    #   不删旧文件就会把上一张当成本次结果（白读一次、还可能拼错带）。
+    keep = bool(os.environ.get("SHOOT_KEEP_RAW"))
     for mode in _BROWSER_MODES:
-        out_path.unlink(missing_ok=True)
+        t0 = time.time() - 2          # 容 2 s 时钟粒度
+        if not keep:
+            out_path.unlink(missing_ok=True)
         args = [BROWSER, mode, "--disable-gpu", "--hide-scrollbars",
                 "--no-sandbox", "--disable-dev-shm-usage", "--no-first-run",
                 f"--user-data-dir={prof}",
@@ -664,7 +702,11 @@ def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
         prev, stable = -1, 0
         for _ in range(600):                   # 最多等 90s
             if out_path.exists():
-                sz = out_path.stat().st_size
+                st = out_path.stat()
+                if keep and st.st_mtime < t0:  # 还是上一次的旧文件，等它被覆盖
+                    time.sleep(0.15)
+                    continue
+                sz = st.st_size
                 if sz == prev and sz > 0:
                     stable += 1
                     if stable >= 2:       # 2 次足够：本机实测文件是"完成后一次性出现"，
@@ -675,6 +717,9 @@ def browser_shot(html_path, out_path, win_w, win_h, scale=1, timeout=900):
                 prev = sz
             time.sleep(0.15)
         if out_path.exists() and out_path.stat().st_size > 0:
+            if keep and out_path.stat().st_mtime < t0:
+                last_err = "旧截图未被覆盖（SHOOT_KEEP_RAW 模式）"
+                continue
             return Image.open(out_path).convert("RGB")
     raise RuntimeError(f"浏览器截图未生成（试过 {_BROWSER_MODES}；最后一次异常：{last_err}）")
 

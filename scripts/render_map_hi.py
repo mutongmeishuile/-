@@ -16,7 +16,9 @@
    而且裁掉的那块是页面的白底，和"留白"长得一模一样，肉眼只能看见"底部有点空"。
    → 正解：**开窗留余量 + 按量到的 SVG 矩形裁**（与 shoot_guide.py 同一套做法）。
 """
+import os
 import time
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -26,6 +28,16 @@ import map_svg as MS
 import route_def as RD
 
 CFG = getattr(RD, "CFG", {})
+
+
+def _rm_quiet(p):
+    """临时文件清理是尽力而为：环境层的 SAFE_DELETE 钩子按「单轮累计删除量」拦截，
+    超阈值直接把进程杀掉（异常抛不出去）——批量出图（≥25 条线路）必然踩到，
+    表现是"图都渲完了、最后清临时文件时进程退出码 1、成品没落盘"。
+    → SHOOT_KEEP_RAW=1 时一律不删（与 shoot_guide 同一约定，批量跑完再统一清）。"""
+    if os.environ.get("SHOOT_KEEP_RAW"):
+        return
+    Path(p).unlink(missing_ok=True)
 STEM = CFG.get("file_stem", "线路")
 OUT_JPG = GC.ROOT / f"{STEM}-全线地图.jpg"
 
@@ -117,7 +129,7 @@ def main():
             html.write_text(_page_html(svg, off, bh), encoding="utf-8")
             im = None
             for att in range(4):                    # 随机丢瓦片：命中白带就重截
-                raw.unlink(missing_ok=True)
+                _rm_quiet(raw)                      # keep-raw 模式下由 browser_shot 按 mtime 判新
                 # SVG 在 (0,0)、尺寸 W×H（body 白底、svg 无 margin）；开窗留余量，按 (0,0,W,bh) 裁。
                 cand = GC.browser_shot(html, raw, W + SLACK_W, bh + SLACK_H, scale=1)
                 cand = cand.crop((0, 0, W, bh))
@@ -136,8 +148,8 @@ def main():
         print(f"  {im.size} -> {OUT_JPG.name}  {OUT_JPG.stat().st_size/1048576:.2f} MB  "
               f"{time.time()-t:.1f}s")
     finally:
-        raw.unlink(missing_ok=True)
-        html.unlink(missing_ok=True)
+        _rm_quiet(raw)
+        _rm_quiet(html)
 
 
 def _vstack(parts):

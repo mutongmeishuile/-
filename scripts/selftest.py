@@ -555,13 +555,117 @@ def t_day_palette_and_trail_legend():
     check("图例步道色写成灰色时告警且点出 #563A8A",
           "不一致" in out and "563A8A" in out, out)
 
+    # --- 步道行的判据：不能只认 tag == "步道"（实测 7 条叫 村道 / 牧道 / 既有道路） ---
+    if hasattr(GC, "is_trail_legend"):
+        cases = [("步道", "", True), ("村道", "", True), ("牧道", "", True),
+                 ("既有道路", "OSM 测绘的公路 / 村道（非本次轨迹）", True),
+                 ("雪线", "≈5750 m · 7 月档以上为积雪白", False),
+                 ("冰川", "冰裂缝区，勿独行", False)]
+        wrong = [t for t, d, want in cases if GC.is_trail_legend(t, d) != want]
+        check("步道行判据覆盖 村道/牧道/既有道路（且不误伤雪线）", not wrong, str(wrong))
+    else:
+        check("guide_common.is_trail_legend 存在", False, "缺失")
+
+    # --- 旧单行键回补：legend_extra 只有雪线行时，步道行必须还能从旧键补回来 ---
+    if hasattr(GC, "legacy_trail_legend"):
+        cfg = {"legend_extra": [{"tag": "雪线", "desc": "≈4810 m"}],
+               "extra_legend_tag": "步道",
+               "extra_legend_desc": "OSM 测绘的既有步道 / 公路（非本次轨迹）",
+               "extra_legend_color": "#8C8A86"}
+        leg = GC.legacy_trail_legend(cfg)
+        check("旧键回补出行、且色块取图上芯色",
+              leg is not None and leg["color"] == GC.C_TRAIL_LEGEND
+              and leg["tag"] == "步道", str(leg))
+        check("无旧键时不回补（不凭空多一行）",
+              GC.legacy_trail_legend({"legend_extra": []}) is None)
+    else:
+        check("guide_common.legacy_trail_legend 存在", False, "缺失")
+
+
+def t_keep_raw_batch():
+    """⑭ 批量出图「不删临时文件」约定（2026-10-25：30 条串行重渲，最后 3 条图已渲完、
+    却在 finally 清临时文件时被环境层 SAFE_DELETE 钩子按「单轮累计删除量」直接杀进程
+    → 成品没落盘。约定：SHOOT_KEEP_RAW=1 时一律不删；此时截图按 mtime 判新旧，
+    绝不能靠"尺寸稳定"（相邻两带尺寸可能完全相同，会把上一张当成本次结果）。"""
+    print("⑭ 批量出图 keep-raw 约定（不删临时文件 + 截图按 mtime 判新）")
+    try:
+        import os
+        import tempfile
+        import time as _t
+        from pathlib import Path
+
+        import guide_common as GC
+        from PIL import Image
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+
+    saved_env = os.environ.get("SHOOT_KEEP_RAW")
+    saved_find, saved_run = GC.find_browser, GC.subprocess.run
+    saved_modes = GC._BROWSER_MODES
+    try:
+        GC._BROWSER_MODES = saved_modes[:1]      # 只试一种模式，别为用例空等 2×90 s
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            out = td / "shot.png"
+
+            def _png(path):
+                Image.new("RGB", (4, 4), "#ffffff").save(path)
+
+            # ① keep-raw：旧图不被覆盖时**不能**当成结果返回（否则截白带重试会读到上一带）
+            _png(out)
+            old = _t.time() - 3600
+            os.utime(out, (old, old))
+            os.environ["SHOOT_KEEP_RAW"] = "1"
+            GC.find_browser = lambda: "fake-browser"
+            GC.subprocess.run = lambda *a, **k: None        # 假浏览器：不写文件
+            try:
+                GC.browser_shot(td / "p.html", out, 100, 100, scale=1, timeout=5)
+                stale_ok = True
+            except RuntimeError:
+                stale_ok = False
+            check("keep-raw 下旧截图不被误用（报错而不是返回旧图）", not stale_ok)
+            check("keep-raw 下不删旧文件（钩子计数不被消耗）", out.exists())
+
+            # ② keep-raw：新图（mtime 现在）正常返回
+            def _write(*a, **k):
+                _png(out)
+            GC.subprocess.run = _write
+            im = GC.browser_shot(td / "p.html", out, 100, 100, scale=1, timeout=5)
+            check("keep-raw 下新截图正常返回", im.size == (4, 4), str(im.size))
+
+            # ③ render_map_hi._rm_quiet：keep-raw 保留 / 否则删除
+            try:
+                import render_map_hi as RM
+            except BaseException:                        # noqa —— 无 route_def 时导入即 exit
+                RM = None
+            if RM is None or not hasattr(RM, "_rm_quiet"):
+                print("         （render_map_hi 无 _rm_quiet，跳过清理语义用例）")
+            else:
+                f = td / "tmp.png"
+                os.environ.pop("SHOOT_KEEP_RAW", None)
+                _png(f)
+                RM._rm_quiet(f)
+                check("无 SHOOT_KEEP_RAW 时临时文件被清理", not f.exists())
+                _png(f)
+                os.environ["SHOOT_KEEP_RAW"] = "1"
+                RM._rm_quiet(f)
+                check("SHOOT_KEEP_RAW=1 时临时文件保留", f.exists())
+    finally:
+        GC.find_browser, GC.subprocess.run = saved_find, saved_run
+        GC._BROWSER_MODES = saved_modes
+        if saved_env is None:
+            os.environ.pop("SHOOT_KEEP_RAW", None)
+        else:
+            os.environ["SHOOT_KEEP_RAW"] = saved_env
+
 
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
-               t_day_palette_and_trail_legend):
+               t_day_palette_and_trail_legend, t_keep_raw_batch):
         try:
             fn()
         except Exception as e:                                      # noqa
