@@ -44,6 +44,7 @@
 | **同一座山在页面上有两个海拔数字** | `references/track-prep.md` §6（轨迹 GPS 偏低 20–50 m → **曲线用 GPS、印出来的数用 DEM**） |
 | **总里程比作者口述多一倍、剖面出现两道空白悬崖（`seg_id` 多个值）** | `references/track-prep.md` §8（两步路 KML 的**平行备选段**被全并：`--longest` 只留主线，**并把 `CFG["kml_keep"]` 写进 route_def**，否则 make_all wave0 会悄悄撤销） |
 | **用户说"标注字体动态缩小 / 位置动态合理 / 图例动态缩小"** | `references/pitfalls-map-svg.md` §15（字号阶梯 FS_LADDER + 8 方向×4 档半径位置搜索 + 图例 `_LG_S` 单系数动态缩放；⚠ `_layout` 试探必须纯函数，`_LABELS` 漏登记会让自检假通过） |
+| **用户说"渲染图拼接有问题" / 高清地图接缝处一条横贯全幅的地形断层（无白带、QA 全绿）** | `references/efficiency.md` **§8b**（旧做法「整幅 SVG + 负 margin 平移」在 **SVG 高 > 16384 px** 时静默复用前一带内容 → 改成每带裁根节点 `viewBox`；判据：块匹配各带首行应对上 `base_map` 的 `y−标题带高`；`_assert_seams()` 守回归） |
 | **沙箱完全无外网（DEM/OSM 全超时）** | `references/self-hosted-terrain.md` §10（用 WebFetch 打 Open-Elevation 文本接口取真实 SRTM 样本，本地插值重建 DEM） |
 | 放大看不清、字糊 | `references/pitfalls-terrain.md` §2 |
 | 等高线糊成"棕色泥" / 密度不对 | `references/pitfalls-terrain.md` §3（**间隔按实测线覆盖率自适应**；顺带看那里的**配色**：别用暖橙棕） |

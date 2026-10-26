@@ -440,6 +440,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | **地名标注指错地方**（名字飘在空地上） | `references/pitfalls-terrain.md` §26（锚点必须落在地物本身：线取垂足、面取内点） |
 | HTML 没出来但 QA 过了 / 时间表整列是 `—` | `references/track-prep.md` §10（`SCHEDULE` 必须 5 元组、时刻写 HH:MM） |
 | **长图/地图下半截空白（南北向长图缺脚注，QA 照样全绿）** | `references/efficiency.md` §8（无头浏览器 ~13700 行截白 → 两脚本已内建分带截图；目视长图末块是唯一防线） |
+| **用户说"渲染图拼接有问题" / 高清地图接缝一条横贯全幅的地形断层（无白带）** | `references/efficiency.md` **§8b**（SVG 高 > 16384 px 时"负 margin 平移"会静默复用前一带内容 → 每带裁 `viewBox`；`_assert_seams()` 兜底） |
 | 做得慢 / 返工多 / 一小时还没完 | `references/efficiency.md` |
 
 
@@ -614,7 +615,7 @@ python scripts/selftest.py        # 退出码 0 = 全部通过；加 -v 看逐�
 | `make_terrain` 打印的窗口来源 | `轨迹包围盒 + 35% 留白（自动）` |
 | `map_svg.self_check`（桌面版） | 越界 / 两两重叠 / **压轨迹点** / **家具互相重叠** / 标注压家具 全 0 |
 | `map_svg.self_check`（手机版） | 硬指标同上仍为 0；**两两重叠 / 压家具可能 > 0，只告警**（缩略图的拥挤不是错误） |
-| `render_map_hi` | 打印「最白行 / 最白列」且都 < 60%（无被裁白带） |
+| `render_map_hi` | 打印「最白行 / 最白列」且都 < 60%（无被裁白带）；分带时还打印「拼接缝自检：y=… 行差 …（全图中位 …）✓」——行差 > max(6×中位, 18) 直接报错 |
 | `new_route.py` 生成的 route_def | `python route_def.py` 打印 POIS/MARKS/SCHEDULE 数量合理、CFG 无缺项 |
 | `tile_tint.py --selftest` | 抹除率 > 95% 且步道保留率 > 95%（g>90 判据生效）|
 | `qa_guide.py` | 结论：全部通过 ✓ |

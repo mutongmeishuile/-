@@ -17,6 +17,7 @@
    → 正解：**开窗留余量 + 按量到的 SVG 矩形裁**（与 shoot_guide.py 同一套做法）。
 """
 import os
+import re
 import time
 from pathlib import Path
 
@@ -55,31 +56,50 @@ SLACK_W, SLACK_H = 60, 260          # 给浏览器 chrome 留的余量（只用�
 # ⚠ 超高画布（南北向线路，如库拉岗日 4512×23208）单窗截图会被无头浏览器的
 #   软件光栅**静默截白**：2026-10-24 实测 4572×23468 窗口下内容只渲染到
 #   ~13716 行（约 63 MP），之下整幅纯白、不报任何错 —— 全靠 _assert_full_frame 兜底。
-#   → 页面面积超过安全阈值就**分带截图再拼接**（每带独立开窗、负 margin 平移裁剪）。
+#   → 页面面积超过安全阈值就**分带截图再拼接**（每带裁 viewBox，见 _page_html）。
 _MAX_SHOT_MP = 45 * 1_000_000       # 单次截图的页面面积安全上限（实测 31 MP 正常、107 MP 截白）
 
 
 def _shot_bands():
-    """返回 [(offset, height), ...]：超高画布的分带截图计划。"""
+    """返回 [(剪裁起点, 本带高), ...]，单位都是**逻辑 px**（viewBox 坐标系）。
+
+    ⚠ 必须按逻辑 px 规划、物理高按累计 round 推：viewBox 的起点若不是整数，
+      接缝处会因半像素重采样出现一条发虚的细线；直接 round 每带高度又会与总高
+      H 差 1–2 px（最后一带被压扁或留白）。
+    """
     if W * (H + SLACK_H) <= _MAX_SHOT_MP:
-        return [(0, H)]
-    band = (_MAX_SHOT_MP // W) - SLACK_H          # 每带窗口面积 ≤ 上限
-    band = max(2000, band)
+        return [(0, _IH)]
+    band_px = (_MAX_SHOT_MP // W) - SLACK_H          # 每带窗口面积 ≤ 上限
+    band_logical = max(600, int(band_px // _SS))
     bands, y = [], 0
-    while y < H:
-        bands.append((y, min(band, H - y)))
-        y += band
+    while y < _IH:
+        bands.append((y, min(band_logical, _IH - y)))
+        y += band_logical
     return bands
 
 
-def _page_html(svg_path_svg, offset=0, band_h=None):
-    band_h = band_h or H
-    return (
-        '<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
-        '*{margin:0;padding:0}html,body{background:#fff}'
-        f'.clip{{width:{W}px;height:{band_h}px;overflow:hidden}}'
-        f'.clip>svg{{display:block;width:{W}px;height:{H}px;margin-top:{-offset}px}}'
-        f'</style></head><body><div class="clip">{svg_path_svg}</div></body></html>')
+_VIEWBOX_RE = re.compile(r'viewBox="0 0 ([\d.]+) ([\d.]+)"')
+
+
+def _page_html(svg_str, oy=0, bh=None):
+    """把「一条 SVG 到底」的地图裁成**只含 oy…oy+bh 这一段**的页面，返回 (html, 物理高)。
+
+    ⚠⚠ 不要再用「负 margin-top 平移整幅 SVG」的老做法。Chromium 的软件光栅在
+      SVG 高度超过 ~16384 px 后，**超限部分不按偏移重画**：画面静默复用前面
+      已经栅格化好的内容。2026-10-26 库拉岗日（4512×23208，三带）实测：
+      第 3 带（起点 19426）画出来的是 y≈9700 那一段 —— 接缝处一条横贯全幅的
+      「绿坡 / 雪山」断层，既不报错，`_has_white_band` 也全绿（没有白带，
+      只是内容错了）。块匹配可量化：该带内容与 base_map 的 y≈9248 几乎逐像素相同。
+      → 每带只把根节点的 viewBox 裁到本段，SVG 自身物理高度 ≪ 上限，内容不可能错位。
+    """
+    bh = bh or _IH
+    h_px = round((oy + bh) * H / _IH) - round(oy * H / _IH)
+    svg = _VIEWBOX_RE.sub(f'viewBox="0 {oy} {MS.IW} {bh}"', svg_str, count=1)
+    return ('<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
+            '*{margin:0;padding:0}html,body{background:#fff}'
+            f'.clip{{width:{W}px;height:{h_px}px;overflow:hidden}}'
+            f'.clip>svg{{display:block;width:{W}px;height:{h_px}px}}'
+            f'</style></head><body><div class="clip">{svg}</div></body></html>'), h_px
 
 
 # 白底外圈：SVG 被浏览器缩放到几千 px 宽时，最外 1–2 px 会因插值露出页面白底
@@ -115,6 +135,35 @@ def _has_white_band(im):
     return bool(worst_row > 0.6 or worst_col > 0.6)
 
 
+def _assert_seams(im, parts):
+    """拼接缝自检：接缝那一行的整行色差，不该显著高于全图中位行差。
+
+    为什么必须有（2026-10-26 库拉岗日实测）：带内容错位时**一条白带都没有** ——
+    `_assert_full_frame` 全绿、`_has_white_band` 也全绿，只有接缝处横贯全幅的地形断层。
+    判据：d[seam] > max(6×中位行差, 18) 即失败。真实地形不可能让 4512 px 宽的
+    一整行同时剧变（那要求全幅等高线、植被、晕渲同时换向）；库拉岗日事故是 41.2 vs 中位 3.5（≈12×）。
+    """
+    if len(parts) < 2:
+        return
+    a = np.asarray(im.convert("RGB")).astype(np.int16)
+    d = np.abs(np.diff(a, axis=0)).mean(axis=(1, 2))
+    med = float(np.median(d))
+    thr = max(6 * med, 18.0)
+    ys, y = [], 0
+    for p in parts[:-1]:
+        y += p.size[1]
+        ys.append(y)
+    bad = [(y, float(d[y])) for y in ys if y < len(d) and d[y] > thr]
+    if bad:
+        raise RuntimeError(
+            "拼接缝处整行剧变，疑似带内容错位（不是白带，白带检测抓不到）："
+            + "、".join(f"y={y} 行差 {v:.1f}" for y, v in bad)
+            + f"（全图中位 {med:.1f}，阈值 {thr:.1f}）—— 检查 _page_html 是否按 viewBox 裁带")
+    print("  拼接缝自检："
+          + "、".join(f"y={y} 行差 {float(d[y]):.1f}" for y in ys if y < len(d))
+          + f"（全图中位 {med:.1f}）✓")
+
+
 def main():
     svg, _ = MS.build_svg(mobile=False, embed_image=True, embed_max=0, with_title=True)
     bands = _shot_bands()
@@ -125,16 +174,17 @@ def main():
     try:
         t = time.time()
         parts = []
-        for bi, (off, bh) in enumerate(bands):
-            html.write_text(_page_html(svg, off, bh), encoding="utf-8")
+        for bi, (oy, bh) in enumerate(bands):
+            page, h_px = _page_html(svg, oy, bh)
+            html.write_text(page, encoding="utf-8")
             im = None
             for att in range(4):                    # 随机丢瓦片：命中白带就重截
                 _rm_quiet(raw)                      # keep-raw 模式下由 browser_shot 按 mtime 判新
-                # SVG 在 (0,0)、尺寸 W×H（body 白底、svg 无 margin）；开窗留余量，按 (0,0,W,bh) 裁。
-                cand = GC.browser_shot(html, raw, W + SLACK_W, bh + SLACK_H, scale=1)
-                cand = cand.crop((0, 0, W, bh))
-                if cand.size != (W, bh):
-                    raise RuntimeError(f"第 {bi+1} 带裁出来是 {cand.size}，应为 {(W, bh)}")
+                # 本带 SVG 的 viewBox 已裁到 oy…oy+bh，物理尺寸 W×h_px、位于页面 (0,0)
+                cand = GC.browser_shot(html, raw, W + SLACK_W, h_px + SLACK_H, scale=1)
+                cand = cand.crop((0, 0, W, h_px))
+                if cand.size != (W, h_px):
+                    raise RuntimeError(f"第 {bi+1} 带裁出来是 {cand.size}，应为 {(W, h_px)}")
                 im = cand
                 if not _has_white_band(im):
                     break
@@ -143,7 +193,10 @@ def main():
                 raise RuntimeError(f"第 {bi+1} 带连续 4 次截出白带 —— 请缩小地图窗口或 map_ss")
             parts.append(im)
         im = parts[0] if len(parts) == 1 else _vstack(parts)
+        if im.size != (W, H):
+            raise RuntimeError(f"拼接结果 {im.size} ≠ 期望 {(W, H)}（分带高度累计有误）")
         _assert_full_frame(np.asarray(im).astype(np.int16), "高清地图")
+        _assert_seams(im, parts)
         im.save(OUT_JPG, quality=88, optimize=True, progressive=True, subsampling=0)
         print(f"  {im.size} -> {OUT_JPG.name}  {OUT_JPG.stat().st_size/1048576:.2f} MB  "
               f"{time.time()-t:.1f}s")
