@@ -135,7 +135,8 @@ def render():
     out_im = Image.new("RGB", (x1 - x0, total_h), _BODY_BG)
     for k, p in enumerate(parts):
         out_im.paste(p, (0, k * (BAND - OVERLAP)))
-    out_im.save(OUT_PNG, optimize=True)
+    out_im.save(OUT_PNG, optimize=True,
+                **GC.png_meta(f"{STEM} · 徒步线路攻略长图"))
     out = Image.open(OUT_PNG)
     print(f"  -> {out.size} · {OUT_PNG.stat().st_size/1048576:.2f} MB · {OUT_PNG.name}")
 

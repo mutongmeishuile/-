@@ -100,7 +100,7 @@
 | 图例样本与出图配色不一致 | `references/pitfalls-map-svg.md` §4 |
 | **做得慢、返工多、一小时还没完** | **`references/efficiency.md`**（耗时实测 + 提速做法） |
 | **图上没有国界 / 看不出这是边境**（西藏、新疆边境线高频） | `fetch_osm.py --border`（只补国界，别整盘 `--force`）→ 重跑 `make_terrain`；细节与核验判据见 `references/pitfalls-terrain.md` **§29**（界线到珠峰/洛子/马卡鲁的距离必须是「几米」） |
-| **用户问「XX 线里没有珠峰/某某峰吗」/ 图上缺最有名的那座山** | `references/pitfalls-terrain.md` **§14「第三种可能：残缺抓取」**（窗口内有这座峰、坐标也对，但 `osm.json` 里没有 → 先查 `highway=path` 是否 0 条；应急用 `kind="peak_hi"` POI 补，根治 `fetch_osm --force` + 重渲底图） |
+| **用户问「XX 线里没有珠峰/某某峰吗」/ 图上缺最有名的那座山** | `references/pitfalls-terrain.md` **§14「第三种可能：残缺抓取」**（窗口内有这座峰、坐标也对，但 `osm.json` 里没有 → 先查 `highway=path` 是否 0 条；应急用 `kind="peak_hi"` POI 补，根治 **`fetch_osm.py --shard`**（别用 `--force`）+ 重渲底图） |
 | **哪些步骤能并行、并行能省多少** | `references/efficiency.md` §3.7（DAG 分层 + 实测 + 别抱幻想） |
 | **`route_def.py` 的里程/爬升不知从哪来、只会手抄** | `scripts/new_route.py`（读 `out/` 三个 json 自动生成骨架，文案留 `★ TODO`） |
 | **`route_def.POIS` 写成字典就崩（`KeyError: 0`）** | `guide_common.poi()` / `pois_of()`：元组与字典都收；下游一律走它取值 |

@@ -76,6 +76,16 @@ def main():
     md = ET.SubElement(gpx, "metadata")
     ET.SubElement(md, "name").text = CFG.get("title", STEM)
     ET.SubElement(md, "desc").text = CFG.get("meta", "")
+    # 作者信息：导进手表 / 两步路后仍带着出处（元数据层，不占版面）
+    _a = GC.author()
+    if not _a.get("off") and _a.get("name"):
+        au = ET.SubElement(md, "author")
+        ET.SubElement(au, "name").text = _a["name"]
+        if _a.get("platform") or _a.get("id"):
+            ln = ET.SubElement(au, "link", {"href": "https://www.xiaohongshu.com"})
+            ET.SubElement(ln, "text").text = f'{_a.get("platform","")}号 {_a.get("id","")}'
+        cr = ET.SubElement(md, "copyright", {"author": _a["name"]})
+        ET.SubElement(cr, "year").text = str(__import__("datetime").date.today().year)
 
     trk = ET.SubElement(gpx, "trk")
     ET.SubElement(trk, "name").text = CFG.get("title", STEM)

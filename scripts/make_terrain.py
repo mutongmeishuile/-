@@ -2121,6 +2121,9 @@ def build_terrain():
                                        | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
     except FileNotFoundError:
         pass
+    # 署名水印（栅格层）：烧在最终底图上 —— HTML 内嵌地图与长图都吃这一张，
+    # 所以在渲染期加，而不是让人事后用图片工具去盖。高清图另有独立一份（render_map_hi）。
+    pil = GC.burn_watermark(pil)
     pil.save(OUT / "base_map.jpg", **JPG)
     print(f"[7/7] 完成 栅格 {pil.size} / 逻辑 {LOGICAL_W}×{LOGICAL_H}  高程 {lo:.0f}–{hi:.0f} m  "
           f"jpg {(OUT/'base_map.jpg').stat().st_size/1048576:.2f} MB")

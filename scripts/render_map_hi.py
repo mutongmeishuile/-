@@ -197,7 +197,11 @@ def main():
             raise RuntimeError(f"拼接结果 {im.size} ≠ 期望 {(W, H)}（分带高度累计有误）")
         _assert_full_frame(np.asarray(im).astype(np.int16), "高清地图")
         _assert_seams(im, parts)
-        im.save(OUT_JPG, quality=88, optimize=True, progressive=True, subsampling=0)
+        # 高清图是**重渲 SVG**、不复用 base_map.jpg —— 水印必须在这里再烧一次，
+        # 否则高清图会裸奔（只加 base_map 的话，长图有、高清图没有）。
+        im = GC.burn_watermark(im)
+        im.save(OUT_JPG, quality=88, optimize=True, progressive=True, subsampling=0,
+                **GC.jpg_meta(f'{CFG.get("title", STEM)} · 全线地图 · 非导航用图'))
         print(f"  {im.size} -> {OUT_JPG.name}  {OUT_JPG.stat().st_size/1048576:.2f} MB  "
               f"{time.time()-t:.1f}s")
     finally:

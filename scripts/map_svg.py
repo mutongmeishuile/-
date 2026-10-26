@@ -387,7 +387,7 @@ def _legend_w():
         # 两列网格：每列 = 符号 34 + 间距 22 + 名称
         half = max(34 + 22 + GC.text_w(nm, 17) for _k, nm in syms)
         need.append(2 * half + 36)
-    foot = _CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图")
+    foot = GC.author_legend(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))
     if foot:
         need.append(18 + GC.text_w(foot, 16.5) + 18)
     return max(LG_W_MIN, min(LG_W_MAX, max(need)))
@@ -987,7 +987,7 @@ def build_map_overlay(mobile=False):
                 g.append(f'<text x="{cx+22*S:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
                          f'font-weight="700" fill="#4A5261">{nm}</text>')
         g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(16.5*S)}" '
-                 f'font-weight="600" fill="#7A8290">{_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图")}</text>')
+                 f'font-weight="600" fill="#7A8290">{GC.author_legend(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))}</text>')
         g.append("</g>")
         o.append("".join(g))
 

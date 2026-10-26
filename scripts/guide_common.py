@@ -843,3 +843,201 @@ def browser_eval(html_text, js, port=9333, win_w=1200, win_h=2200, timeout=60):
             proc.kill()
         tmp.unlink(missing_ok=True)
     return box["data"] if box["data"] is not None else box["raw"]
+
+
+# ------------------------------------------------------------------ 作者署名 / 防盗
+# 设计原则：**渲染期统一注入**，不往 54 个 route_def 里各写一遍。
+#   逐条填的后果是必然写岔（号码少一位、昵称多空格），而且改一次要改 54 遍。
+#   所以：默认值写在这里，`route_def.CFG["author"]` 只用于"单条线路覆盖 / 关掉"。
+#
+# 关掉的方式（任选其一）：
+#   · 环境变量  HIKING_AUTHOR=0
+#   · route_def  CFG["author"] = {"off": True}
+# 素材（可选，缺了自动降级成纯文字署名）：
+#   · scripts/assets/avatar.png、scripts/assets/xhs_qr.png
+#   · 或技能目录 assets/（项目里的 scripts/ 是运行副本，找不到会回落到技能目录）
+_AUTHOR_DEF = {
+    "name": "鹏鹏",
+    "platform": "小红书",
+    "id": "55931434345",
+    "tagline": "",                     # 一句话签名，留空不显示
+    "notice": "欢迎转发，请保留本卡；抹去署名后二次发布视为侵权",
+    "wm": True,                        # 底图是否烧栅格水印
+    "wm_alpha": (0.16, 0.24),          # (白字α, 深描边α)：1:1 可读、缩略退成纹理
+    "off": False,
+}
+
+_OFF_WORDS = ("0", "false", "no", "off", "none")
+
+
+def author():
+    """当前生效的署名配置（默认值 ← route_def.CFG["author"] 覆盖 ← 环境变量关断）。"""
+    a = dict(_AUTHOR_DEF)
+    over = cfg("author", None)
+    if isinstance(over, dict):
+        a.update(over)
+    if str(os.environ.get("HIKING_AUTHOR", "1")).strip().lower() in _OFF_WORDS:
+        a["off"] = True
+    return a
+
+
+def author_text():
+    """`鹏鹏 · 小红书 55931434345` —— 全链路唯一的署名串（别在各脚本里手拼）。"""
+    a = author()
+    if a.get("off") or not a.get("name"):
+        return ""
+    plat, aid = (a.get("platform") or "").strip(), (a.get("id") or "").strip()
+    return f'{a["name"]} · {plat} {aid}'.strip() if plat else f'{a["name"]} · {aid}'
+
+
+def author_legend(foot=None):
+    """图例脚注沿用原文案，尾部追加 `· © 鹏鹏`（不放号码，免得图例被撑宽）。"""
+    a = author()
+    if a.get("off") or not a.get("name"):
+        return foot or ""
+    sig = f'© {a["name"]}'
+    if not foot:
+        return sig
+    return foot if sig in foot else f'{foot} · {sig}'
+
+
+_AUTHOR_ASSET_DIRS = [
+    HERE / "assets",
+    Path.home() / ".workbuddy" / "skills" / "hiking-route-guide-poster" / "assets",
+]
+
+
+def author_asset(name):
+    """找署名素材（头像 / 二维码）；找不到返回 None，调用方降级、**不报错**。"""
+    for d in _AUTHOR_ASSET_DIRS:
+        p = Path(d) / name
+        if p.exists() and p.stat().st_size > 0:
+            return p
+    return None
+
+
+def _data_uri(p):
+    import base64
+    mime = "image/png" if str(p).lower().endswith(".png") else "image/jpeg"
+    return f"data:{mime};base64," + base64.b64encode(Path(p).read_bytes()).decode("ascii")
+
+
+def brand_card_html():
+    """页尾落款卡：头像 + 昵称 + 号码 + 二维码 + 防盗声明。
+
+    样式全部 inline —— 单文件长页面里 `.src/.hl/.nm` 这类短类名极易撞车
+    （症状是"某段文字只占左边一小条"），落款卡不该再给这套 CSS 添变量。
+    缺素材时自动降级：没有头像画首字圆牌，没有二维码只有号码，都照样能用。
+    """
+    a = author()
+    if a.get("off") or not a.get("name"):
+        return ""
+    av = author_asset("avatar.png") or author_asset("avatar.jpg")
+    qr = author_asset("xhs_qr.png") or author_asset("xhs_qr.jpg")
+    plat, aid = (a.get("platform") or "").strip(), (a.get("id") or "").strip()
+    tagline = (a.get("tagline") or "").strip()
+    notice = (a.get("notice") or "").strip()
+
+    if av:
+        left = (f'<img src="{_data_uri(av)}" alt="{a["name"]}" '
+                f'style="width:62px;height:62px;border-radius:50%;object-fit:cover;'
+                f'border:1px solid #E3DCD1;flex:0 0 62px">')
+    else:
+        left = (f'<div style="width:62px;height:62px;border-radius:50%;background:#0F6E5C;'
+                f'color:#fff;display:flex;align-items:center;justify-content:center;'
+                f'font-size:24px;font-weight:700;flex:0 0 62px">{a["name"][:1]}</div>')
+
+    lines = [f'<div style="font-size:17px;font-weight:800;color:#1F2430;letter-spacing:.3px;'
+             f'line-height:1.3">{a["name"]}</div>']
+    if plat or aid:
+        lines.append(f'<div style="font-size:13.5px;color:#0F6E5C;font-weight:700;margin-top:4px">'
+                     f'{plat}号 {aid}</div>')
+    if tagline:
+        lines.append(f'<div style="font-size:12.4px;color:#68717E;margin-top:5px;line-height:1.6">'
+                     f'{tagline}</div>')
+    if notice:
+        lines.append(f'<div style="font-size:11.6px;color:#8A7D6E;margin-top:7px;line-height:1.65;'
+                     f'border-top:1px dashed #E3DCD1;padding-top:6px">{notice}</div>')
+
+    right = ""
+    if qr:
+        right = (f'<div style="flex:0 0 auto;text-align:center;margin-left:14px">'
+                 f'<img src="{_data_uri(qr)}" alt="小红书二维码" '
+                 f'style="width:88px;height:88px;border-radius:8px;display:block;'
+                 f'border:1px solid #E3DCD1;background:#fff">'
+                 f'<div style="font-size:11px;color:#8A7D6E;margin-top:4px">扫码或搜号码</div></div>')
+
+    return ('<div class="byc" style="margin-top:16px;padding:15px 17px;border-radius:14px;'
+            'background:#FBF8F4;border:1px solid #EAE3D9;display:flex;align-items:center;gap:14px">'
+            f'{left}<div style="flex:1;min-width:0">{"".join(lines)}</div>{right}</div>')
+
+
+def burn_watermark(img, text=None):
+    """把署名烧进底图像素（栅格层）—— 这是唯一"抹不干净"的一层。
+
+    参数全部按**图宽**自适应（同一份代码同时服务 4512 px 高清图与内嵌底图）：
+      字号 宽/118、横向间距 宽/6.2、纵向间距 宽/8.0、−30° 斜排；
+      白字 α0.12 + 深描边 α0.19 —— 阴影地形与高光地形都读得出来（标定见 _水印预演）。
+
+    为什么斜 30° 而不是水平：等高线基本是水平曲线，同向会糊成一片；
+    斜排后像"纸纹"，不干扰地貌判读。整图约 23 处，任意一块截图里至少留 1 处。
+    """
+    a = author()
+    txt = text if text is not None else author_text()
+    if a.get("off") or not a.get("wm", True) or not txt:
+        return img
+    from PIL import Image as _I, ImageDraw
+    W, H = img.size
+    if W < 700:                       # 缩略图不盖（会糊成一团）
+        return img
+    al, ad = a.get("wm_alpha") or (0.12, 0.19)
+    al, ad = int(round(255 * float(al))), int(round(255 * float(ad)))
+    size = max(12, round(W / 118))
+    sx, sy = max(60, round(W / 6.2)), max(60, round(W / 8.0))
+
+    layer = _I.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    f = label_font(size)
+    y = -sy // 2
+    while y < H + sy:
+        x = -sx // 2
+        while x < W + sx:
+            d.text((x, y), txt, font=f, fill=(255, 255, 255, al),
+                   stroke_width=max(1, size // 20), stroke_fill=(22, 22, 22, ad))
+            x += sx
+        y += sy
+    layer = layer.rotate(-30, resample=_I.BICUBIC, expand=False)
+
+    out = img.convert("RGBA")
+    out.alpha_composite(layer)
+    return out.convert("RGB")
+
+
+def jpg_meta(desc=""):
+    """JPEG 要写的 EXIF（Artist / Copyright / Description / Software）。"""
+    from PIL import Image
+    a = author()
+    if a.get("off"):
+        return {}
+    name = a.get("name", "")
+    exif = Image.Exif()
+    exif[0x010E] = desc or "徒步线路攻略 · 全线地图"
+    exif[0x013B] = name
+    exif[0x8298] = f"© {name} · {a.get('platform', '')} {a.get('id', '')}".strip()
+    exif[0x0131] = "hiking-route-guide-poster"
+    return {"exif": exif}
+
+
+def png_meta(desc=""):
+    """PNG 长图要写的 tEXt（无损，比 EXIF 稳）。"""
+    from PIL import PngImagePlugin
+    a = author()
+    if a.get("off"):
+        return {}
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Author", a.get("name", ""))
+    info.add_text("Copyright", f"© {a.get('name','')} {a.get('platform','')} {a.get('id','')}".strip())
+    info.add_text("Source", "hiking-route-guide-poster")
+    if desc:
+        info.add_text("Description", desc)
+    return {"pnginfo": info}

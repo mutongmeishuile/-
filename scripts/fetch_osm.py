@@ -44,39 +44,48 @@ UA = "hiking-route-guide/1.0 (offline guide map; contact: local user)"
 # 水体（natural=water / landuse=reservoir）**way 与 relation 都要**：
 # OSM 上许多大湖/水库是 multipolygon relation（如年宝玉则仙女湖 relation 4491548），
 # 只抓 way 会整片漏掉 —— 2026-10-17 年宝玉则实测踩坑（地图把湖画成平地）。
-QUERY = f"""
+def _query(bbox):
+    """生成整条查询语句（bbox 形如 "lat0,lon0,lat1,lon1"）。
+
+    ⚠ 2026-10-26 起是**函数**而不是模块常量：`--shard` 分片抓取要逐块换 bbox。
+      老调用点不受影响 —— 下面仍有 `QUERY = _query(BBOX)`。
+    """
+    return f"""
 [out:json][timeout:180];
 (
-  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|track|path|footway|steps|bridleway)$"]({BBOX});
-  way["waterway"~"^(river|stream|canal|drain)$"]({BBOX});
-  way["natural"="water"]({BBOX});
-  way["landuse"="reservoir"]({BBOX});
-  relation["natural"="water"]({BBOX});
-  relation["landuse"="reservoir"]({BBOX});
-  way["natural"="wood"]({BBOX});
-  way["landuse"="forest"]({BBOX});
-  way["landuse"="meadow"]({BBOX});
-  way["natural"="glacier"]({BBOX});
-  relation["natural"="glacier"]({BBOX});
-  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood|locality)$"]({BBOX});
-  node["natural"="peak"]({BBOX});
-  node["natural"="saddle"]({BBOX});
-  node["natural"="valley"]({BBOX});
-  node["natural"="ridge"]({BBOX});
-  node["mountain_pass"="yes"]({BBOX});
-  way["natural"="valley"]({BBOX});
-  way["natural"="ridge"]({BBOX});
-  node["tourism"="viewpoint"]({BBOX});
-  node["historic"]({BBOX});
-  way["natural"="water"]({BBOX});
-  node["natural"="saddle"]({BBOX});
-  node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({BBOX});
-  node["amenity"="place_of_worship"]({BBOX});
-  way["boundary"="administrative"]["admin_level"="2"]({BBOX});
-  relation["boundary"="administrative"]["admin_level"="2"]({BBOX});
+  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|track|path|footway|steps|bridleway)$"]({bbox});
+  way["waterway"~"^(river|stream|canal|drain)$"]({bbox});
+  way["natural"="water"]({bbox});
+  way["landuse"="reservoir"]({bbox});
+  relation["natural"="water"]({bbox});
+  relation["landuse"="reservoir"]({bbox});
+  way["natural"="wood"]({bbox});
+  way["landuse"="forest"]({bbox});
+  way["landuse"="meadow"]({bbox});
+  way["natural"="glacier"]({bbox});
+  relation["natural"="glacier"]({bbox});
+  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood|locality)$"]({bbox});
+  node["natural"="peak"]({bbox});
+  node["natural"="saddle"]({bbox});
+  node["natural"="valley"]({bbox});
+  node["natural"="ridge"]({bbox});
+  node["mountain_pass"="yes"]({bbox});
+  way["natural"="valley"]({bbox});
+  way["natural"="ridge"]({bbox});
+  node["tourism"="viewpoint"]({bbox});
+  node["historic"]({bbox});
+  way["natural"="water"]({bbox});
+  node["natural"="saddle"]({bbox});
+  node["tourism"~"^(attraction|viewpoint|alpine_hut)$"]({bbox});
+  node["amenity"="place_of_worship"]({bbox});
+  way["boundary"="administrative"]["admin_level"="2"]({bbox});
+  relation["boundary"="administrative"]["admin_level"="2"]({bbox});
 );
 out geom;
 """
+
+
+QUERY = _query(BBOX)
 # 国界（admin_level=2）2026-10-25 补：用户看珠峰东坡地图问「缺少国界」。
 # 珠峰/洛子/马卡鲁全骑在中尼边界上，窗口里国界是所有地理要素里**信息量最大的那条线**
 # （哪座山在境外、徒步终点离边界多远），但原 QUERY 只抓 highway/waterway/自然要素，
@@ -137,6 +146,8 @@ def _cache_covers(d):
     判据：缓存的四边都要够到当前窗口（容差 2%，OSM 边缘本来就可能没要素）。
     空缓存（上次全部镜像失败的产物）一律判为"不覆盖"→ 自动重抓。
     """
+    if d.get("_sharded") and (d.get("elements") or []):
+        return True          # 分片抓取是按网格全覆盖做的，不必再靠元素范围判边
     els = d.get("elements") or []
     if not els:
         return False
@@ -336,6 +347,154 @@ def fetch_borders(soft=True):
     raise SystemExit(msg)
 
 
+# ============================================================ 分片抓取（2026-10-26）
+# 为什么要有：公共 Overpass 实例对大 bbox 的"一次问全类目"查询，**要么 504，
+# 要么更坏——超时后返回半截数据**。2026-10-24 EBC 实测：窗口 41×69 km 一次查回来
+# 只有 542 个要素、`highway=path` 一条都没有、连珠峰节点都缺（`osm.json` 里
+# `Everest` 0 命中），而**没有 remark、不报错**，`_cache_covers()` 照样判覆盖。
+# 分片后单块 ≤0.08°（约 7×9 km）就能稳定返回；小块失败再二分，最小 0.02°。
+# 每块落一个文件 → 断点续跑（一小时的抓取中断了不用从头来）。
+SHARD_DIR = OUT / "osm_shards"
+SHARD_TILE = 0.08        # 默认块边长（度）
+SHARD_MIN = 0.02         # 最小块边长（度），到这一步仍失败就放弃该块
+
+
+def _mirrors_for_window():
+    """按窗口挑镜像 + 排序：**先能用的**。
+
+    · `overpass.osm.ch` 只有欧洲数据，查亚洲会返回空/400，白耗一轮重试
+      （`pitfalls-terrain §14`）→ 非欧洲窗口直接去掉；
+    · ⚠ 2026-10-26 实测：kumi / private.coffee / osm.jp / openstreetmap.ru **全部连不上**
+      （Bash 出口对这几个域名直接超时，75 s 白等）。所以欧洲窗口外把**主站排第一**，
+      其余只当兜底 —— 原来 os.ch 排首位的顺序在亚洲会先白等一个必然失败的镜像。
+    """
+    eu = (LON0 >= -12 and LON1 <= 45 and LAT0 >= 34 and LAT1 <= 72)
+    if eu:
+        return MIRRORS
+    others = [m for m in MIRRORS if "overpass.osm.ch" not in m]
+    main = [m for m in others if "overpass-api.de" in m]
+    rest = [m for m in others if m not in main]
+    return main + rest
+
+
+def _shard_file(b):
+    return SHARD_DIR / ("shard_%.5f_%.5f_%.5f_%.5f.json" % (b[0], b[1], b[2], b[3]))
+
+
+def _fetch_shard(bbox, attempts=3, timeout=120):
+    """抓单块。0 要素是**合法结果**（纯雪山/无人区），不像大查询那样当失败。"""
+    q = _query("%.5f,%.5f,%.5f,%.5f" % (bbox[1], bbox[0], bbox[3], bbox[2]))
+    last = None
+    for att in range(attempts):
+        for host in _mirrors_for_window():
+            try:
+                req = urllib.request.Request(
+                    host,
+                    data=urllib.parse.urlencode({"data": q}).encode(),
+                    headers={"User-Agent": UA,
+                             "Content-Type": "application/x-www-form-urlencoded"})
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    d = json.loads(r.read().decode("utf-8"))
+                rm = str(d.get("remark") or "")
+                if "error" in rm.lower():
+                    raise RuntimeError("remark: " + rm[:120])
+                return d.get("elements") or []
+            except Exception as e:                                # noqa
+                last = e
+                time.sleep(1.5 + 2 * att)
+    raise RuntimeError(repr(last)[:160])
+
+
+def _walk_shard(bbox, depth=0):
+    """递归抓一块：成功就落盘；失败沿长边二分；到 SHARD_MIN 仍失败则放弃该块。"""
+    p = _shard_file(bbox)
+    if p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if d.get("_ok"):
+                return d.get("elements") or []
+        except Exception:                                         # noqa
+            pass
+    lon0, lat0, lon1, lat1 = bbox
+    ind = "  " * (depth + 1)
+    try:
+        els = _fetch_shard(bbox)
+    except Exception as e:                                        # noqa
+        w, h = lon1 - lon0, lat1 - lat0
+        if max(w, h) <= SHARD_MIN + 1e-9:
+            print(f"{ind}✗ {lon0:.3f},{lat0:.3f} 块放弃：{e}")
+            return []
+        if w >= h:
+            mid = (lon0 + lon1) / 2
+            subs = [(lon0, lat0, mid, lat1), (mid, lat0, lon1, lat1)]
+        else:
+            mid = (lat0 + lat1) / 2
+            subs = [(lon0, lat0, lon1, mid), (lon0, mid, lon1, lat1)]
+        print(f"{ind}↘ {lon0:.3f},{lat0:.3f} 块失败（{e}）→ 二分")
+        out = []
+        for sb in subs:
+            out += _walk_shard(sb, depth + 1)
+        return out
+    SHARD_DIR.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"_ok": True, "bbox": list(bbox), "n": len(els),
+                             "elements": els}, ensure_ascii=False), encoding="utf-8")
+    print(f"{ind}✓ {lon0:.3f},{lat0:.3f} {len(els)} 要素")
+    return els
+
+
+def fetch_sharded(force=False, tile=None, soft=False, jobs=3):
+    """按网格分片抓取并合并写 `osm.json`（带 `_sharded` 标记，供 `_cache_covers` 直接放行）。"""
+    tile = float(tile or _route_cfg_osm("osm_shard_tile", SHARD_TILE))
+    if CACHE.exists() and not force:
+        d = json.loads(CACHE.read_text(encoding="utf-8"))
+        if d.get("_sharded") and d.get("elements"):
+            print(f"命中分片缓存 {CACHE.name}：{len(d['elements'])} 个要素")
+            return d
+    print(f"分片抓取窗口 {LON0}, {LAT0} → {LON1}, {LAT1}（块 ≤ {tile}°）")
+    grid, y = [], LAT0
+    while y < LAT1 - 1e-9:
+        y2 = min(y + tile, LAT1)
+        x = LON0
+        while x < LON1 - 1e-9:
+            x2 = min(x + tile, LON1)
+            grid.append((x, y, x2, y2))
+            x = x2
+        y = y2
+    done = sum(1 for b in grid if _shard_file(b).exists())
+    print(f"  共 {len(grid)} 块，已完成 {done} 块（断点续跑，重跑会跳过）")
+    els, seen = [], set()
+    t0 = time.time()
+    # 并发：公共实例对同一 IP 的并发不做硬限制，但 3 路以上会开始 429，
+    # 所以默认 3，失败靠 _fetch_shard 内部重试兜。结果顺序无关，合并时按 (type,id) 去重。
+    from concurrent.futures import ThreadPoolExecutor
+    jobs = max(1, min(int(jobs or 1), 4))
+
+    def _one(i_b):
+        i, b = i_b
+        return b, _walk_shard(b)
+
+    if jobs == 1:
+        results = [_one((i, b)) for i, b in enumerate(grid, 1)]
+    else:
+        with ThreadPoolExecutor(jobs) as ex:
+            results = list(ex.map(_one, list(enumerate(grid, 1))))
+    for b, part in results:
+        for e in part:
+            k = (e.get("type"), e.get("id"))
+            if k in seen:
+                continue
+            seen.add(k)
+            els.append(e)
+    print(f"  合并 {len(grid)} 块（{jobs} 路并发）")
+    dt = time.time() - t0
+    print(f"  合并完成：{len(els)} 个要素（本轮 {dt:.0f}s）")
+    out = {"elements": els, "_sharded": True,
+           "_bbox": [LON0, LAT0, LON1, LAT1], "_tile": tile}
+    CACHE.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    print(f"已写 {CACHE.name}（{CACHE.stat().st_size // 1024} KB）")
+    return out
+
+
 def summarize(d):
     from collections import Counter
     kind, names = Counter(), []
@@ -381,6 +540,12 @@ if __name__ == "__main__":
     ap.add_argument("--border", action="store_true",
                     help="只补抓国界（admin_level=2）并合并进现有缓存；"
                          "老线路加国界线用这个，不必整盘 --force")
+    ap.add_argument("--shard", action="store_true",
+                    help="按网格分片抓取：绕开公共实例大查询 504 / 半截数据（残缺 osm.json 的正解）")
+    ap.add_argument("--tile", type=float, default=SHARD_TILE,
+                    help=f"分片边长（度），默认 {SHARD_TILE}；越小越稳越慢")
+    ap.add_argument("--jobs", type=int, default=3,
+                    help="分片并发数（默认 3；公共实例 >3 开始 429）")
     a = ap.parse_args()
     if a.border:
         els = fetch_borders(soft=True)
@@ -391,7 +556,8 @@ if __name__ == "__main__":
                   f"  {len(e.get('geometry') or [])} 点 / {len(e.get('members') or [])} 成员")
         print("\n⚠ 缓存已改动 → 必须重跑 make_terrain（底图叠加层在底图里烘焙）。")
         sys.exit(0)
-    data = fetch(a.force, a.soft)
+    data = (fetch_sharded(a.force, a.tile, a.soft, a.jobs) if a.shard
+            else fetch(a.force, a.soft))
     if not data.get("elements"):
         print("\n（无矢量要素，跳过汇总）")
         sys.exit(0)

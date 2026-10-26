@@ -257,6 +257,12 @@ def profile_svg(fs=1.0, mobile=False):
                  f'stroke-width="{round(3.2*fs)}" paint-order="stroke" '
                  f'stroke-linejoin="round">{txt}</text>')
 
+    # 剖面右下角署名：画在 SVG 内，缩图时跟着缩，裁不掉也抹不平（内容层署名）
+    _at = GC.author_text()
+    if _at:
+        o.append(f'<text x="{pr:.0f}" y="{pb+round(38*fs)}" text-anchor="end" '
+                 f'font-size="{round(10.5*fs)}" fill="#9A8F80">{_at}</text>')
+
     return (f'<svg class="profsvg" viewBox="0 0 {PW} {PH}" xmlns="http://www.w3.org/2000/svg" '
             f'role="img" aria-label="{CFG.get("aria_prof", "全程海拔剖面")}">'
             f'<rect x="0" y="0" width="{PW}" height="{PH}" fill="#FFFFFF" rx="14"/>'
@@ -627,6 +633,14 @@ def build_html():
     days_html = "".join(day_card(*c) for c in CFG.get("day_cards", []))
     src_html = _src_html()
     src_section = f'<section class="panel">{src_html}</section>' if src_html else ''
+    # 署名 / 落款卡：渲染期统一注入（不写进 route_def，54 条线路一改全生效）
+    _at = GC.author_text()
+    by_html = (f'\n  <div style="font-size:12.4px;color:#8A7D6E;letter-spacing:.3px;'
+               f'margin:-6px 0 16px">图 / 文 / 制图：{_at}</div>') if _at else ''
+    card_html = GC.brand_card_html()
+    sched_foot = (f'<tr><td colspan="8" style="font-size:11.6px;color:#8A7D6E;'
+                  f'padding-top:9px;border-bottom:none">本表由实测轨迹整理 · {_at}</td></tr>'
+                  if _at else '')
     return c1 + c2, f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -642,7 +656,7 @@ def build_html():
     <span class="meta">{CFG.get("meta", "")}</span>
   </div>
   <h1>{CFG.get("title", STEM)} <span class="lite">{CFG.get("title_lite", "")}</span></h1>
-  <p class="sub">{CFG.get("sub", "")}</p>
+  <p class="sub">{CFG.get("sub", "")}</p>{by_html}
 
   <div class="stats">{_stats_html()}</div>
 
@@ -675,6 +689,7 @@ def build_html():
       <thead><tr><th>点位</th><th>里程 km</th><th>海拔 m</th>
         <th>累计↑ m</th><th>累计↓ m</th><th>时刻</th><th>用时</th><th>说明</th></tr></thead>
       <tbody>{schedule_rows()}</tbody>
+      {f"<tfoot>{sched_foot}</tfoot>" if sched_foot else ""}
     </table>
   </section>
 
@@ -685,6 +700,8 @@ def build_html():
   </section>
 
   {src_section}
+
+  {card_html}
 
   <div class="foot">{CFG.get("foot", "")}</div>
 </div>
