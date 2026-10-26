@@ -18,6 +18,7 @@ import os
 import json
 import math
 import re
+from pathlib import Path
 
 import guide_common as GC
 import route_def as RD
@@ -79,7 +80,7 @@ _PAD = 18
 _PIN_R = 15
 _OCC, _LABELS, LABEL_OF = [], [], {}
 _TRK, _TRK_HW = [], 0.0     # 轨迹点与半宽（_layout 用来避让线）
-_lg_rect = _sb_rect = _cp_rect = None
+_lg_rect = _sb_rect = _cp_rect = _bd_rect = None
 
 
 def P(lon, lat):
@@ -717,10 +718,169 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
     return "".join(out)
 
 
+# ---------------------------------------------------------------- 署名徽标（可选）
+# `CFG["map_badge"] = True`（或 {"size": 78, "gap": 9}）→ 在比例尺旁画一枚圆形署名徽标。
+#   素材：`scripts/assets/avatar_ring.png`（或技能目录 assets/，缺了自动不画、不报错）。
+#   落点（2026-10-26 用户指定）：**首选比例尺正上方、水平居中**，直径 ≈ 比例尺卡宽的 42%
+#   （视觉重量与比例尺相当）。若压轨迹 / 图钉 / 已摆家具 / 底图地名锚点，按候选序列外移
+#   —— 这是"遮住主要地形就动态挪位"的落地方式：地形本身无法量化，用**可量化的地物**
+#   （轨迹、点位、地名锚点、标高）当代理指标。
+def _badge_cfg():
+    v = _CFG.get("map_badge", None)
+    if not v:
+        return None
+    return v if isinstance(v, dict) else {}
+
+
+_BADGE_DOC = None
+
+
+def _badge_doc():
+    """读精简版矢量徽标（`assets/avatar_ring.svg`），并按需改写根节点 / 加 id 前缀。
+
+    为什么要矢量（2026-10-26 用户反馈「名称和小红书账号放大后模糊」）：
+    原先用 384 px 的 PNG，高清图里只显示 201 px，放大一档就是糊的；而这份 SVG 的
+    环与文字都是矢量，只有中间那张照片是位图（已降到 640 JPEG，整体 115 KB，
+    比 384 PNG 的 base64 还小）。内联进地图 SVG 后**任意倍率都锐利**。
+    """
+    global _BADGE_DOC
+    if _BADGE_DOC is not None:
+        return _BADGE_DOC
+    p = GC.author_asset("avatar_ring.svg")
+    if p is None:
+        _BADGE_DOC = ""
+        return ""
+    try:
+        s = Path(p).read_text(encoding="utf-8")
+    except Exception:                                            # noqa: BLE001
+        _BADGE_DOC = ""
+        return ""
+    # id 加前缀：同一份地图里若还嵌了别的东西，avatarClip / scrim 这类通用名会撞车
+    for _id in ("avatarClip", "scrim", "vignette", "softShadow"):
+        s = s.replace(f'id="{_id}"', f'id="bd{_id}"').replace(f"url(#{_id})", f"url(#bd{_id})")
+    # 根节点只保留 xmlns + viewBox，尺寸交给调用方（x/y/width/height 由 _badge_svg 填）
+    s = re.sub(r"<svg\b[^>]*>", '<svg xmlns="http://www.w3.org/2000/svg" '
+               'viewBox="0 0 1200 1200">', s, count=1)
+    _BADGE_DOC = s
+    return s
+
+
+def _badge_data_uri():
+    """位图回退口径（矢量版缺失时用）。"""
+    p = GC.author_asset("avatar_ring.png")
+    return GC._data_uri(p) if p is not None else None
+
+
+_OSM_PTS = None
+
+
+def _osm_barrier_pts():
+    """OSM 线状地物（步道 / 公路 / 水系）的逻辑坐标点，专供徽标避让。
+
+    为什么需要（2026-10-26 峨眉山实测）：图上那条紫色步道是画在**栅格底图**里的，
+    SVG 层根本没有它的坐标；徽标只避让轨迹时，有一小段步道正好从头像顶上穿过去。
+    这里把 osm.json 的 way 几何投影一遍，作为"次要地物"障碍（权重低于轨迹）。
+    """
+    global _OSM_PTS
+    if _OSM_PTS is not None:
+        return _OSM_PTS
+    pts = []
+    try:
+        d = json.loads((GC.OUT / "osm.json").read_text(encoding="utf-8"))
+    except Exception:                                           # noqa: BLE001
+        _OSM_PTS = pts
+        return pts
+    for e in d.get("elements", []):
+        if e.get("type") != "way":
+            continue
+        t = e.get("tags") or {}
+        if not any(k in t for k in ("highway", "waterway", "railway")):
+            continue
+        for g in (e.get("geometry") or []):
+            if "lon" not in g or "lat" not in g:
+                continue
+            x, y = P(g["lon"], g["lat"])
+            if -20 <= x <= IW + 20 and -20 <= y <= IH + 20:
+                pts.append((x, y))
+    _OSM_PTS = pts
+    return pts
+
+
+def _badge_place(sb, D, gap, track, pins, anchors):
+    """挑一个最不碍事的落点，返回 (box, idx, detail)。首选正上方，冲突才外移/抬高。
+
+    候选位分三组：**比例尺上方**（居中 / 左对齐 / 右对齐 / 逐档抬高）、
+    左右两侧、正下方及几个远位。2026-10-26 峨眉山实测：只给"正上方 + 左右"时，
+    该处有一条 OSM 步道斜穿，7 个候选全压线，最后还是选了压线那个 ——
+    所以必须补"抬高"这一维（往上挪出线，仍属于"比例尺上方"）。
+    """
+    x0, y0, x1, y1 = sb
+    sbw = x1 - x0
+    mid = (y0 + y1) / 2.0 - D / 2.0
+    cxc = x0 + (sbw - D) / 2.0
+    cands = [
+        ("正上方", (cxc, y0 - gap - D)),
+        ("上方左对齐", (x0, y0 - gap - D)),
+        ("上方右对齐", (x1 - D, y0 - gap - D)),
+        ("上方抬高", (cxc, y0 - gap - D * 1.6)),
+        ("上方抬高左", (x0, y0 - gap - D * 1.6)),
+        ("上方再抬高", (cxc, y0 - gap - D * 2.3)),
+        ("左侧", (x0 - gap - D, mid)),
+        ("右侧", (x1 + gap, mid)),
+        ("下方", (cxc, y1 + gap)),
+        ("左侧外移", (x0 - 2 * gap - D, mid)),
+        ("右侧外移", (x1 + 2 * gap, mid)),
+        ("左上角", (x0 - 2 * gap - D, y0 - gap - D)),
+        ("右下角", (x1 + 2 * gap, y1 + gap)),
+    ]
+    osm = _osm_barrier_pts()
+    best = None
+    for i, (nm, (bx, by)) in enumerate(cands):
+        box = (bx, by, bx + D, by + D)
+        if box[0] < _PAD or box[1] < _PAD or box[2] > IW - _PAD or box[3] > IH - _PAD:
+            continue
+        n_trk = sum(1 for x, y in track
+                    if box[0] - 3 <= x <= box[2] + 3 and box[1] - 3 <= y <= box[3] + 3)
+        n_pin = sum(1 for x, y in pins if box[0] <= x <= box[2] and box[1] <= y <= box[3])
+        n_occ = sum(1 for ob in _OCC if GC.rect_overlap_area(box, ob) > 0)
+        # 底图地名锚点：垭口/村落（rank 高）比次峰更不该被压
+        n_lab = sum(1 for it in anchors if box[0] <= it["x"] <= box[2] and box[1] <= it["y"] <= box[3])
+        # 步道/公路/水系：不像轨迹那样"错"，但穿头像很难看 —— 权重居中
+        n_osm = sum(1 for x, y in osm if box[0] <= x <= box[2] and box[1] <= y <= box[3])
+        s = i * 3.0 + 1000.0 * n_trk + 400.0 * n_pin + 250.0 * n_occ \
+            + 90.0 * n_lab + 55.0 * n_osm
+        if best is None or s < best[0] - 1e-9:
+            det = [f"{k} {n}" for k, n in (("轨迹", n_trk), ("点位", n_pin),
+                                           ("家具", n_occ), ("地名", n_lab), ("线状地物", n_osm)) if n]
+            best = (s, box, i, nm, "、".join(det))
+    if best is None:
+        return None
+    return best[1], best[3], best[4]
+
+
+def _badge_svg(box, uri):
+    x, y, x1, y1 = box
+    D = x1 - x
+    r = D / 2.0
+    doc = _badge_doc()
+    if doc:
+        # 矢量版：嵌套 <svg> 直接带 x/y/width/height → 文字/环随放大保持锐利
+        core = re.sub(r"<svg\b[^>]*>",
+                      f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" '
+                      f'x="{x:.1f}" y="{y:.1f}" width="{D:.1f}" height="{D:.1f}">',
+                      doc, count=1)
+    else:
+        core = (f'<image x="{x:.1f}" y="{y:.1f}" width="{D:.1f}" height="{D:.1f}" '
+                f'href="{uri}" preserveAspectRatio="xMidYMid meet"/>')
+    # 一圈白环：让徽标读成"贴上去的署名"，而不是地形上的一个脏点
+    return (core + f'<circle cx="{x + r:.1f}" cy="{y + r:.1f}" r="{r - 1.0:.1f}" fill="none" '
+            f'stroke="#FFFFFF" stroke-width="2.0" opacity="0.85"/>')
+
+
 def build_map_overlay(mobile=False):
     """返回地图 SVG 的内容（不含 <svg> 外壳与底图）。"""
     global PS, _PAD, _PIN_R
-    global _lg_rect, _sb_rect, _cp_rect
+    global _lg_rect, _sb_rect, _cp_rect, _bd_rect
     M = MFS_M if mobile else 1.0
     PS = PS_BASE * M
     _PIN_R = 19 * M
@@ -732,7 +892,7 @@ def build_map_overlay(mobile=False):
     # ⚠ 三件套矩形必须在每轮开头清零：手机版**不摆图例**，若不清零，
     #   它读到的是上一轮（桌面版）留下的 _lg_rect —— 自检会凭空报一条「图例 × 比例尺」重叠，
     #   而图上根本没有图例。这类"幽灵家具"只看图是发现不了的。
-    _lg_rect = _sb_rect = _cp_rect = None
+    _lg_rect = _sb_rect = _cp_rect = _bd_rect = None
 
     r = RD.build_route()
     XY = [P(*p) for p in r["pts"]]
@@ -876,6 +1036,33 @@ def build_map_overlay(mobile=False):
     if got:
         _cp_rect = got[2]
         placed["cp"] = got
+
+    # ---- 署名徽标（可选）：贴在比例尺旁，压地物才挪位 ----
+    #   必须在 POI 标注之前算：徽标占位要先登记进 _OCC，标注才会绕开它。
+    _bd_svg = ""
+    _bcfg = _badge_cfg()
+    if _bcfg is not None and not mobile and "sb" in placed:
+        # 优先矢量版（avatar_ring.svg，文字放大不糊）；没有才回退位图 PNG
+        _uri = None if _badge_doc() else _badge_data_uri()
+        if not _uri and not _BADGE_DOC:
+            print("   ⚠ 配了 map_badge，但找不到 assets/avatar_ring.svg|png —— 本轮不画徽标")
+        else:
+            _sbr = placed["sb"][2]
+            _sbw = _sbr[2] - _sbr[0]
+            # 直径默认取比例尺卡宽的 62%（2026-10-26 二次调大：67 px 时账号字在成品 JPG 里
+            # 只有 5.4 个像素高，放大必然糊 —— 位图的物理像素上限，矢量也救不了）。
+            _D = float(_bcfg.get("size") or max(40.0, round(_sbw * 0.62)))
+            _gap = float(_bcfg.get("gap") or 9)
+            _res = _badge_place(_sbr, _D, _gap, XY, pin_xy, _load_base_labels())
+            if _res:
+                _box, _where, _det = _res
+                _bd_rect = _box
+                _OCC.append(_box)
+                _bd_svg = _badge_svg(_box, _uri)
+                print(f"   署名徽标：{_D:.0f} px · {_where}"
+                      + (f"（已避让 {_det}）" if _det else "（无冲突）"))
+            else:
+                print("   ⚠ 署名徽标：候选位全放不下，本轮不画")
 
     for d in POIS:
         o.append(mk_pin(*P(d["lon"], d["lat"]), d["kind"]))
@@ -1026,6 +1213,8 @@ def build_map_overlay(mobile=False):
                  f'font-size="{fs:.1f}" fill="#3A4250">{sb_km/2:g}</text>'
                  f'<text x="{bx+sb_bar:.1f}" y="{num_y:.1f}" text-anchor="end" '
                  f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">{sb_km:g} km</text></g>')
+    if _bd_svg:
+        o.append(_bd_svg)
     o.insert(_LBL_AT, _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
                             POIS, pin_xy))
     return "".join(o), placed
@@ -1053,7 +1242,7 @@ def self_check(mobile=False, placed=None):
     if n != _n_poi:
         print(f"      ⚠ 标注数 {n} ≠ POI 数 {_n_poi} —— 自检样本不完整，"
               f"重叠/越界结论不可信（查 _LABELS 登记）")
-    furn = {"图例": _lg_rect, "指北针": _cp_rect, "比例尺": _sb_rect}
+    furn = {"图例": _lg_rect, "指北针": _cp_rect, "比例尺": _sb_rect, "署名": _bd_rect}
     furn = {k: v for k, v in furn.items() if v}
     hit_track = {k: sum(1 for x, y in XY if v[0] <= x <= v[2] and v[1] <= y <= v[3])
                  for k, v in furn.items()}

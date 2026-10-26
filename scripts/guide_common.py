@@ -853,6 +853,11 @@ def browser_eval(html_text, js, port=9333, win_w=1200, win_h=2200, timeout=60):
 # 关掉的方式（任选其一）：
 #   · 环境变量  HIKING_AUTHOR=0
 #   · route_def  CFG["author"] = {"off": True}
+#   · **默认值**（当前生效）：下面的 "off" 已置 True —— 2026-10-26 用户决定
+#     「全局取消署名与防盗方案，只保留地图上的圆形徽标（CFG["map_badge"]）」。
+#     代码整段保留（水印 / 落款卡 / EXIF 都在），要恢复就把它改回 False，
+#     或在单条线路 route_def 里写 CFG["author"] = {"off": False}。
+# ⚠ 徽标 **不受这里影响**：map_svg 走 GC.author_asset() + _data_uri()，不看 author()["off"]。
 # 素材（可选，缺了自动降级成纯文字署名）：
 #   · scripts/assets/avatar.png、scripts/assets/xhs_qr.png
 #   · 或技能目录 assets/（项目里的 scripts/ 是运行副本，找不到会回落到技能目录）
@@ -864,7 +869,7 @@ _AUTHOR_DEF = {
     "notice": "欢迎转发，请保留本卡；抹去署名后二次发布视为侵权",
     "wm": True,                        # 底图是否烧栅格水印
     "wm_alpha": (0.16, 0.24),          # (白字α, 深描边α)：1:1 可读、缩略退成纹理
-    "off": False,
+    "off": True,                       # ← 2026-10-26 全局停用（署名方案整体撤销）
 }
 
 _OFF_WORDS = ("0", "false", "no", "off", "none")
