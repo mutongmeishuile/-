@@ -388,7 +388,7 @@ def _legend_w():
         # 两列网格：每列 = 符号 34 + 间距 22 + 名称
         half = max(34 + 22 + GC.text_w(nm, 17) for _k, nm in syms)
         need.append(2 * half + 36)
-    foot = GC.author_legend(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))
+    foot = GC.author_legend(_CFG.get("legend_foot", "仅供参考 · 非导航用途"))
     if foot:
         need.append(18 + GC.text_w(foot, 16.5) + 18)
     return max(LG_W_MIN, min(LG_W_MAX, max(need)))
@@ -949,7 +949,10 @@ def build_map_overlay(mobile=False):
     _day_cols, _day_txts = GC.day_colors(_CFG.get("days", []))
     _day_cols = _day_cols or [D1_C, D2_C]
     _bounds_km = [0.0] + [float(b) for b in _CFG.get("day_bounds", [])] + [float(TOTAL_KM)]
-    if len(_bounds_km) == 2:                      # 无 day_bounds → 老的两段行为
+    if not _CFG.get("days"):
+        # 无分日的线路（2026-10-27）：整条线一个颜色，不再按 SPLIT_I 劈两段
+        _bounds_km = [0.0, float(TOTAL_KM)]
+    elif len(_bounds_km) == 2:                    # 无 day_bounds → 老的两段行为
         _bounds_km = [0.0, float(KM[SPLIT_I]), float(TOTAL_KM)]
     while len(_day_cols) < len(_bounds_km) - 1:   # 分段多于颜色 → 沿用同族末色
         _day_cols.append(_day_cols[-1])
@@ -1226,7 +1229,7 @@ def build_map_overlay(mobile=False):
                 g.append(f'<text x="{cx+22*S:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
                          f'font-weight="700" fill="#4A5261">{nm}</text>')
         g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(16.5*S)}" '
-                 f'font-weight="600" fill="#7A8290">{GC.author_legend(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))}</text>')
+                 f'font-weight="600" fill="#7A8290">{GC.author_legend(_CFG.get("legend_foot", "仅供参考 · 非导航用途"))}</text>')
         g.append("</g>")
         o.append("".join(g))
 
@@ -1619,6 +1622,8 @@ def _legend_split_rows():
     所以按 `len(CFG["days"])` 切开即可，不依赖行的内容。
     """
     rows = _legend_rows()
+    if not _CFG.get("days"):
+        return [], rows          # 无分日线路：只有符号 / 附加行
     n = min(len(rows), len(_CFG.get("days", [])) or len(rows))
     return rows[:n], rows[n:]
 
@@ -1676,7 +1681,7 @@ def _legend_band_svg():
          f'fill="{TITLE_INK_MUTED}" letter-spacing="2">{_esc(_CFG.get("legend_title", "分日路段"))}</text>',
          f'<text x="{IW - x0}" y="{BD_PADT + 16}" text-anchor="end" font-size="13.5" '
          f'font-weight="600" fill="#7A8290">'
-         f'{_esc(_CFG.get("legend_foot", "全线为实测轨迹 · 非导航用图"))}</text>']
+         f'{_esc(_CFG.get("legend_foot", "仅供参考 · 非导航用途"))}</text>']
 
     for i, (kind, col, tag, text, km, glyph) in enumerate(items):
         cx = x0 + (i % cols) * cw

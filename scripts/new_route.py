@@ -402,7 +402,7 @@ CFG = {
     ],
     "day_bounds": [@@BOUNDS@@],             # 剖面上的分日竖虚线位置（多日就多写几个）
     "legend_title": "分日路段",
-    "legend_foot": "全线为实测轨迹 · 非导航用图",
+    "legend_foot": "仅供参考 · 非导航用途",
     "extra_legend_tag": "步道",
     "extra_legend_desc": "OSM 测绘的既有步道 / 公路（非本次轨迹）",
     "extra_legend_color": "#8C8A86",
@@ -423,7 +423,7 @@ CFG = {
                   "Copernicus 30 m）高程，与景区公认海拔一致。"),
 
     # ---- 地图面板 ----
-    "map_tag": "路线为实测轨迹 · 非导航用图",
+    "map_tag": "仅供参考 · 非导航用途",
     "map_right": "北为上 · 比例尺见图中",
     "map_note": ("地图内图例在窄屏会自动隐藏，改用上方文字图例。想看地形细节请放大，"
                  "或另存本目录下的《@@STEM@@-全线地图.jpg》高清图。"),

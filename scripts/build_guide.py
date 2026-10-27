@@ -34,6 +34,11 @@ DAYS = CFG.get("days", [])
 # 2026-10-25：缺 color 按 DAY_PALETTE 回退（原先 `d["color"]` 直接 KeyError /
 # map_svg 里 `d.get("color", D1_C)` 让没写色的天全落回第一天橙，分日界消失）。
 DAY_COLS, DAY_TXT = GC.day_colors(DAYS)
+# 无分日的线路（`CFG["days"] = []`，2026-10-27 用户口径"删除所有分日"）：
+# 整条线一个颜色，剖面/地图都不分段。给一组兜底色，避免下游 everywhere 做空列表保护。
+if not DAY_COLS:
+    DAY_COLS = [CFG.get("route_color", "#E4572E")]
+    DAY_TXT = [CFG.get("route_text_color", "#B23A1C")]
 D1_C = DAY_COLS[0] if DAY_COLS else "#E4572E"
 D2_C = DAY_COLS[1] if len(DAY_COLS) > 1 else "#1E9E76"
 D1_T = DAY_TXT[0] if DAY_TXT else "#B23A1C"
@@ -215,12 +220,12 @@ def profile_svg(fs=1.0, mobile=False):
                  f'fill="{col}" opacity="0.16"/>')
         o.append(f'<path d="{d}" fill="none" stroke="{col}" stroke-width="2.6" '
                  f'stroke-linecap="round" stroke-linejoin="round"/>')
-        tag = DAYS[i]["tag"] if i < len(DAYS) else f"D{i+1}"
+        tag = DAYS[i]["tag"] if i < len(DAYS) else (f"D{i+1}" if DAYS else "")
         # 日标字号**随分段宽度自适应**：24 天那种线（199 km / 每段 ~58 px）用 14 px
         # 会把「D05 D06」「D19 D20 D21」挤成一串（2026-10-27 梅里转山实测）。
         # 段宽 < 46 px 起就逐档缩小，< 26 px 干脆不标（相邻日靠图例与虚线界区分）。
         _segw = X(b) - X(a)
-        if _segw >= 16:
+        if tag and _segw >= 16:
             _tfs = round(min(14.0, max(8.5, _segw / 2.9)) * fs)
             o.append(f'<text x="{(X(a)+X(b))/2:.1f}" y="{pt-round(16*fs)}" text-anchor="middle" '
                      f'font-size="{_tfs}" font-weight="800" fill="{colt}">{tag}</text>')
@@ -661,6 +666,16 @@ def build_html():
     prof_d = profile_svg(fs=1.0, mobile=False)
     prof_p = profile_svg(fs=2.4, mobile=True)
     days_html = "".join(day_card(*c) for c in CFG.get("day_cards", []))
+    # 没有逐日卡 = 这条线不出「逐日攻略」整块（2026-10-27：用户要求删除所有分日）
+    if days_html:
+        _dt = CFG.get("days_tag", "里程 / 爬升 / 实测用时 / 水源 / 住宿")
+        days_block = (
+            '  <section class="ph" style="margin:0 2px 10px"><h2>逐日攻略</h2>'
+            f'    <span class="tagn">{_dt}</span></section>'
+            f'  <div class="days">{days_html}</div>'
+        )
+    else:
+        days_block = ""
     src_html = _src_html()
     src_section = f'<section class="panel">{src_html}</section>' if src_html else ''
     # 署名 / 落款卡：渲染期统一注入（不写进 route_def，54 条线路一改全生效）
@@ -691,7 +706,7 @@ def build_html():
   <div class="stats">{_stats_html()}</div>
 
   <section class="panel">
-    <div class="ph"><h2>全线地图</h2><span class="tagn">{CFG.get("map_tag", "路线为实测轨迹 · 非导航用图")}</span>
+    <div class="ph"><h2>全线地图</h2><span class="tagn">{CFG.get("map_tag", "仅供参考 · 非导航用途")}</span>
       <span class="right n">{CFG.get("map_right", "北为上")}</span></div>
     {map_d}{map_p}
     <div class="rbox-lgm">{_legend_html()}</div>
@@ -706,9 +721,7 @@ def build_html():
     <div class="foot" style="margin-top:10px;padding:0 2px">{CFG.get("prof_note", "")}</div>
   </section>
 
-  <section class="ph" style="margin:0 2px 10px"><h2>逐日攻略</h2>
-    <span class="tagn">{CFG.get("days_tag", "里程 / 爬升 / 实测用时 / 水源 / 住宿")}</span></section>
-  <div class="days">{days_html}</div>
+{days_block}
 
   <section class="panel">
     <div class="ph" style="margin-bottom:12px"><h2>关键点时间表</h2>
