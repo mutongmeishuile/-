@@ -57,7 +57,12 @@ SLACK_W, SLACK_H = 60, 260          # 给浏览器 chrome 留的余量（只用�
 #   软件光栅**静默截白**：2026-10-24 实测 4572×23468 窗口下内容只渲染到
 #   ~13716 行（约 63 MP），之下整幅纯白、不报任何错 —— 全靠 _assert_full_frame 兜底。
 #   → 页面面积超过安全阈值就**分带截图再拼接**（每带裁 viewBox，见 _page_html）。
-_MAX_SHOT_MP = 45 * 1_000_000       # 单次截图的页面面积安全上限（实测 31 MP 正常、107 MP 截白）
+# ⚠ 上限可按线路调低：`CFG["shot_max_mp"]`（默认 45）。map_ss 调大后每带面积跟着涨，
+#   超过 ~31 MP 就会截出白带（2026-10-27 梅里转山 map_ss=6 实测：每带 42 MP → 连续 4 次白带）。
+_MAX_SHOT_MP = int(CFG.get("shot_max_mp", 45) or 45) * 1_000_000
+# 每带的**逻辑**高度下限：SS 很大时按面积算出来的带高会小于这个值（带太碎、拼缝变多），
+#   所以下限也要能按线路调小（`CFG["shot_band_min_logical"]`，默认 600）。
+_BAND_MIN_LOGICAL = int(CFG.get("shot_band_min_logical", 600) or 600)
 
 
 def _shot_bands():
@@ -70,7 +75,7 @@ def _shot_bands():
     if W * (H + SLACK_H) <= _MAX_SHOT_MP:
         return [(0, _IH)]
     band_px = (_MAX_SHOT_MP // W) - SLACK_H          # 每带窗口面积 ≤ 上限
-    band_logical = max(600, int(band_px // _SS))
+    band_logical = max(_BAND_MIN_LOGICAL, int(band_px // _SS))
     bands, y = [], 0
     while y < _IH:
         bands.append((y, min(band_logical, _IH - y)))
