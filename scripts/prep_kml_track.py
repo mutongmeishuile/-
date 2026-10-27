@@ -95,8 +95,34 @@ def main():
     for i in range(1, len(pts)):
         cum.append(cum[-1] + hav(pts[i - 1], pts[i]))
 
-    # 海拔低通滤波（11 点滑动平均），去 GPS 高程抖动
-    ele = [p[2] for p in raw]
+    # 海拔**先修无效值**再做低通滤波（11 点滑动平均），去 GPS 高程抖动。
+    # ⚠ 2026-10-27 梅里外转实测：两步路整理的 KML 里有成片的 `ele=0`（本线 161 个点，
+    #   集中在 64.5 / 68 / 104.5 / 106.5 km 的垭口与营地），以及 -32768 这类哨兵值。
+    #   不修的话 11 点滑动平均只把它们摊薄成"掉到 1000 m 以下"的几个点 →
+    #   ① 剖面图直接扎到 0 m（用户看到一道深渊）；② 该日累计爬升虚增上千（D01 算出 +5279 m）。
+    #   这里按"落在 [500, 9000] 之外即无效"判定，用前后最近的**有效点线性插值**补上；
+    #   整条轨迹都无效时退回原值（不改变其它线路的行为）。
+    raw_ele = [p[2] for p in raw]
+    ok = [i for i, v in enumerate(raw_ele) if 500 <= v <= 9000]
+    if ok and len(ok) < len(raw_ele):
+        ele = list(raw_ele)
+        n_fix = 0
+        for i in range(len(ele)):
+            if 500 <= ele[i] <= 9000:
+                continue
+            lo = max([j for j in ok if j < i], default=None)
+            hi = min([j for j in ok if j > i], default=None)
+            if lo is None:
+                ele[i] = raw_ele[hi]
+            elif hi is None:
+                ele[i] = raw_ele[lo]
+            else:
+                t = (i - lo) / (hi - lo)
+                ele[i] = raw_ele[lo] + (raw_ele[hi] - raw_ele[lo]) * t
+            n_fix += 1
+        print(f"⚠ 修正无效高程 {n_fix} 点（0 / -32768 / 越界值 → 前后有效点插值）")
+    else:
+        ele = raw_ele
     sm = []
     for i in range(len(ele)):
         a, b = max(0, i - 5), min(len(ele), i + 6)
