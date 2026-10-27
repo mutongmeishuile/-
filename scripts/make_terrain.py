@@ -2062,6 +2062,13 @@ def build_terrain():
     # 覆盖率是"没省略的线数"，高山线会系统性低估实际密度、选粗一档。
     _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
     c_minor, c_major, c_cov = pick_contour_interval(dem_out, m_per_px=_m_per_px)
+    # 计曲线间隔也可单独指定：CFG["contour_major"]。
+    # 为什么需要：首曲线被固定成非整数倍时（如 15 m），`nice_major()` 只能给 75 m ——
+    # 高程注记变成 75/150/225 这种不好读的数字。单独指定 100 m 就回到规范值。
+    _cmaj = _route_cfg("contour_major", None)
+    if _cmaj:
+        c_major = float(_cmaj)
+        print(f"   计曲线间隔由线路指定：{c_major:g} m")
     _w_major = max(CONTOUR_DILATE[1], SS - 2)
     # 线宽可按线路固定：CFG["contour_width"] = (首, 计)，单位**栅格 px**，不随超采样变。
     # 缺省仍是老行为（首线 1 px 恒定、计线 max(0, SS-2) 补偿）。
