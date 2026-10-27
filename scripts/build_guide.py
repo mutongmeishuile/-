@@ -670,9 +670,9 @@ def build_html():
     if days_html:
         _dt = CFG.get("days_tag", "里程 / 爬升 / 实测用时 / 水源 / 住宿")
         days_block = (
-            '  <section class="ph" style="margin:0 2px 10px"><h2>逐日攻略</h2>'
-            f'    <span class="tagn">{_dt}</span></section>'
-            f'  <div class="days">{days_html}</div>'
+            '  <section class="ph" style="margin:0 2px 10px"><h2>逐日攻略</h2>\n'
+            f'    <span class="tagn">{_dt}</span></section>\n'
+            f'  <div class="days">{days_html}</div>\n'
         )
     else:
         days_block = ""
