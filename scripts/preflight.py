@@ -124,8 +124,11 @@ def main():
         sys.path.insert(0, str(HERE))
         import route_def as RD
         c = getattr(RD, "CFG", {})
-        need = ("file_stem", "title", "sub", "days", "day_cards", "notes")
+        need = ("file_stem", "title", "sub", "notes")
         miss = [k for k in need if not c.get(k)]
+        # `days` / `day_cards` 只要求"键存在"：空列表是**合法配置**（无分日线路，
+        # 2026-10-27 梅里外转：用户要求删除所有分日），旧判据会把空列表当缺项。
+        miss += [k for k in ("days", "day_cards") if k not in c]
         # ⚠ `src` 只要求"键存在"，不要求非空：用户明确要求剔除「数据说明 / 底图来源」
         #   两块时，route_def 里写的是 `"src": []` —— 旧判据 `not c.get("src")` 会把
         #   这种**正确配置**判成缺项（2026-10-21 珠峰东坡实测：明明按约定配了空列表，
