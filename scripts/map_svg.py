@@ -976,6 +976,7 @@ def build_map_overlay(mobile=False):
     # 每 5 km 里程点
     # ⚠ 三位数（105 km 等）在固定 r=7.4 的圆里必然溢出 → 用户看到「105 挤在圈里」。
     #   按位数自适应：三位数加大半径 + 略缩字号，保证文字完整落在圆内。
+    pin_xy = [P(d["lon"], d["lat"]) for d in POIS]     # 提前算：里程点要避开图钉
     for target in range(5, int(TOTAL_KM) + 1, 5):
         i = min(range(len(KM)), key=lambda j: abs(KM[j] - target))
         x, y = XY[i]
@@ -983,6 +984,10 @@ def build_map_overlay(mobile=False):
         nd = len(str(target))
         rr = (7.4 if nd <= 2 else 9.8) * z
         fs = (10.0 if nd <= 2 else 8.8) * z
+        # 里程点**撞上营地/垭口图钉就跳过**：圆圈压住倒三角，读者会以为垭口在那儿
+        # （2026-10-27 实测「195」压在 主措什贡垭口 图标上）。少一个 5 km 点无伤大雅。
+        if any((x - px) ** 2 + (y - py) ** 2 < (rr + _PIN_R + 2) ** 2 for px, py in pin_xy):
+            continue
         # 里程点是**固定锚点**（画在轨迹上），登记进 _OCC 让地名/POI 标注绕开它 ——
         # 否则会出现「195」圆圈压住垭口三角、或者地名贴着数字写（2026-10-27 实测）。
         _OCC.append((x - rr - 1, y - rr - 1, x + rr + 1, y + rr + 1))
