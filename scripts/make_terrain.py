@@ -1030,6 +1030,40 @@ def _dilate_n(m, n):
     return m
 
 
+def _box_dilate(m, w):
+    """方形（w×w）膨胀：线在**两个方向**都加粗 w px，宽度精确。
+
+    为什么不能靠"整体错开 1 px"补偶数宽度：那样竖直线只会变长、不会变宽。
+    """
+    w = int(w)
+    if w <= 1:
+        return m
+    H, W = m.shape
+    p = np.zeros((H + w, W + w), bool)
+    p[w:, w:] = m
+    out = np.zeros_like(m)
+    for dy in range(w):
+        for dx in range(w):
+            out |= p[dy:dy + H, dx:dx + W]
+    return out
+
+
+def _widen(m, w_px):
+    """把 1 px 的线加宽到**精确** w_px 宽（单位：栅格像素）。
+
+    为什么要有它：`_dilate_n` 是十字膨胀，宽度只能是奇数（1 / 3 / 5 …）。
+    但「计曲线 2 px、首曲线 1 px，且**不随超采样变化**」这种诉求需要偶数宽度
+    （2026-10-27 用户口径）。奇数宽度仍走十字膨胀（保持老观感），
+    偶数宽度走方形膨胀（w×w，两个方向都精确 w px）。
+    """
+    w = int(w_px)
+    if w <= 1:
+        return m
+    if w % 2 == 1:
+        return _dilate_n(m, (w - 1) // 2)
+    return _box_dilate(m, w)
+
+
 def contour_coverage(dem_out, interval):
     """给定等高距，返回线像元占比（0–1）。就是 paint_contours 里那套 band 边缘。"""
     b = np.floor(dem_out / interval).astype(np.int32)
@@ -1236,7 +1270,7 @@ def _contour_tint(base, mode, dmin=None):
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
                    minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
                    derived=CONTOUR_DERIVED, m_per_px=None,
-                   alpha=None, dmin=None):
+                   alpha=None, dmin=None, w_px=None):
     """在输出分辨率上栅格化等高线并写入 RGB 数组。
 
     原理：band = floor(elev / 间隔)，相邻像素 band 不同即该处有一条等高线。
@@ -1248,8 +1282,14 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
     """
     b_minor = np.floor(dem_out / minor).astype(np.int32)
     b_major = np.floor(dem_out / major).astype(np.int32)
-    m_minor = _dilate_n(_band_edges(b_minor), w_minor)
-    m_major = _dilate_n(_band_edges(b_major), w_major)
+    # `w_px` 给的是**固定栅格 px** 的线宽（不随超采样倍率变）；
+    # 不给时走老路径（十字膨胀次数，首线恒 1 px、计线随 SS 补偿）。
+    if w_px is None:
+        m_minor = _dilate_n(_band_edges(b_minor), w_minor)
+        m_major = _dilate_n(_band_edges(b_major), w_major)
+    else:
+        m_minor = _band_edges(b_minor)
+        m_major = _band_edges(b_major)
     n_skip = 0
     if m_per_px:
         # ---- 陡坡省略首曲线（2026-10-20 贡嘎大环）----
@@ -1264,6 +1304,11 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
         n_skip = int((m_minor & ~keep_minor).sum())
         m_minor &= keep_minor
         m_major &= keep_major
+    if w_px is not None:
+        # 陡坡省略先作用在 1 px 原始边线上，再按线路指定的固定 px 宽加粗 ——
+        # 这样"陡坡省略"仍然生效（只是加宽后的线会向省略区伸出 1 px，属正常制图行为）。
+        m_minor = _widen(m_minor, int(w_px[0]))
+        m_major = _widen(m_major, int(w_px[1]))
     # alpha 融合写回（rgb 是 uint8，必须过 float，否则整数回绕会把线画成黑块）
     f = rgb.astype(np.float32)
     base = f.copy() if derived else None
@@ -2018,14 +2063,23 @@ def build_terrain():
     _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
     c_minor, c_major, c_cov = pick_contour_interval(dem_out, m_per_px=_m_per_px)
     _w_major = max(CONTOUR_DILATE[1], SS - 2)
-    print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-          f"线宽 {_w_major}@{RASTER_W}px）…")
+    # 线宽可按线路固定：CFG["contour_width"] = (首, 计)，单位**栅格 px**，不随超采样变。
+    # 缺省仍是老行为（首线 1 px 恒定、计线 max(0, SS-2) 补偿）。
+    _cw = _route_cfg("contour_width", None)
+    _w_px = None
+    if _cw:
+        _w_px = (int(_cw[0]), int(_cw[1]))
+        print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+              f"线宽固定 {_w_px[0]}/{_w_px[1]} px@{RASTER_W}px，不随超采样变化）…")
+    else:
+        print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+              f"线宽 {_w_major}@{RASTER_W}px）…")
     arr = np.asarray(pil).copy()
     # 线宽补偿：SS>2 时等高线像素数不跟着涨，缩到 1600 内嵌/长图后会发虚
     # （4512→1600 只有 0.35×，1 px 线只盖住 35% 像素）。计曲线补 1 px。
     _w_major = max(CONTOUR_DILATE[1], SS - 2)
     paint_contours(arr, dem_out, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
-                   m_per_px=_m_per_px)
+                   m_per_px=_m_per_px, w_px=_w_px)
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     scale_raster_y = RASTER_H / dh
     snow_mask = paint_snowline(arr, dem_out, level=snow_m)
