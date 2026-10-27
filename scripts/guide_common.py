@@ -864,7 +864,7 @@ def browser_eval(html_text, js, port=9333, win_w=1200, win_h=2200, timeout=60):
 _AUTHOR_DEF = {
     "name": "鹏鹏",
     "platform": "小红书",
-    "id": "55931434345",
+    "id": "559314345",
     "tagline": "",                     # 一句话签名，留空不显示
     "notice": "欢迎转发，请保留本卡；抹去署名后二次发布视为侵权",
     "wm": True,                        # 底图是否烧栅格水印
@@ -887,7 +887,7 @@ def author():
 
 
 def author_text():
-    """`鹏鹏 · 小红书 55931434345` —— 全链路唯一的署名串（别在各脚本里手拼）。"""
+    """`鹏鹏 · 小红书 559314345` —— 全链路唯一的署名串（别在各脚本里手拼）。"""
     a = author()
     if a.get("off") or not a.get("name"):
         return ""

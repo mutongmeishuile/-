@@ -67,8 +67,8 @@
     <circle cx="0" cy="-1" r="3.2" fill="#F4EBD8"/>
   </g>
   <circle cx="600" cy="600" r="520" fill="none" stroke="#F4EBD8" stroke-width="3" stroke-opacity="0.85"/>
-  <text x="600" y="944" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="66" font-weight="700" letter-spacing="8" fill="#0D1317" fill-opacity="0.34" filter="url(#softShadow)">鹏鹏</text>
-  <text x="600" y="938" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="66" font-weight="700" letter-spacing="8" fill="#FCF7EC">鹏鹏</text>
-  <text x="600" y="1006" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="38" letter-spacing="2" fill="#0D1317" fill-opacity="0.34" filter="url(#softShadow)">小红书 · 55931434345</text>
-  <text x="600" y="1004" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="38" letter-spacing="2" fill="#F4EBD8" fill-opacity="0.9">小红书 · 55931434345</text>
+  <text x="600" y="968" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="66" font-weight="700" letter-spacing="8" fill="#0D1317" fill-opacity="0.34" filter="url(#softShadow)">鹏鹏</text>
+  <text x="600" y="962" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="66" font-weight="700" letter-spacing="8" fill="#FCF7EC">鹏鹏</text>
+  <text x="600" y="1018" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="46" letter-spacing="1.5" fill="#0D1317" fill-opacity="0.34" filter="url(#softShadow)">小红书 · 559314345</text>
+  <text x="600" y="1016" text-anchor="middle" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Source Han Sans SC, Noto Sans SC, sans-serif" font-size="46" letter-spacing="1.5" fill="#F4EBD8" fill-opacity="0.9">小红书 · 559314345</text>
 </svg>
