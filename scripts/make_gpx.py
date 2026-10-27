@@ -62,8 +62,11 @@ def main():
 
     # 分段：按 route_def 的分日界里程切
     bounds = list(CFG.get("day_bounds", [])) or []
-    if not bounds and hasattr(RD, "SPLIT1_KM"):
-        bounds = [RD.SPLIT1_KM]
+    # 无分日线路（CFG["days"] = []）：整天一条 trkseg，不再按 SPLIT1_KM 劈两段
+    # （2026-10-27 梅里外转：用户要求删除所有分日，导出的 GPX 也应是单段连续轨迹）
+    if not bounds and CFG.get("days"):
+        if hasattr(RD, "SPLIT1_KM"):
+            bounds = [RD.SPLIT1_KM]
     idx = sorted({next((i for i, k in enumerate(cum) if k / 1000.0 >= b), len(pts) - 1)
                   for b in bounds} | {0, len(pts)})
 
