@@ -216,8 +216,14 @@ def profile_svg(fs=1.0, mobile=False):
         o.append(f'<path d="{d}" fill="none" stroke="{col}" stroke-width="2.6" '
                  f'stroke-linecap="round" stroke-linejoin="round"/>')
         tag = DAYS[i]["tag"] if i < len(DAYS) else f"D{i+1}"
-        o.append(f'<text x="{(X(a)+X(b))/2:.1f}" y="{pt-round(16*fs)}" text-anchor="middle" '
-                 f'font-size="{round(14*fs)}" font-weight="800" fill="{colt}">{tag}</text>')
+        # 日标字号**随分段宽度自适应**：24 天那种线（199 km / 每段 ~58 px）用 14 px
+        # 会把「D05 D06」「D19 D20 D21」挤成一串（2026-10-27 梅里转山实测）。
+        # 段宽 < 46 px 起就逐档缩小，< 26 px 干脆不标（相邻日靠图例与虚线界区分）。
+        _segw = X(b) - X(a)
+        if _segw >= 26:
+            _tfs = round(min(14.0, max(9.5, _segw / 3.2)) * fs)
+            o.append(f'<text x="{(X(a)+X(b))/2:.1f}" y="{pt-round(16*fs)}" text-anchor="middle" '
+                     f'font-size="{_tfs}" font-weight="800" fill="{colt}">{tag}</text>')
 
     for b in CFG.get("day_bounds", [KM[SPLIT_I]]):
         o.append(f'<line x1="{X(b):.1f}" y1="{pt-4}" x2="{X(b):.1f}" y2="{pb}" '
