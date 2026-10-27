@@ -633,18 +633,38 @@ def _poi_dup(it, pois, pin_xy):
     return False
 
 
-def _place_base_labels(track, half_w, pois=(), pin_xy=()):
+def _is_peak_item(it):
+    """这条底图地名是不是「山峰名」。
+
+    判据与下面的引线判据同源：填充色是棕色系（draw_osm 给峰名的颜色），且比蓝色系暗。
+    """
+    f = tuple(it["fill"])
+    return f[0] - f[2] > 12 and f[0] < 110
+
+
+def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     """OSM 地名：矢量层 + 动态避让。
 
-    为什么在**最后**排（2026-10-21）：
+    为什么默认在**最后**排（2026-10-21）：
       · 先排会让一堆底图地名把好位置占满，POI 营地/垭口标注只能被挤到边上 ——
         而攻略图的主体是轨迹与营地，底图地名应当让路。
       · 先排时 `_OCC` 里还没有图钉、里程点、POI 标注，避让等于没做。
     策略：按重要度从高到低，围绕 draw_osm 给的原锚点试 8 个方向 × 3 档半径；
     找到零重叠的位置就落，找不到就**丢掉这一个**（稀疏区基本不会丢，
     拥挤区先丢次要的湖名/次峰名）。这就实现了"不拥挤区域不做取舍"。
+
+    `only` 用于「山峰名优先」（`CFG["label_priority"]="peak"`，2026-10-27）：
+      · "peak" —— 只排山峰名，并且在 POI 标注**之前**调用，于是峰名先占位、
+        POI 标注绕开它（用户口径：「OSM 山峰的名字定位应该优先于轨迹上标注名称」——
+        峰名的锚点就是山顶，被推走或丢掉就失去意义；POI 标注本来就可以挪）。
+      · "rest" —— 排其余地名，仍在 POI 之后（村/湖/河继续给轨迹让路）。
+      · None   —— 老行为，一次排完（其它线路不受影响）。
     """
     items = _load_base_labels()
+    if only == "peak":
+        items = [it for it in items if _is_peak_item(it)]
+    elif only == "rest":
+        items = [it for it in items if not _is_peak_item(it)]
     if not items:
         return ""
     if pois:
@@ -726,8 +746,16 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=()):
 #   —— 这是"遮住主要地形就动态挪位"的落地方式：地形本身无法量化，用**可量化的地物**
 #   （轨迹、点位、地名锚点、标高）当代理指标。
 def _badge_cfg():
-    v = _CFG.get("map_badge", None)
-    if not v:
+    """署名徽标开关。**默认开启**（2026-10-26 起是技能默认出品的一部分）。
+
+    `route_def.CFG["map_badge"]` 三态：
+      · 缺键 / True        → 用默认（直径 = 卡宽×0.62 夹逼 120–140）
+      · dict               → 覆盖 `{"size": 150, "gap": 14}`
+      · False / None 显式   → 不画
+    素材缺失只是不画、不报错（`author_asset()` 先找项目 assets、再回落技能目录）。
+    """
+    v = _CFG.get("map_badge", True)
+    if v is False or v is None:
         return None
     return v if isinstance(v, dict) else {}
 
@@ -807,35 +835,37 @@ def _osm_barrier_pts():
 
 
 def _badge_place(sb, D, gap, track, pins, anchors):
-    """挑一个最不碍事的落点，返回 (box, idx, detail)。首选正上方，冲突才外移/抬高。
+    """挑一个最不碍事的落点，返回 (box, where, detail)。首选正上方，冲突才外移/抬高。
 
-    候选位分三组：**比例尺上方**（居中 / 左对齐 / 右对齐 / 逐档抬高）、
-    左右两侧、正下方及几个远位。2026-10-26 峨眉山实测：只给"正上方 + 左右"时，
-    该处有一条 OSM 步道斜穿，7 个候选全压线，最后还是选了压线那个 ——
-    所以必须补"抬高"这一维（往上挪出线，仍属于"比例尺上方"）。
+    ⚠ 候选必须是"上方一个 **二维网格**"，不能只在正中线上抬高（2026-10-26 峨眉山实测：
+    徽标放大到 99 px 后，正中线的四个高度全被那条斜穿的步道 / 地名挡住，程序只好一路
+    抬到 2.3 倍直径处 —— 图上看着像飘在山坡中间，不再像是"比例尺的署名"）。
+    横向 5 档 × 纵向 4 档能吃到"斜线旁边的空档"：优先最低的一排，同一排里从左到右试。
     """
     x0, y0, x1, y1 = sb
     sbw = x1 - x0
     mid = (y0 + y1) / 2.0 - D / 2.0
-    cxc = x0 + (sbw - D) / 2.0
-    cands = [
-        ("正上方", (cxc, y0 - gap - D)),
-        ("上方左对齐", (x0, y0 - gap - D)),
-        ("上方右对齐", (x1 - D, y0 - gap - D)),
-        ("上方抬高", (cxc, y0 - gap - D * 1.6)),
-        ("上方抬高左", (x0, y0 - gap - D * 1.6)),
-        ("上方再抬高", (cxc, y0 - gap - D * 2.3)),
-        ("左侧", (x0 - gap - D, mid)),
-        ("右侧", (x1 + gap, mid)),
-        ("下方", (cxc, y1 + gap)),
-        ("左侧外移", (x0 - 2 * gap - D, mid)),
-        ("右侧外移", (x1 + 2 * gap, mid)),
-        ("左上角", (x0 - 2 * gap - D, y0 - gap - D)),
-        ("右下角", (x1 + 2 * gap, y1 + gap)),
+    cands = []
+    # 档位代价按 k² 长：**"紧贴比例尺"比"不压路网"更重要** —— 比例尺在城区/山脚时，
+    # 上方整片都是 OSM 路网（实测一个 99 px 圆里 106 个节点），若按线数重罚就必然一路抬高，
+    # 那时徽标已飘到山坡中间、根本不像"比例尺的署名"。硬约束只留给轨迹/点位/地名。
+    for k, yy in enumerate((gap, gap + D * 0.42, gap + D * 1.0, gap + D * 1.75)):
+        for fi, frac in enumerate((0.5, 0.0, 1.0, 0.25, 0.75)):
+            cands.append((f"上方 {k + 1} 档·{int(frac * 100)}%",
+                          (x0 + frac * (sbw - D), y0 - yy - D),
+                          k * k * 400.0 + fi * 2.0))
+    cands += [
+        ("左侧", (x0 - gap - D, mid), 900.0),
+        ("右侧", (x1 + gap, mid), 900.0),
+        ("下方", (x0 + (sbw - D) / 2.0, y1 + gap), 900.0),
+        ("左侧外移", (x0 - 2 * gap - D, mid), 1400.0),
+        ("右侧外移", (x1 + 2 * gap, mid), 1400.0),
+        ("左上角", (x0 - 2 * gap - D, y0 - gap - D), 1400.0),
+        ("右下角", (x1 + 2 * gap, y1 + gap), 1400.0),
     ]
     osm = _osm_barrier_pts()
     best = None
-    for i, (nm, (bx, by)) in enumerate(cands):
+    for nm, (bx, by), pen in cands:
         box = (bx, by, bx + D, by + D)
         if box[0] < _PAD or box[1] < _PAD or box[2] > IW - _PAD or box[3] > IH - _PAD:
             continue
@@ -845,17 +875,20 @@ def _badge_place(sb, D, gap, track, pins, anchors):
         n_occ = sum(1 for ob in _OCC if GC.rect_overlap_area(box, ob) > 0)
         # 底图地名锚点：垭口/村落（rank 高）比次峰更不该被压
         n_lab = sum(1 for it in anchors if box[0] <= it["x"] <= box[2] and box[1] <= it["y"] <= box[3])
-        # 步道/公路/水系：不像轨迹那样"错"，但穿头像很难看 —— 权重居中
+        # 步道/公路/水系：软指标（贴纸盖住路网是正常的，不能因此把徽标推到别处）
         n_osm = sum(1 for x, y in osm if box[0] <= x <= box[2] and box[1] <= y <= box[3])
-        s = i * 3.0 + 1000.0 * n_trk + 400.0 * n_pin + 250.0 * n_occ \
-            + 90.0 * n_lab + 55.0 * n_osm
+        s = pen + 1000.0 * n_trk + 400.0 * n_pin + 250.0 * n_occ \
+            + 90.0 * n_lab + 4.0 * n_osm
         if best is None or s < best[0] - 1e-9:
             det = [f"{k} {n}" for k, n in (("轨迹", n_trk), ("点位", n_pin),
                                            ("家具", n_occ), ("地名", n_lab), ("线状地物", n_osm)) if n]
-            best = (s, box, i, nm, "、".join(det))
+            best = (s, box, nm, "、".join(det))
+        if os.environ.get("MAP_BADGE_DEBUG"):
+            print(f"      [badge] {nm:>16} 分 {s:8.1f}  "
+                  f"轨迹{n_trk} 点位{n_pin} 家具{n_occ} 地名{n_lab} 线{n_osm}")
     if best is None:
         return None
-    return best[1], best[3], best[4]
+    return best[1], best[2], best[3]
 
 
 def _badge_svg(box, uri):
@@ -1049,9 +1082,11 @@ def build_map_overlay(mobile=False):
         else:
             _sbr = placed["sb"][2]
             _sbw = _sbr[2] - _sbr[0]
-            # 直径默认取比例尺卡宽的 62%（2026-10-26 二次调大：67 px 时账号字在成品 JPG 里
-            # 只有 5.4 个像素高，放大必然糊 —— 位图的物理像素上限，矢量也救不了）。
-            _D = float(_bcfg.get("size") or max(40.0, round(_sbw * 0.62)))
+            # 直径默认 = 比例尺卡宽 × 0.62，并**夹逼到 120–140**：
+            # 52 条线路的比例尺卡宽差 2 倍（160–337），不夹逼时直径会从 98 漂到 209 ——
+            # 209 占图宽 13.9%（比比例尺还抢眼），98 在 3 倍超采样下账号字只有 11 px（仍糊）。
+            # 夹逼后 120×3=360 ~ 140×3=420 px 直径，账号字 13.8–16.1 px，各线观感一致。
+            _D = float(_bcfg.get("size") or min(140.0, max(120.0, round(_sbw * 0.62))))
             _gap = float(_bcfg.get("gap") or 9)
             _res = _badge_place(_sbr, _D, _gap, XY, pin_xy, _load_base_labels())
             if _res:
@@ -1066,6 +1101,15 @@ def build_map_overlay(mobile=False):
 
     for d in POIS:
         o.append(mk_pin(*P(d["lon"], d["lat"]), d["kind"]))
+
+    # ---- 山峰名优先（CFG["label_priority"] = "peak"）----
+    # 峰名锚点就是山顶本身：被 POI 标注挤走或挤丢，读者就再也对不上"这是哪座山"。
+    # 所以先让峰名占位，轮到 POI 标注时它会自己绕开（_layout 有 8 方向 × 4 档半径 + 字号阶梯）。
+    _peak_lbl_svg = ""
+    _peak_first = str(_CFG.get("label_priority", "") or "").strip().lower() in ("peak", "peaks", "summit")
+    if _peak_first:
+        _peak_lbl_svg = _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
+                                           POIS, pin_xy, only="peak")
 
     # ---- 标注：越挤越先摆；字号动态收缩 + 位置动态避让 ----
     # ⚠ 2026-10-17 北天山中线（26 个标注、143 km 长线）实测：固定字号 + 只试纵向偏移时，
@@ -1215,8 +1259,11 @@ def build_map_overlay(mobile=False):
                  f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">{sb_km:g} km</text></g>')
     if _bd_svg:
         o.append(_bd_svg)
-    o.insert(_LBL_AT, _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
-                            POIS, pin_xy))
+    _rest_lbl_svg = _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
+                                       POIS, pin_xy,
+                                       only=("rest" if _peak_first else None))
+    # 图层顺序：底图地名（含先排的峰名）压在最下面，POI 标注盖在上面。
+    o.insert(_LBL_AT, _peak_lbl_svg + _rest_lbl_svg)
     return "".join(o), placed
 
 

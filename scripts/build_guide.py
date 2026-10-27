@@ -648,7 +648,12 @@ def _src_html():
 
 
 def build_html():
-    map_d, _ = MS.build_svg(mobile=False)
+    # 内嵌底图的分辨率上限：`CFG["embed_max"]` 可按线路放大（默认 1600）。
+    # 页面里那张图在 200% 放大 / 高分屏下会先糊在这里 —— 想"放大了还清楚"就调大它，
+    # 代价是 HTML 体积（1600→2600 大约多 1–2 MB）。0 = 不降采样（别乱用，会出现十几 MB 的 HTML）。
+    _em = CFG.get("embed_max")
+    map_d, _ = MS.build_svg(mobile=False) if _em is None else \
+        MS.build_svg(mobile=False, embed_max=int(_em))
     c1 = MS.self_check(False)
     map_p, _ = MS.build_svg(mobile=True, embed_max=820)
     c2 = MS.self_check(True)
