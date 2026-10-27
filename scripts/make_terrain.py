@@ -140,7 +140,10 @@ Z_FACTOR = 1.5
 UNSHARP = (3, 45, 3)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补偿 30 m DEM 的天然柔化
 # JPEG 参数：地图全是**彩色细线 + 小字**，必须关掉默认的 4:2:0 色度抽样（subsampling=0 → 4:4:4）。
 # 4:2:0 会把色度通道砍到 1/4 分辨率，彩色线条一律发虚发彩边 —— 这是"放大看不清"的隐形主因之一。
-JPG = dict(quality=86, optimize=True, progressive=True, subsampling=0)
+# 质量可按线路调高（`CFG["jpg_quality"]`，默认 86）：线和小字多的图，
+# 86 的块效应在 200% 放大时最明显（"放大看不清"的另一半原因）。
+JPG = dict(quality=int(GC.cfg("jpg_quality", 86) or 86),
+           optimize=True, progressive=True, subsampling=0)
 # 等高线线宽（按栅格像素）：3008 分辨率下的 (首,计)。计曲线是首曲线的 2 倍宽 + 更深色。
 # 注意：这里刻意画细 —— 等高距再自适应，陡坡处仍会成排，线一粗就糊成"棕色泥"。
 # ⚠ 2026-10-16 希夏邦马：计曲线从 3 px 收到 **1 px**（与首曲线同宽），两者的区分

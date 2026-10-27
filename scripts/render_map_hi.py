@@ -200,7 +200,8 @@ def main():
         # 高清图是**重渲 SVG**、不复用 base_map.jpg —— 水印必须在这里再烧一次，
         # 否则高清图会裸奔（只加 base_map 的话，长图有、高清图没有）。
         im = GC.burn_watermark(im)
-        im.save(OUT_JPG, quality=88, optimize=True, progressive=True, subsampling=0,
+        im.save(OUT_JPG, quality=int(CFG.get("jpg_quality", 88) or 88),
+                optimize=True, progressive=True, subsampling=0,
                 **GC.jpg_meta(f'{CFG.get("title", STEM)} · 全线地图 · 非导航用图'))
         print(f"  {im.size} -> {OUT_JPG.name}  {OUT_JPG.stat().st_size/1048576:.2f} MB  "
               f"{time.time()-t:.1f}s")
