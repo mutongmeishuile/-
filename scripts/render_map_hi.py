@@ -122,11 +122,40 @@ def _white_ratio(a):
     return white.mean(1).max(), white.mean(0).max()
 
 
+# 连续白行/白列达到这么多条才算"白带"。Chromium 丢瓦片是**成块**丢（几百行），
+# 而 1–2 px 的发丝缝是**渲染接缝**（标题带与地图之间、图元缩放取整留下的 1 px），
+# 2026-10-27 梅里转山 map_ss=6 实测：接缝整行 100% 白，被旧判据当成"内容被裁"而误杀。
+_WHITE_MIN_RUN = 3
+
+
+def _white_runs(a):
+    """最长连续"近乎全白"的行数 / 列数（去掉外圈）。"""
+    if a.shape[0] <= 2 * _EDGE_IGNORE or a.shape[1] <= 2 * _EDGE_IGNORE:
+        white = (a > 246).all(2)
+    else:
+        white = (a[_EDGE_IGNORE:-_EDGE_IGNORE, _EDGE_IGNORE:-_EDGE_IGNORE] > 246).all(2)
+
+    def _max_run(frac, thr=0.6):
+        best = run = 0
+        for f in frac:
+            if f > thr:
+                run += 1
+                if run > best:
+                    best = run
+            else:
+                run = 0
+        return best
+
+    return _max_run(white.mean(1)), _max_run(white.mean(0))
+
+
 def _assert_full_frame(a, tag):
-    """断言：没有整行/整列近乎纯白（白带 = 内容被裁，页面白底露出来了）。"""
+    """断言：没有**成片**整行/整列近乎纯白（白带 = 内容被裁，页面白底露出来了）。"""
     worst_row, worst_col = _white_ratio(a)
-    if worst_row > 0.6 or worst_col > 0.6:
-        raise RuntimeError(f"{tag}：有整行/整列近乎全白（行 {worst_row:.0%} / 列 {worst_col:.0%}）"
+    r, c = _white_runs(a)
+    if r >= _WHITE_MIN_RUN or c >= _WHITE_MIN_RUN:
+        raise RuntimeError(f"{tag}：有整行/整列近乎全白（连续 {r} 行 / {c} 列，"
+                           f"占宽 {worst_row:.0%} / 占高 {worst_col:.0%}）"
                            f"—— 内容被裁了，别交付")
     print(f"  满幅校验：最白行 {worst_row:.0%} · 最白列 {worst_col:.0%}（均应 < 60%，"
           f"外圈 {_EDGE_IGNORE}px 不计）")
@@ -136,8 +165,9 @@ def _has_white_band(im):
     """单带快速白带检查：Chromium 软件光栅在高分幅下会**随机**丢瓦片
     （同参数重截即消失，2026-10-24 库拉岗日实测），所以这里不做断言、
     只返回布尔值供 main() 重试。"""
-    worst_row, worst_col = _white_ratio(np.asarray(im).astype(np.int16))
-    return bool(worst_row > 0.6 or worst_col > 0.6)
+    a = np.asarray(im).astype(np.int16)
+    r, c = _white_runs(a)
+    return bool(r >= _WHITE_MIN_RUN or c >= _WHITE_MIN_RUN)
 
 
 def _assert_seams(im, parts):
