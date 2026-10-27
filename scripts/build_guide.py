@@ -220,8 +220,8 @@ def profile_svg(fs=1.0, mobile=False):
         # 会把「D05 D06」「D19 D20 D21」挤成一串（2026-10-27 梅里转山实测）。
         # 段宽 < 46 px 起就逐档缩小，< 26 px 干脆不标（相邻日靠图例与虚线界区分）。
         _segw = X(b) - X(a)
-        if _segw >= 26:
-            _tfs = round(min(14.0, max(9.5, _segw / 3.2)) * fs)
+        if _segw >= 16:
+            _tfs = round(min(14.0, max(8.5, _segw / 2.9)) * fs)
             o.append(f'<text x="{(X(a)+X(b))/2:.1f}" y="{pt-round(16*fs)}" text-anchor="middle" '
                      f'font-size="{_tfs}" font-weight="800" fill="{colt}">{tag}</text>')
 
@@ -525,6 +525,25 @@ def _load_cum():
         return
     ele = [p[2] for p in pts]
     n = len(ele)
+    # ⚠ 无效高程（ele=0 / -32768 / 越界）必须先按前后有效点插值，否则 11 点平滑后
+    #   仍会出现"掉到谷底又爬上来"的假落差 —— 时间表的「累计↑/↓」列会虚增上千
+    #   （2026-10-27 梅里转山实测：38.8 km 处累计↑ 报到 +12687，而全程真值 22630）。
+    #   与 prep_kml_track.py 的判据保持一致：[500, 9000] 之外视为无效。
+    _ok = [i for i, v in enumerate(ele) if 500 <= v <= 9000]
+    if _ok and len(_ok) < n:
+        _fix = list(ele)
+        for i in range(n):
+            if 500 <= _fix[i] <= 9000:
+                continue
+            lo = max([j for j in _ok if j < i], default=None)
+            hi = min([j for j in _ok if j > i], default=None)
+            if lo is None:
+                _fix[i] = ele[hi]
+            elif hi is None:
+                _fix[i] = ele[lo]
+            else:
+                _fix[i] = ele[lo] + (ele[hi] - ele[lo]) * (i - lo) / (hi - lo)
+        ele = _fix
     # 11 点滑动平均（前缀和 O(n)）
     pref = [0.0] * (n + 1)
     for i, v in enumerate(ele):
