@@ -983,6 +983,9 @@ def build_map_overlay(mobile=False):
         nd = len(str(target))
         rr = (7.4 if nd <= 2 else 9.8) * z
         fs = (10.0 if nd <= 2 else 8.8) * z
+        # 里程点是**固定锚点**（画在轨迹上），登记进 _OCC 让地名/POI 标注绕开它 ——
+        # 否则会出现「195」圆圈压住垭口三角、或者地名贴着数字写（2026-10-27 实测）。
+        _OCC.append((x - rr - 1, y - rr - 1, x + rr + 1, y + rr + 1))
         o.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{rr:.1f}" fill="#FFFFFF" '
                  f'stroke="#3A4250" stroke-width="{2*M:.1f}"/>'
                  f'<text x="{x:.1f}" y="{y+fs*0.38:.1f}" text-anchor="middle" '
