@@ -510,7 +510,11 @@ def fetch_sharded(force=False, tile=None, soft=False, jobs=3):
 #   静默缺一层矢量，且 `_cache_covers()` 也看不出来（它判的正是元素范围）。
 #   → 权威口径是邻居项目**当前**的 `resolve_bbox()`（子进程 import 它自己的 route_def），
 #     再与元素范围取交集（交集只会更小，方向安全）。
-REUSE_MIN_ELEMS = 300      # donor 要素数下限：低于此判"残缺缓存"（正常窗口 800–3000）
+REUSE_MIN_ELEMS = 300      # **donor 门槛**：低于此判"残缺缓存"，不拿它当数据源
+# **结果门槛**：只防"塌缩"（合并后几乎没东西），不用来判区域稀疏。
+# 2026-10-28 金银山实测：窗口 16×31 km 真抓只有 170 个要素（贡嘎南麓无人区，
+# OSM 本来就稀），而复用能给出 182 —— 拿 300 去卡结果会把更全的数据拒掉。
+REUSE_MIN_MERGED = 100
 REUSE_TOL = 0.02           # 与 _cache_covers 同口径的容差（相对窗口尺寸）
 
 
@@ -758,8 +762,13 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
     out = {"elements": merged, "_reused_from": name, "_bbox": list(mine),
            "_rects": len(todo), "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S")}
 
+    if len(merged) < REUSE_MIN_MERGED:
+        return _keep_old(soft, f"合并后只有 {len(merged)} 个要素（< {REUSE_MIN_MERGED}），"
+                               f"疑似塌缩/残缺")
     if len(merged) < min_elems:
-        return _keep_old(soft, f"合并后只有 {len(merged)} 个要素（< {min_elems}），疑似残缺")
+        print(f"   （注：合并后 {len(merged)} 个要素，低于 donor 门槛 {min_elems} —— "
+              f"多半是本窗口 OSM 本来就稀（高山区无路网），不是残缺；"
+              f"不放心可 python fetch_osm.py --force 对照一次）")
     if not _cache_covers(out):
         return _keep_old(soft, "合并结果未通过 _cache_covers()（四边够不到本窗口）→ "
                                "请改用 python fetch_osm.py --shard")

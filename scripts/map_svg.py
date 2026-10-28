@@ -964,7 +964,13 @@ def build_map_overlay(mobile=False):
         return len(KM) - 1
 
     _split_is = [_idx_km(b) for b in _bounds_km]
-    for si in range(len(_bounds_km) - 1):
+    # 折返型线路（原路上、原路下）：后一天的下撤段与前几天的上升段**完全重合**，
+    # 按天序绘制会让最后一天的颜色把整条线盖成一个色（2026-10-28 金银山实测：
+    # D4 从 C2 冲顶再退回公路，整条 32 km 只剩 D4 的洋红）。
+    # CFG["day_draw_reverse"]=True 时倒序绘制 → 每段显示"它第一次被走过的那天"的颜色。
+    _n_seg = len(_bounds_km) - 1
+    _order = (range(_n_seg - 1, -1, -1) if _CFG.get("day_draw_reverse") else range(_n_seg))
+    for si in _order:
         i0, i1 = _split_is[si], _split_is[si + 1]
         seg = XY[i0:max(i1 + 1, i0 + 2)]
         if len(seg) < 2:
