@@ -159,6 +159,11 @@ SNOW_ROCK_T = (1.05, 1.75)    # 46° 起混 / 60° 全岩（只有真陡壁才�
 SNOW_ROCK_RGB = (156, 156, 160)
 TINT_BAND_M = 0.0
 CONTOUR_DILATE = (0, 0)
+# 线宽默认（首, 计），单位**栅格 px**，不随超采样倍率变化（2026-10-28 用户定默认）。
+# 奇数宽走十字膨胀、偶数宽走方形膨胀（见 `_widen`），所以 2 px 也是精确 2 px。
+# 线路级覆盖：CFG["contour_width"] = (2, 3)；显式写 None 退回旧行为
+# （首线恒 1 px、计线 max(0, SS-2) 补偿）。
+CONTOUR_WIDTH = (1, 2)
 # 陡坡省略阈值（tan，不是角度）：超过就不画该档等高线。理由见 paint_contours 的注释。
 # 45° = 1.0；63° = 2.0。可按线路在 route_def.CFG 覆盖。
 STEEP_SKIP_MINOR = 1.0
@@ -174,7 +179,9 @@ STEEP_SKIP_MAJOR = 2.0
 #   —— 在白雪上显得脏、在草甸上显得跳。**正解是派生色**（CONTOUR_DERIVED=True）：
 #   线色由该像素的底图色算出（同色相 + 降饱和 + 明度分档），线就永远"长在地里"。
 C_MINOR, C_MAJOR = (152, 144, 132), (100, 90, 80)     # 仅 CONTOUR_DERIVED=False 时用
-A_MINOR, A_MAJOR = 0.19, 0.47                          # 派生色融合度（2026-10-25 用户定默认 = 27 条线路在用的轻量档）
+A_MINOR, A_MAJOR = 0.15, 0.30                          # 派生色融合度（2026-10-28 用户定默认 = 更轻的一档）
+#   历史：0.19/0.47（2026-10-25）→ 0.15/0.30。降 alpha 只影响"线压上去有多重"，
+#   不动几何；明度差兜底由 CONTOUR_MIN_DELTA (15,34) 保证，浅底上仍读得出。
 # --- 派生色参数（首, 计）---
 CONTOUR_DERIVED   = True      # True = 随底图派生（推荐）；False = 用上面的固定灰棕（旧行为）
 CONTOUR_DARKEN    = (0.74, 0.46)   # 亮底（亮度 ≥ 阈值）处的明度系数：越高压得越狠
@@ -2070,14 +2077,14 @@ def build_terrain():
         c_major = float(_cmaj)
         print(f"   计曲线间隔由线路指定：{c_major:g} m")
     _w_major = max(CONTOUR_DILATE[1], SS - 2)
-    # 线宽可按线路固定：CFG["contour_width"] = (首, 计)，单位**栅格 px**，不随超采样变。
-    # 缺省仍是老行为（首线 1 px 恒定、计线 max(0, SS-2) 补偿）。
-    _cw = _route_cfg("contour_width", None)
+    # 线宽默认 CONTOUR_WIDTH=(1,2)，可按线路用 CFG["contour_width"] 覆盖，
+    # 单位**栅格 px**，不随超采样变；显式 None 退回老行为（首线 1 px、计线 SS-2 补偿）。
+    _cw = _route_cfg("contour_width", CONTOUR_WIDTH)
     _w_px = None
     if _cw:
         _w_px = (int(_cw[0]), int(_cw[1]))
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽固定 {_w_px[0]}/{_w_px[1]} px@{RASTER_W}px，不随超采样变化）…")
+              f"线宽 {_w_px[0]}/{_w_px[1]} px@{RASTER_W}px，不随超采样变化）…")
     else:
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
               f"线宽 {_w_major}@{RASTER_W}px）…")
