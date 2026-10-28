@@ -10,12 +10,14 @@
     python fetch_osm.py                 # 用轨迹自动推的窗口抓取并缓存
     python fetch_osm.py --force         # 忽略缓存重新抓
     python fetch_osm.py --soft          # 全镜像失败也算成功（流水线不中断，只丢矢量层）
+    python fetch_osm.py --reuse         # 复用同级项目的 osm.json（差额补抓），同区域新线首选
+    python fetch_osm.py --reuse 梅里外转攻略   # 指定 donor；--reuse-dry 只演练不写盘
 
 **这一步是可选的**：抓不到只意味着底图上少一层道路/水系/地名，
 地形晕渲与等高线照常出图。所以流水线默认以 `--soft` 调用它，
 Overpass 集体抽风不该让整条流水线挂掉。
 """
-import argparse, json, sys, time, urllib.parse, urllib.request
+import argparse, json, subprocess, sys, time, urllib.parse, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -495,6 +497,283 @@ def fetch_sharded(force=False, tile=None, soft=False, jobs=3):
     return out
 
 
+# ============================================================ 邻项目复用（2026-10-28）
+# 为什么要有：`osm.json` 是**按窗口**服务的项目级缓存，没有 DEM 那种瓦片层，
+# 所以每开一条新线路都要整盘问一次 Overpass —— 实测同区域 34×44 km 窗口 6 分钟，
+# 而其中绝大多数要素在隔壁项目里**早就抓过了**（贡嘎小环线 894 个要素 100% 命中大环线）。
+#
+# 做法：找同级项目的 osm.json，把它的要素裁到本窗口；盖不住的差额矩形再补抓。
+#
+# ⚠ 判"盖得住"不能用元素范围（`_extent_of`）：
+#   横跨窗口的 way / 国界 relation 会带出**窗口外几百公里**的几何，元素范围远大于当初
+#   查询的窗口。拿它当覆盖证明，就会以为邻居有数据、其实本窗口边缘从没被抓过 ——
+#   静默缺一层矢量，且 `_cache_covers()` 也看不出来（它判的正是元素范围）。
+#   → 权威口径是邻居项目**当前**的 `resolve_bbox()`（子进程 import 它自己的 route_def），
+#     再与元素范围取交集（交集只会更小，方向安全）。
+REUSE_MIN_ELEMS = 300      # donor 要素数下限：低于此判"残缺缓存"（正常窗口 800–3000）
+REUSE_TOL = 0.02           # 与 _cache_covers 同口径的容差（相对窗口尺寸）
+
+
+def _extent_of(d):
+    """要素集合的经纬度包围盒（lon0, lat0, lon1, lat1）；空集返回 None。"""
+    lo, la = [], []
+    for e in (d.get("elements") or []):
+        x = _el_extent(e)
+        if x:
+            lo += [x[0], x[2]]
+            la += [x[1], x[3]]
+    if not lo:
+        return None
+    return (min(lo), min(la), max(lo), max(la))
+
+
+def _intersect(a, b):
+    """两个 bbox 的交集；不相交返回 None。"""
+    if not a or not b:
+        return None
+    r = (max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]))
+    return r if (r[0] < r[2] and r[1] < r[3]) else None
+
+
+def _area(b):
+    return 0.0 if not b else max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _subtract(a, s):
+    """a − s（矩形差集）→ 最多 4 个矩形（南 / 北 / 西 / 东）。"""
+    if not _intersect(a, s):
+        return [a]
+    alon0, alat0, alon1, alat1 = a
+    slon0, slat0, slon1, slat1 = s
+    out = []
+    if slat0 > alat0:
+        out.append((alon0, alat0, alon1, min(slat0, alat1)))
+    if slat1 < alat1:
+        out.append((alon0, max(slat1, alat0), alon1, alat1))
+    m0, m1 = max(alat0, slat0), min(alat1, slat1)
+    if m1 > m0:
+        if slon0 > alon0:
+            out.append((alon0, m0, min(slon0, alon1), m1))
+        if slon1 < alon1:
+            out.append((max(slon1, alon0), m0, alon1, m1))
+    return [r for r in out if r[2] - r[0] > 1e-6 and r[3] - r[1] > 1e-6]
+
+
+def _covers(outer, inner, tol=REUSE_TOL):
+    """outer 是否包住 inner（tol = 相对 inner 尺寸的容差，与 _cache_covers 同口径）。"""
+    if not outer or not inner:
+        return False
+    tx = (inner[2] - inner[0]) * tol
+    ty = (inner[3] - inner[1]) * tol
+    return (outer[0] <= inner[0] + tx and outer[1] <= inner[1] + ty and
+            outer[2] >= inner[2] - tx and outer[3] >= inner[3] - ty)
+
+
+def _claim_of(proj):
+    """邻居项目**当前**的窗口（子进程 import 它自己的 route_def → resolve_bbox）。
+
+    ⚠ 绝不 import 到本进程：两个项目的 route_def 同名，一旦进 sys.modules 就串味。
+    """
+    code = ("import sys;sys.path.insert(0,'scripts');import guide_common as GC;"
+            "b=GC.resolve_bbox();print('%.6f,%.6f,%.6f,%.6f'%tuple(float(x) for x in b[:4]))")
+    try:
+        r = subprocess.run([sys.executable, "-c", code], cwd=str(proj),
+                           capture_output=True, text=True, timeout=180)
+        line = (r.stdout or "").strip().splitlines()[-1]
+        v = tuple(float(x) for x in line.split(","))
+        return v if len(v) == 4 else None
+    except Exception:                                             # noqa
+        return None
+
+
+def _donors(spec, min_elems):
+    """列出可作 donor 的 osm.json：[(项目名, 项目目录, dict, 要素数)]。
+
+    spec = "auto" 扫同级项目；也可给项目目录名或 osm.json 路径（想指定就写死）。
+    """
+    root = HERE.parent                        # <项目>/scripts → <项目>
+    ws = root.parent                          # 工作区根（同级都是别的线路项目）
+    if spec and str(spec).lower() not in ("auto", "1", "yes", "true"):
+        p = Path(spec)
+        if p.is_file():
+            paths = [p]
+        elif p.is_dir():
+            paths = [p / "scripts" / "out" / "osm.json", p / "out" / "osm.json"]
+        else:
+            paths = [ws / str(spec) / "scripts" / "out" / "osm.json"]
+    else:
+        paths = sorted(ws.glob("*/scripts/out/osm.json"))
+    out = []
+    for p in paths:
+        try:
+            if not p.exists() or p.resolve() == CACHE.resolve():
+                continue
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:                                         # noqa
+            continue
+        n = len(d.get("elements") or [])
+        if n < min_elems:
+            print(f"   跳过 {p.parent.parent.parent.name}：只有 {n} 个要素"
+                  f"（< {min_elems}，疑似残缺缓存）")
+            continue
+        out.append((p.parent.parent.parent.name, p.parent.parent.parent, d, n))
+    out.sort(key=lambda t: -t[3])
+    return out
+
+
+def _clip(els, box, pad=REUSE_TOL):
+    """只留与 box 相交（含 pad 余量）的要素 —— 邻居窗口比本窗口大，留着没用还拖慢渲染。"""
+    if not box:
+        return els
+    bx0 = box[0] - (box[2] - box[0]) * pad
+    bx1 = box[2] + (box[2] - box[0]) * pad
+    by0 = box[1] - (box[3] - box[1]) * pad
+    by1 = box[3] + (box[3] - box[1]) * pad
+    keep = []
+    for e in els:
+        x = _el_extent(e)
+        if not x:
+            continue
+        if x[2] < bx0 or x[0] > bx1 or x[3] < by0 or x[1] > by1:
+            continue
+        if e.get("type") == "relation" and (e.get("tags") or {}).get("admin_level") == "2":
+            e = _trim_admin_members(e)
+        keep.append(e)
+    return keep
+
+
+def _fetch_rect(bb, attempts=2, timeout=180):
+    """补抓一个矩形差额。**0 个要素是合法结果**（纯雪山/无人区），不能当失败。
+
+    bb = (lon0, lat0, lon1, lat1)
+    """
+    q = _query("%.5f,%.5f,%.5f,%.5f" % (bb[1], bb[0], bb[3], bb[2]))
+    last = None
+    for att in range(attempts):
+        for host in _mirrors_for_window():
+            try:
+                req = urllib.request.Request(
+                    host,
+                    data=urllib.parse.urlencode({"data": q}).encode(),
+                    headers={"User-Agent": UA,
+                             "Content-Type": "application/x-www-form-urlencoded"})
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    d = json.loads(r.read().decode("utf-8"))
+                rm = str(d.get("remark") or "")
+                if "error" in rm.lower():
+                    raise RuntimeError("remark: " + rm[:120])
+                return d.get("elements") or []
+            except Exception as e:                                # noqa
+                last = e
+                time.sleep(1.5 + 2 * att)
+    raise RuntimeError(repr(last)[:160])
+
+
+def _keep_old(soft, msg):
+    """复用失败时的统一出口：保留原缓存（这是**唯一允许的降级**，绝不写半截数据）。"""
+    print("   ✗ " + msg)
+    if soft:
+        print("   —— 已按 --soft 降级：沿用原缓存/无矢量层，底图照常出。")
+        if CACHE.exists():
+            try:
+                return json.loads(CACHE.read_text(encoding="utf-8"))
+            except Exception:                                     # noqa
+                pass
+        return {"elements": []}
+    raise SystemExit(msg)
+
+
+def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_ELEMS):
+    """复用邻项目 osm.json + 补抓差额，写完做**覆盖率硬校验**。
+
+    三道闸门（任一不过 → 整体失败，绝不写半截数据）：
+      ① 每个差额矩形都抓成功（返回 0 要素合法，但抓失败不合法）；
+      ② 面积 ≥2% 窗口的差额矩形，返回要素数不能是 0 —— 那是"镜像超时给半截数据"的特征；
+      ③ 合并结果必须通过 `_cache_covers()`（与正常抓取同一把尺子）。
+    """
+    mine = (LON0, LAT0, LON1, LAT1)
+    if dry:
+        force = True
+    if CACHE.exists() and not force:
+        try:
+            d0 = json.loads(CACHE.read_text(encoding="utf-8"))
+        except Exception:                                         # noqa
+            d0 = {"elements": []}
+        if _cache_covers(d0):
+            print(f"本线路缓存已覆盖当前窗口：{len(d0['elements'])} 个要素 → 无需复用")
+            return d0
+
+    print(f"邻项目复用：窗口 {LON0:.4f}, {LAT0:.4f} → {LON1:.4f}, {LAT1:.4f}")
+    best = None
+    for name, proj, d, n in _donors(spec, min_elems):
+        ext = _extent_of(d)
+        claim = _claim_of(proj)
+        covered = _intersect(claim, ext) if claim else None
+        if not covered:
+            print(f"   跳过 {name}：拿不到它自己的窗口，或要素范围为空")
+            continue
+        inter = _intersect(covered, mine)
+        if not inter:
+            print(f"   跳过 {name}：窗口不相交")
+            continue
+        full = _covers(covered, mine)
+        gain = _area(inter) / max(1e-12, _area(mine))
+        print(f"   {name}：{n} 个要素 · 覆盖本窗口 {gain * 100:.0f}%"
+              + ("（完整覆盖 → 零请求）" if full else ""))
+        if best is None or _area(inter) > best[3]:
+            best = (name, proj, d, _area(inter), covered, full)
+        if full:
+            best = (name, proj, d, _area(inter), covered, full)
+            break
+
+    if not best:
+        return _keep_old(soft, "没有可复用的邻项目缓存（同级目录里没有要素数达标的 osm.json）")
+
+    name, proj, d, _, covered, full = best
+    els = _clip(d.get("elements") or [], mine)
+    print(f"   取 {name} 的 {len(els)} 个要素（已裁到本窗口）")
+    if not els:
+        return _keep_old(soft, f"{name} 裁到本窗口后一个要素都不剩 → 不复用")
+
+    todo = [] if full else [r for r in _subtract(mine, covered) if r]
+    got = []
+    for r in todo:
+        ra = _area(r) / max(1e-12, _area(mine))
+        print(f"   补抓差额 {r[0]:.4f},{r[1]:.4f} → {r[2]:.4f},{r[3]:.4f}"
+              f"（占窗口 {ra * 100:.1f}%）…", flush=True)
+        try:
+            part = _fetch_rect(r)
+        except Exception as e:                                    # noqa
+            return _keep_old(soft, f"差额矩形补抓失败：{e} → 放弃复用")
+        print(f"     ✓ {len(part)} 个要素")
+        if ra >= 0.02 and not part:
+            return _keep_old(soft, f"差额矩形占 {ra * 100:.0f}% 窗口却返回 0 个要素 —— "
+                                   f"镜像超时给半截数据的典型症状，拒绝落盘")
+        got += part
+
+    keep = {}
+    for e in els + got:                    # 补抓的在后 → 同 (type,id) 以新抓为准
+        keep[(e.get("type"), e.get("id"))] = e
+    merged = list(keep.values())
+    out = {"elements": merged, "_reused_from": name, "_bbox": list(mine),
+           "_rects": len(todo), "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+    if len(merged) < min_elems:
+        return _keep_old(soft, f"合并后只有 {len(merged)} 个要素（< {min_elems}），疑似残缺")
+    if not _cache_covers(out):
+        return _keep_old(soft, "合并结果未通过 _cache_covers()（四边够不到本窗口）→ "
+                               "请改用 python fetch_osm.py --shard")
+
+    print(f"   ✓ 复用通过：{len(merged)} 个要素（{name} + {len(todo)} 个差额矩形）")
+    if dry:
+        print("   （--reuse-dry：只演练，未写缓存）")
+        return out
+    CACHE.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    print(f"已写 {CACHE.name}（{CACHE.stat().st_size // 1024} KB）")
+    print("⚠ 缓存已改动 → 必须重跑 make_terrain.py（矢量叠加层烘焙在底图里）")
+    return out
+
+
 def summarize(d):
     from collections import Counter
     kind, names = Counter(), []
@@ -546,6 +825,13 @@ if __name__ == "__main__":
                     help=f"分片边长（度），默认 {SHARD_TILE}；越小越稳越慢")
     ap.add_argument("--jobs", type=int, default=3,
                     help="分片并发数（默认 3；公共实例 >3 开始 429）")
+    ap.add_argument("--reuse", nargs="?", const="auto", default=None, metavar="[auto|项目名|路径]",
+                    help="复用同级项目的 osm.json（auto = 自动找覆盖最大的邻居），"
+                         "盖不住的差额矩形再补抓；三道闸门任一不过就保留原缓存不落盘")
+    ap.add_argument("--reuse-dry", action="store_true",
+                    help="只演练复用（打印会复用谁、补抓几块），不写缓存")
+    ap.add_argument("--reuse-min-elems", type=int, default=REUSE_MIN_ELEMS,
+                    help=f"donor 要素数下限，低于此判残缺不参与复用（默认 {REUSE_MIN_ELEMS}）")
     a = ap.parse_args()
     if a.border:
         els = fetch_borders(soft=True)
@@ -556,11 +842,17 @@ if __name__ == "__main__":
                   f"  {len(e.get('geometry') or [])} 点 / {len(e.get('members') or [])} 成员")
         print("\n⚠ 缓存已改动 → 必须重跑 make_terrain（底图叠加层在底图里烘焙）。")
         sys.exit(0)
-    data = (fetch_sharded(a.force, a.tile, a.soft, a.jobs) if a.shard
-            else fetch(a.force, a.soft))
+    if a.reuse or a.reuse_dry:
+        data = reuse(a.reuse or "auto", a.force, a.reuse_dry, a.soft, a.reuse_min_elems)
+    elif a.shard:
+        data = fetch_sharded(a.force, a.tile, a.soft, a.jobs)
+    else:
+        data = fetch(a.force, a.soft)
     if not data.get("elements"):
         print("\n（无矢量要素，跳过汇总）")
         sys.exit(0)
+    if data.get("_reused_from"):
+        print(f"\n（本篇来自邻项目复用：{data['_reused_from']} + {data.get('_rects', 0)} 个差额矩形）")
     _, names = summarize(data)
     print("\n具名要素（前 40）：")
     seen = set()

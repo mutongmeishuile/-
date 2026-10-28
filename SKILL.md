@@ -148,7 +148,7 @@ agent_created: true
 | 步骤 | 脚本 | 产出（一律落 `scripts/out/`） |
 |---|---|---|
 | prep | `prep_track.py` | `track_full.json`（全量原始点）· `track_real.json`（简化点）· `profile_real.json`（等距剖面）· `kml_pois.json` |
-| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级）。`--border` 只补国界并合并；**`--shard` 分片抓取**（大窗口必用，见 `pitfalls-terrain §14`） |
+| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级）。`--border` 只补国界并合并；**`--shard` 分片抓取**（大窗口必用，见 `pitfalls-terrain §14`）；**`--reuse` 复用同级项目的 `osm.json`**（同区域新线首选：窗口盖得住就零请求，盖不住的差额矩形再补抓，三道闸门不过就保留原缓存） |
 | dem | `make_terrain.py` | `base_terrain.jpg` · `base_map.jpg` · `base_meta.json`（窗口 / 投影） |
 | html | `build_guide.py` | `<file_stem>-攻略.html` |
 | long | `shoot_guide.py` | `<file_stem>-攻略长图.png` |
@@ -217,6 +217,11 @@ python scripts/new_route.py --days 2         # ★ 自动生成 route_def.py 骨
 python scripts/research_route.py --region 线路名   # ★ 列出"该去查什么"（用户标注点 + OSM 地物 + 逐条检索清单）→ out/research_brief.md
 #   ↑ 按 research_brief.md 用 WebSearch 把 route_def.py 里的 ★ TODO 逐条回填（模型可自主完成，见下方「自主生成」）
 python scripts/fetch_osm.py --soft           # 抓不到只丢一层矢量，不中断
+python scripts/fetch_osm.py --reuse          # ★ 同区域新线首选：复用同级项目的 osm.json，
+                                             #   窗口盖得住 = 零请求；盖不住的差额矩形补抓。
+                                             #   三道闸门（差额抓取成功 / 差额非空 / _cache_covers 过）
+                                             #   任一不过就保留原缓存，绝不写半截数据。
+                                             #   先 --reuse-dry 演练；指定 donor 用 --reuse 项目名
 python scripts/fetch_osm.py --shard --jobs 3 # ★ 大窗口/残缺缓存用这个：≤0.08° 网格逐块抓、
                                              #   失败二分、可断点续跑（公共实例大查询会 504/半截数据）
 python scripts/make_terrain.py               # DEM 晕渲 + 等高线 → 叠 OSM → base_map.jpg

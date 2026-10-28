@@ -742,12 +742,146 @@ def t_keep_raw_batch():
             os.environ["SHOOT_KEEP_RAW"] = saved_env
 
 
+def t_osm_reuse():
+    """⑯ OSM 邻项目复用：差集几何 + 三道闸门（2026-10-28）。
+
+    为什么它必须进自检：这条路径**错了不会报错**——
+      · 覆盖判据写成"元素范围"→ 以为邻居有数据、实际窗口边缘从没抓过（静默缺一层矢量）；
+      · 差额补抓拿到"半截数据"（镜像超时返回 200 + 少量要素）→ 写出残缺 osm.json，
+        而 `_cache_covers()` 之后照样判"覆盖"，再也不会自动重抓（`osm_fetch_budget` 的前科）。
+    所以这里全部用**断网替身**（monkeypatch `_fetch_rect` / 假 donor 目录）来守行为。
+    """
+    print("⑯ OSM 邻项目复用（差集 / 覆盖容差 / 残缺与半截数据必须拒绝落盘）")
+    import shutil
+    import tempfile
+
+    def mkproj(root, name, bbox, n):
+        """造一个"线路项目"：stub route_def（只给 CFG['bbox']）+ osm.json。"""
+        p = root / name
+        (p / "scripts" / "out").mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERE / "guide_common.py", p / "scripts" / "guide_common.py")
+        (p / "scripts" / "route_def.py").write_text(
+            "# -*- coding: utf-8 -*-\nCFG = {'bbox': %r}\n" % (list(bbox),), encoding="utf-8")
+        x0, y0, x1, y1 = bbox
+        # 节点要**铺满到边界**（65×33 网格）：`_cache_covers()` 判的是"元素四边够不够到
+        # 窗口"，稀疏点阵会在边缘留下半格空隙，害得测试失败于几何判定、而不是要测的行为。
+        if n >= 300:
+            cols, rows = 65, 33
+            n = cols * rows
+            uv = [((i % cols) / (cols - 1), (i // cols) / (rows - 1)) for i in range(n)]
+        else:
+            uv = [((i % 20) / 19.0, ((i // 20) % 17) / 16.0) for i in range(n)]
+        els = [{"type": "node", "id": i + 1,
+                "lon": x0 + u * (x1 - x0), "lat": y0 + v * (y1 - y0),
+                "tags": {"highway": "path"}} for i, (u, v) in enumerate(uv)]
+        (p / "scripts" / "out" / "osm.json").write_text(
+            json.dumps({"elements": els}, ensure_ascii=False), encoding="utf-8")
+        # resolve_bbox 会先卡"必须已有真实轨迹"（防几内亚湾占位窗口），所以 stub 项目
+        # 也得给一份两点轨迹；窗口本身仍由 CFG['bbox'] 决定。
+        (p / "scripts" / "out" / "track_real.json").write_text(json.dumps(
+            {"pts": [{"lon": x0, "lat": y0, "km": 0.0, "ele": 3000.0},
+                     {"lon": x1, "lat": y1, "km": 1.0, "ele": 3000.0}],
+             "total_km": 1.0, "asc": 0, "desc": 0,
+             "ele_min": 3000, "ele_max": 3000}, ensure_ascii=False), encoding="utf-8")
+        return p
+
+    td = Path(tempfile.mkdtemp())
+    F, _saved_fetch = None, None
+    saved_mods = {k: sys.modules.pop(k) for k in ("route_def", "fetch_osm", "guide_common")
+                  if k in sys.modules}
+    try:
+        mine = (100.0, 30.0, 100.2, 30.2)
+        me = mkproj(td, "本线", mine, 0)
+        mkproj(td, "邻居线", (100.0, 30.0, 100.4, 30.4), 300)
+        shutil.copy(HERE / "fetch_osm.py", me / "scripts" / "fetch_osm.py")
+        shutil.copy(HERE / "guide_common.py", me / "scripts" / "guide_common.py")
+
+        sys.path.insert(0, str(me / "scripts"))
+        import fetch_osm as F                            # noqa: 走 fixture 里的副本
+
+        # ---- ① 纯几何：矩形差集 ----
+        a, s = (0.0, 0.0, 10.0, 10.0), (2.0, 2.0, 8.0, 8.0)
+        parts = F._subtract(a, s)
+        tot = sum(F._area(r) for r in parts)
+        check("差集面积守恒（a − s 各块之和 = a − 交集）",
+              approx(tot, F._area(a) - F._area(s), 1e-9), f"{tot:.3f} vs {F._area(a) - F._area(s):.3f}")
+        overlap = sum(F._area(F._intersect(p, s)) or 0.0 for p in parts)
+        check("差集各块与 s 无重叠", approx(overlap, 0.0, 1e-12))
+        check("完全不相交时差集 = 原矩形", F._subtract(a, (20, 20, 30, 30)) == [a])
+
+        # ---- ② 覆盖判据的容差（2%，与 _cache_covers 同口径）----
+        check("外框差 1.5% 仍算覆盖（容差内）",
+              F._covers((-0.003, 29.997, 100.203, 30.203), mine))
+        check("外框差 5% 不算覆盖",
+              not F._covers((100.0, 30.01, 100.2, 30.2), mine))
+
+        # ---- ③ 完整覆盖 → 零请求 ----
+        def _boom(*_a, **_k):
+            raise AssertionError("完整覆盖时不该发网络请求")
+        F._fetch_rect, _saved_fetch = _boom, F._fetch_rect
+        d = F.reuse("auto", force=True)
+        check("完整覆盖时 0 个差额矩形", d.get("_rects") == 0, str(d.get("_rects")))
+        check("完整覆盖时来自邻居线", d.get("_reused_from") == "邻居线")
+        check("结果落盘且要素数 ≥ 300", F.CACHE.exists() and len(d.get("elements") or []) >= 300,
+              str(len(d.get("elements") or [])))
+        check("结果通过 _cache_covers()", F._cache_covers(d))
+
+        # ---- ④ 差额矩形返回 0 要素 = 半截数据 → 必须拒绝，且不覆盖旧缓存 ----
+        F._fetch_rect = lambda bb, **k: []
+        before = F.CACHE.read_bytes()
+        old_bbox = list(F._donors("auto", 300))
+        shutil.rmtree(td / "邻居线")
+        mkproj(td, "邻居线", (100.0, 30.0, 100.2, 30.10), 300)     # 只盖住南半截
+        try:
+            F.reuse("auto", force=True)
+            ok, why = False, "没有抛错"
+        except SystemExit as e:
+            ok, why = True, str(e)[:60]
+        check("差额矩形 0 要素 → 拒绝落盘（SystemExit）", ok, why)
+        check("拒绝时旧缓存字节未变", F.CACHE.read_bytes() == before)
+
+        # ---- ⑤ 差额抓取直接失败 → 同样拒绝 ----
+        def _fail(bb, **k):
+            raise RuntimeError("全部镜像 504")
+        F._fetch_rect = _fail
+        try:
+            F.reuse("auto", force=True)
+            ok2 = False
+        except SystemExit:
+            ok2 = True
+        check("差额抓取失败 → 拒绝落盘", ok2 and F.CACHE.read_bytes() == before)
+
+        # ---- ⑥ donor 要素过少（疑似残缺）→ 直接拒绝复用 ----
+        shutil.rmtree(td / "邻居线")
+        mkproj(td, "邻居线", (99.9, 29.9, 100.3, 30.3), 120)
+        try:
+            F.reuse("auto", force=True, min_elems=300)
+            ok3 = False
+        except SystemExit:
+            ok3 = True
+        check("donor 只有 120 个要素 → 不当 donor（拒绝复用）", ok3)
+        check("整个过程旧缓存字节未变", F.CACHE.read_bytes() == before)
+        _ = old_bbox
+    finally:
+        if F is not None and _saved_fetch is not None:
+            F._fetch_rect = _saved_fetch
+        try:
+            sys.path.remove(str(me / "scripts"))
+        except ValueError:
+            pass
+        for k in ("route_def", "fetch_osm", "guide_common"):
+            sys.modules.pop(k, None)
+        sys.modules.update(saved_mods)
+        shutil.rmtree(td, ignore_errors=True)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
-               t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual):
+               t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
+               t_osm_reuse):
         try:
             fn()
         except Exception as e:                                      # noqa
