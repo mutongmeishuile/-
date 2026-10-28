@@ -76,6 +76,17 @@ def _prof_geom(fs=1.0):
     return {"PW": PW, "PH": PH, "pl": pl, "pr": pr, "pt": pt, "pb": pb, "kx": kx, "ky": ky}
 
 
+def _bot_dy(fs=1.0, base=38):
+    """BOT_LBL 的纵向偏移（viewBox 单位）。
+
+    ⚠ 不能写成 `base*fs`：手机版剖面是 **同一 viewBox(1000×382) 放大字号**（fs=2.4），
+    偏移乘 2.4 会变成 91 单位 = 画布高度的 24%，把「起点 / D1 / D2 / 终点」四条
+    底注全推到横轴刻度带上（2026-10-28 贡嘎小环线实测：4 条 BOT_LBL 全部压刻度）。
+    偏移只需 > 字号高度，与 fs 无关，故封顶 1.0。
+    """
+    return round(base * min(fs, 1.0))
+
+
 def check_prof_labels(fs=1.0, mobile=False):
     """剖面标注密度预检：**渲染前**就算出"哪两条标注会叠字"，别再靠看图发现。
 
@@ -119,7 +130,7 @@ def check_prof_labels(fs=1.0, mobile=False):
             x0 = x - round(6 * fs) - w
         else:
             x0 = x - w / 2
-        y = g["pb"] - (el - ELE_LO) * g["ky"] + round(38 * fs)
+        y = g["pb"] - (el - ELE_LO) * g["ky"] + _bot_dy(fs)
         boxes.append({"txt": txt, "x0": x0, "x1": x0 + w,
                       "y0": y - fsz * 0.86, "y1": y + fsz * 0.30,
                       "km": km, "off": 0, "kind": "bot"})
@@ -258,11 +269,11 @@ def profile_svg(fs=1.0, mobile=False):
         o.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.6" fill="#FFFFFF" stroke="#3A4250" '
                  f'stroke-width="2"/>')
         if anc == "start":
-            ty, tx, a2 = y + round(38 * fs), x + round(9 * fs), "start"
+            ty, tx, a2 = y + _bot_dy(fs), x + round(9 * fs), "start"
         elif anc == "end":
-            ty, tx, a2 = y + round(38 * fs), x - round(6 * fs), "end"
+            ty, tx, a2 = y + _bot_dy(fs), x - round(6 * fs), "end"
         else:
-            ty, tx, a2 = y + round(20 * fs), x, "middle"
+            ty, tx, a2 = y + _bot_dy(fs, 20), x, "middle"
         o.append(f'<text x="{tx:.1f}" y="{ty:.1f}" text-anchor="{a2}" '
                  f'font-size="{round(12*fs)}" font-weight="700" fill="#3A4250" stroke="#FFFFFF" '
                  f'stroke-width="{round(3.2*fs)}" paint-order="stroke" '
