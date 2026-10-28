@@ -2168,6 +2168,40 @@ def build_terrain():
                                                  snow_m, OUT / "osm_draw.json")
         except Exception as _e:                                        # noqa
             print(f"   （水面过滤跳过：{_e}）")
+        # ---- 峰点人工修正（CFG["peak_fix"] = {"峰名": [lon, lat]}）----
+        # 用在**OSM 录入明显错、自动吸附又被 400 m 护栏挡住**的那几个峰上：
+        # 把人工核对过的坐标写死，其余要素原样。与 peak_snap 不冲突 —— 改完坐标后
+        # 吸附在新位置重新判一次，差值 <min_gain 就自动不动。
+        # ⚠ 只按 `natural=peak` + 名字全串匹配，别指望它改路/村。
+        try:
+            import route_def as _RD4
+            _fix = (getattr(_RD4, "CFG", None) or {}).get("peak_fix") or {}
+        except Exception:                                          # noqa
+            _fix = {}
+        if isinstance(_fix, dict) and _fix:
+            try:
+                _dd = json.loads(_osm_draw.read_text(encoding="utf-8"))
+                _nfix = 0
+                for _e in _dd.get("elements") or []:
+                    _t = _e.get("tags") or {}
+                    if _t.get("natural") != "peak":
+                        continue
+                    _nm = (_t.get("name") or _t.get("name:en") or "").strip()
+                    if _nm not in _fix:
+                        continue
+                    _lo, _la = float(_fix[_nm][0]), float(_fix[_nm][1])
+                    print(f"   峰点人工修正：{_nm}  {_e.get('lon'):.5f},{_e.get('lat'):.5f}"
+                          f" → {_lo:.5f},{_la:.5f}")
+                    _e["lon"], _e["lat"] = _lo, _la
+                    _nfix += 1
+                if _nfix:
+                    _fixed = OUT / "osm_fixed.json"
+                    _fixed.write_text(json.dumps(_dd, ensure_ascii=False), encoding="utf-8")
+                    _osm_draw = _fixed
+                else:
+                    print("   ⚠ CFG['peak_fix'] 里的名字在本窗口一个都没匹配上（检查措辞）")
+            except Exception as _e:                                # noqa
+                print(f"   （峰点人工修正跳过：{_e}）")
         # 峰点校正：OSM 的人工峰点常漂在山腰（博格达 7 个具名峰里 3 个偏 350–800 m），
         # 而等高线是 DEM 画的 —— 不校正就会出现"三角符号不在地形顶上"。
         snap = {}

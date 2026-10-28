@@ -1036,6 +1036,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             return None
 
     n_peak = n_skip = 0
+    # 点名强制出名字的峰（CFG["peak_label_force"] = ["大雪山"]）：
+    # 低分位峰名默认"放不下就丢"，但个别峰（如主线视野里的 6000 米级）名字丢了
+    # 比压住两三个等高线数字更糟 —— 允许它挤放，靠白描边保证可读。
+    try:
+        _force_names = {str(x).strip() for x in (GC.cfg("peak_label_force", None) or [])}
+    except Exception:                                              # noqa
+        _force_names = set()
     peaks = [(x, y, _clean_name(n), e) for x, y, n, e in peaks]
     saddles = [(x, y, _clean_name(n), e) for x, y, n, e in saddles]
     places = [(k, x, y, _clean_name(n)) for k, x, y, n in places]
@@ -1099,6 +1106,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             f_peak_use, forced, tri_k, col, tcol = f_peak, True, 0.92, (84, 60, 40), (58, 40, 26)
         else:
             f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
+        if name in _force_names:
+            forced = True            # 点名峰：允许挤放（fallback 生效）
         tri = [(x, y - 6 * S * tri_k), (x - 5.4 * S * tri_k, y + 3.6 * S * tri_k),
                (x + 5.4 * S * tri_k, y + 3.6 * S * tri_k)]
         d.polygon(tri, fill=col, outline=(255, 255, 255))
