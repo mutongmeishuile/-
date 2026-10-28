@@ -516,6 +516,13 @@ REUSE_MIN_ELEMS = 300      # **donor 门槛**：低于此判"残缺缓存"，不
 # OSM 本来就稀），而复用能给出 182 —— 拿 300 去卡结果会把更全的数据拒掉。
 REUSE_MIN_MERGED = 100
 REUSE_TOL = 0.02           # 与 _cache_covers 同口径的容差（相对窗口尺寸）
+# ---- 覆盖率门槛（2026-10-28 用户定规则，实测定标）----
+# ≥95%：差额 ≤5%、通常 0–1 个小矩形 → 复用 5 s~1 min，比整盘快一个数量级；
+# <85%：差额 >15%，两块矩形在 Overpass 上是**两次固定开销**（实测 2m31s vs 整盘 3m09s），
+#       绕这一圈没意义 → 直接整盘抓；
+# 中间带（85–95%）：差额 5–15%，通常 1 个矩形，仍比整盘省 0.5–1.5 min，照常复用。
+REUSE_COVER_MIN = 0.95
+REUSE_COVER_HARD = 0.85
 
 
 def _extent_of(d):
@@ -687,7 +694,8 @@ def _keep_old(soft, msg):
     raise SystemExit(msg)
 
 
-def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_ELEMS):
+def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_ELEMS,
+          min_cover=REUSE_COVER_MIN, cover_hard=REUSE_COVER_HARD):
     """复用邻项目 osm.json + 补抓差额，写完做**覆盖率硬校验**。
 
     三道闸门（任一不过 → 整体失败，绝不写半截数据）：
@@ -741,7 +749,20 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
         return _keep_old(soft, "没有可复用的邻项目缓存（同级目录里没有要素数达标的 osm.json）")
 
     print(f"   扫描 {time.time() - _t0:.1f}s")
-    name, proj, d, _, covered, full = best
+    name, proj, d, _best_area, covered, full = best
+    _cov = _area(_intersect(covered, mine)) / max(1e-12, _area(mine))
+    if not full and _cov < float(cover_hard):
+        msg = (f"最佳 donor「{name}」只覆盖本窗口 {_cov * 100:.0f}%"
+               f"（< {float(cover_hard) * 100:.0f}%）→ 差额太大，复用不省时间，"
+               f"改用整盘抓取（等效一次 Overpass 查询）")
+        print("   " + msg)
+        if dry:
+            print("   （--reuse-dry：只演练，未真的抓取）")
+            return {"elements": [], "_reuse_skipped": msg}
+        return fetch(force=True, soft=soft)
+    if not full and _cov < float(min_cover):
+        print(f"   覆盖率 {_cov * 100:.0f}%（{float(min_cover) * 100:.0f}% 门槛以下）"
+              f"→ 仍复用，但差额要补抓，预计比整盘省 0.5–2 min")
     els = _clip(d.get("elements") or [], mine)
     print(f"   取 {name} 的 {len(els)} 个要素（已裁到本窗口）")
     if not els:

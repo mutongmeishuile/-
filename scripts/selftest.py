@@ -851,7 +851,7 @@ def t_osm_reuse():
         shutil.rmtree(td / "邻居线")
         mkproj(td, "邻居线", (100.0, 30.0, 100.2, 30.10), 300)     # 只盖住南半截
         try:
-            F.reuse("auto", force=True)
+            F.reuse("auto", force=True, cover_hard=0.0)
             ok, why = False, "没有抛错"
         except SystemExit as e:
             ok, why = True, str(e)[:60]
@@ -863,7 +863,7 @@ def t_osm_reuse():
             raise RuntimeError("全部镜像 504")
         F._fetch_rect = _fail
         try:
-            F.reuse("auto", force=True)
+            F.reuse("auto", force=True, cover_hard=0.0)
             ok2 = False
         except SystemExit:
             ok2 = True
@@ -873,12 +873,41 @@ def t_osm_reuse():
         shutil.rmtree(td / "邻居线")
         mkproj(td, "邻居线", (99.9, 29.9, 100.3, 30.3), 120)
         try:
-            F.reuse("auto", force=True, min_elems=300)
+            F.reuse("auto", force=True, min_elems=300, cover_hard=0.0)
             ok3 = False
         except SystemExit:
             ok3 = True
         check("donor 只有 120 个要素 → 不当 donor（拒绝复用）", ok3)
         check("整个过程旧缓存字节未变", F.CACHE.read_bytes() == before)
+
+        # ⑦ 覆盖率分流（2026-10-28 用户规则）：<80% 不绕复用，直接整盘抓。
+        #   实测定标：差额 21.6% 时两块矩形 2m31s ≈ 整盘 3m09s，复用等于白忙。门槛 85%。
+        shutil.rmtree(td / "邻居线")
+        mkproj(td, "邻居线", (100.0, 30.0, 100.2, 30.10), 300)   # 只覆盖 50%
+        calls = {"n": 0}
+        _saved_fetch_impl = F.fetch
+
+        def _fake_fetch(force=False, soft=False, rounds=2):
+            calls["n"] += 1
+            return {"elements": [{"type": "node", "id": 9, "lat": 30.05, "lon": 100.1}]}
+
+        F.fetch = _fake_fetch
+        F._fetch_rect = _boom2 = lambda bb, **k: (_ for _ in ()).throw(
+            AssertionError("覆盖率不足时不该再去补抓差额"))
+        try:
+            out = F.reuse("auto", force=True)
+            check("覆盖 50% <85% → 改走整盘抓取", calls["n"] == 1 and len(out["elements"]) == 1,
+                  f"fetch 调用 {calls['n']} 次")
+        finally:
+            F.fetch = _saved_fetch_impl
+        # 演练模式（--reuse-dry）不能偷偷联网抓
+        calls["n"] = 0
+        F.fetch = _fake_fetch
+        try:
+            out = F.reuse("auto", force=True, dry=True)
+            check("--reuse-dry 下覆盖率不足 → 只报告不抓", calls["n"] == 0 and out.get("_reuse_skipped"))
+        finally:
+            F.fetch = _saved_fetch_impl
         _ = old_bbox
     finally:
         if F is not None and _saved_fetch is not None:

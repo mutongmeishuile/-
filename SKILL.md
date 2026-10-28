@@ -222,9 +222,9 @@ python scripts/fetch_osm.py --reuse          # ★ 同区域新线首选：复�
                                              #   三道闸门（差额抓取成功 / 差额非空 / _cache_covers 过）
                                              #   任一不过就保留原缓存，绝不写半截数据。
                                              #   先 --reuse-dry 演练；指定 donor 用 --reuse 项目名
-                                             #   ⚠ 只有「差额 ≤5%」才真省时间：本地扫描+裁剪约 5 s，
-                                             #     但差额矩形走 Overpass，每块固定开销 ~1–2 min
-                                             #     （不按面积线性）。差额 >20% 就等同整盘抓取。
+                                             #   ⚠ ≥95% 才秒级（差额 ≤5%）：本地扫描+裁剪约 5 s，
+                                             #     差额矩形走 Overpass，每块固定开销 ~1–2 min
+                                             #     （不按面积线性）。覆盖 <85% 一律直接整盘抓，别绕路。
 python scripts/fetch_osm.py --shard --jobs 3 # ★ 大窗口/残缺缓存用这个：≤0.08° 网格逐块抓、
                                              #   失败二分、可断点续跑（公共实例大查询会 504/半截数据）
 python scripts/make_terrain.py               # DEM 晕渲 + 等高线 → 叠 OSM → base_map.jpg
