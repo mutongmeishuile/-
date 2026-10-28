@@ -708,9 +708,16 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
             return d0
 
     print(f"邻项目复用：窗口 {LON0:.4f}, {LAT0:.4f} → {LON1:.4f}, {LAT1:.4f}")
+    _t0 = time.time()
     best = None
     for name, proj, d, n in _donors(spec, min_elems):
         ext = _extent_of(d)
+        # ⚠ 先做**零成本的矩形相交预筛**，再起子进程取邻居窗口：
+        #   子进程要 import 它自己的 route_def + guide_common，单个 0.5 s；
+        #   54 个项目全跑一遍就是 20+ 秒，而其中真正相交的通常只有 2–4 个。
+        if not _intersect(ext, mine):
+            print(f"   跳过 {name}：窗口不相交")
+            continue
         claim = _claim_of(proj)
         covered = _intersect(claim, ext) if claim else None
         if not covered:
@@ -733,6 +740,7 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
     if not best:
         return _keep_old(soft, "没有可复用的邻项目缓存（同级目录里没有要素数达标的 osm.json）")
 
+    print(f"   扫描 {time.time() - _t0:.1f}s")
     name, proj, d, _, covered, full = best
     els = _clip(d.get("elements") or [], mine)
     print(f"   取 {name} 的 {len(els)} 个要素（已裁到本窗口）")
@@ -740,6 +748,14 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
         return _keep_old(soft, f"{name} 裁到本窗口后一个要素都不剩 → 不复用")
 
     todo = [] if full else [r for r in _subtract(mine, covered) if r]
+    _need = sum(_area(r) for r in todo) / max(1e-12, _area(mine))
+    if _need > 0:
+        # 差额占比直接决定复用值不值：Overpass 的耗时主要由**每次查询的开销**决定
+        # （排队 + 建连），不是按面积算。实测金银山（差额 21.6%、2 个矩形）2m31s，
+        # 与整盘抓取 3m09s 几乎同量级 —— 差额一过 ~20% 就基本白忙。
+        print(f"   差额合计占窗口 {_need * 100:.1f}%（{len(todo)} 个矩形）"
+              + ("，预计与整盘抓取同量级" if _need > 0.2 else "，很快"))
+    _t1 = time.time()
     got = []
     for r in todo:
         ra = _area(r) / max(1e-12, _area(mine))
@@ -755,6 +771,8 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
                                    f"镜像超时给半截数据的典型症状，拒绝落盘")
         got += part
 
+    if todo:
+        print(f"   差额补抓 {time.time() - _t1:.1f}s")
     keep = {}
     for e in els + got:                    # 补抓的在后 → 同 (type,id) 以新抓为准
         keep[(e.get("type"), e.get("id"))] = e
