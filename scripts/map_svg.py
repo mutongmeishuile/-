@@ -1123,7 +1123,10 @@ def build_map_overlay(mobile=False):
     # 峰名锚点就是山顶本身：被 POI 标注挤走或挤丢，读者就再也对不上"这是哪座山"。
     # 所以先让峰名占位，轮到 POI 标注时它会自己绕开（_layout 有 8 方向 × 4 档半径 + 字号阶梯）。
     _peak_lbl_svg = ""
-    _peak_first = str(_CFG.get("label_priority", "") or "").strip().lower() in ("peak", "peaks", "summit")
+    # 2026-10-28 起这是**默认**：峰名锚点就是山顶，被 POI 标注挤走/挤丢就再也对不上"这是哪座山"；
+    # 轨迹上的 POI 标注本来就可以挪（有 8 方向 × 4 档半径 + 引线）。
+    # 想退回老顺序（底图地名一律给轨迹让路）写 "label_priority": "none"。
+    _peak_first = str(_CFG.get("label_priority", "peak") or "").strip().lower() in ("peak", "peaks", "summit")
     if _peak_first:
         _peak_lbl_svg = _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
                                            POIS, pin_xy, only="peak")
