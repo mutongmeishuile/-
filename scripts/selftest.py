@@ -448,6 +448,24 @@ def t_peak_snap():
     check("max_shift_m=None → 护栏可关（单线覆盖）", len(got) == 1,
           f"返回 {len(got)} 条")
 
+    # ⑧ 逐峰例外 CFG["peak_snap_allow"]（2026-10-28 金银山）：
+    #   全局 400 m 是为了防"吸到邻峰"（三连山中央峰 501 m 就会落到西北峰顶上），
+    #   但个别峰的 OSM 坐标就是偏在几百米外的**同一座山**上（大雪山 440 m）——
+    #   这种只能点名放行。只放宽位移上限，其它四条判据一条都不改。
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 200, 100), dem, meta, 43.0,
+                               min_gain=50.0, max_shift_m=400.0,
+                               allow_shift={"测试峰": 800.0}, verbose=False)
+    check("逐峰例外：点名的峰放宽到 800 m → 吸附", len(got) == 1, f"返回 {len(got)} 条")
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 200, 100), dem, meta, 43.0,
+                               min_gain=50.0, max_shift_m=400.0,
+                               allow_shift={"别的峰": 800.0}, verbose=False)
+    check("逐峰例外没点到这个峰 → 仍按 400 m 拒绝", got == {}, f"却动了 {len(got)} 个")
+    got = MT.snap_peaks_to_dem(mk(d, 3000, 200, 100), dem, meta, 43.0,
+                               min_gain=50.0, max_shift_m=400.0,
+                               allow_shift={"测试峰": 500.0}, verbose=False)
+    check("逐峰例外给的上限仍不够（500 < 实际位移）→ 拒绝", got == {},
+          f"却动了 {len(got)} 个")
+
 
 # ---------------------------------------------------------------- ⑪ 等高距下限兜底
 def t_contour_cov_min():

@@ -314,7 +314,7 @@ def load_dem(z, lon0, lat0, lon1, lat1, workers=24):
 
 def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
                       min_gain=200.0, tol=100.0, max_gap=400.0,
-                      max_shift_m=400.0, verbose=True):
+                      max_shift_m=400.0, allow_shift=None, verbose=True):
     """把 OSM 峰点吸附到 DEM 的局部山顶，返回 `{"lon,lat": [lon, lat]}`。
 
     为什么需要（2026-10-23 博格达实测，用户指着截图问"这个三角标的不准确"）
@@ -342,6 +342,7 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
     （雪面反照 + 30 m 分辨率抹平尖顶），图上印的仍是 OSM 的 `ele`。
 
     ⑤ 位移不得超过 `max_shift_m`（默认 400 m）→ 超出说明找到的是**另一座山**。
+       逐峰可用 `CFG["peak_snap_allow"] = {"峰名": 600}` 单独放宽这一条（只放宽上限）。
        2026-10-25 全库核验：把 `min_gain` 降到 50 后，多数线路会冒出 800–1100 m 的
        "吸附"，且几乎全是 `(无名)` 峰点 —— 那是 800 m 方窗的角落（对角线 1131 m），
        即邻峰顶，不是校正。真正该修的是几十到两百米的小漂移；几百米以上的属于
@@ -422,7 +423,15 @@ def snap_peaks_to_dem(osm_path, dem, meta, lat_c, radius_m=800.0,
             # 位移护栏：几百米以上的"最高点"通常已经是另一座山，宁可不动。
             # 不缩半径重试 —— 缩完找到的会是坡上随便一个点，比原点更离谱。
             _shift = math.hypot(ax - xi, ay - yi) * mpp
-            if max_shift_m is not None and _shift > float(max_shift_m):
+            # 逐峰例外（CFG["peak_snap_allow"] = {"大雪山": 600}）：全局护栏 400 m 是为了
+            # 防止"吸到邻峰"（三连山中央峰 501 m 就会落到西北峰那个顶上），但个别峰的
+            # OSM 坐标就是偏在几百米外的同一座山上 —— 这类只能逐峰点名放行，且只改上限、
+            # 不改其它四条判据（多高、多远、跳过邻峰、max_gap 全部照旧）。
+            _lim = float(max_shift_m) if max_shift_m is not None else None
+            if allow_shift and nm0 in allow_shift:
+                _v = allow_shift[nm0]
+                _lim = float(_v) if _v is not None else None
+            if _lim is not None and _shift > _lim:
                 skipped_shift.append((nm0, _shift))
                 break
             gain = mx - base
@@ -2179,8 +2188,20 @@ def build_terrain():
                         if "peak_snap_max_shift" in _raw else 400.0
                 except Exception:                                  # noqa
                     _max_shift = 400.0
+                _allow = {}
+                try:
+                    import route_def as _RD2
+                    _allow = (getattr(_RD2, "CFG", None) or {}).get("peak_snap_allow") or {}
+                    if not isinstance(_allow, dict):
+                        _allow = {}
+                except Exception:                                  # noqa
+                    _allow = {}
+                if _allow:
+                    print(f"   逐峰例外：{len(_allow)} 个（"
+                          + "、".join(f"{k}≤{v:g} m" for k, v in _allow.items()) + "）")
                 snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0,
-                                         min_gain=_min_gain, max_shift_m=_max_shift)
+                                         min_gain=_min_gain, max_shift_m=_max_shift,
+                                         allow_shift=_allow)
                 (OUT / "peak_snap.json").write_text(
                     json.dumps(snap, ensure_ascii=False, indent=0), encoding="utf-8")
             except Exception as _e:                                    # noqa
