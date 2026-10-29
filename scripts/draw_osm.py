@@ -925,6 +925,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     f_poi = _font(F(11.5))
     f_water = _font(F(11.5), True)
 
+    # 可选：所有 OSM 地名统一成同一字号（默认关闭，保持上面的高程/类别分级）。
+    # 区域总览图这类「地名密、缩略图看得多」的画幅，分级会让同屏字号 11–15.5 显得杂乱，
+    # 配 CFG["osm_label_size"]=13 即可全部拉平。
+    _uni_sz = GC.cfg("osm_label_size", None)
+    if _uni_sz:
+        _funi = _font(F(float(_uni_sz)), True)
+        f_town = f_vil = f_ham = f_peak_hi = f_peak = f_peak_lo = f_poi = f_water = _funi
+
     peaks, places, pois, waters, saddles = [], [], [], [], []
     extras = []          # 水源 / 营地 / 补给（scripts/_fetch_extra.py 补抓，tags 带 _kind）
     for e in els:
