@@ -926,6 +926,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     f_water = _font(F(11.5), True)
 
     peaks, places, pois, waters, saddles = [], [], [], [], []
+    extras = []          # 水源 / 营地 / 补给（scripts/_fetch_extra.py 补抓，tags 带 _kind）
     for e in els:
         if e["type"] != "node":
             continue
@@ -959,6 +960,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             pois.append((x, y, _pick_name(t), t["tourism"]))
         elif t.get("amenity") == "place_of_worship":
             pois.append((x, y, _pick_name(t), "temple"))
+        elif t.get("_kind") in ("spring", "water", "camp", "supply"):
+            # 徒步参考点（2026-10-29 贡嘎总览图）：水源 / 营地 / 补给。
+            # 数据由 scripts/_fetch_extra.py 单独抓并打 _kind 标记 ——
+            # 主 QUERY 不含这些标签，所以**没有 _kind 的老缓存完全不受影响**。
+            extras.append((x, y, _pick_name(t), t["_kind"],
+                           t.get("ele") or t.get("capacity") or ""))
 
     # 湖泊（面）与河流（线）的名字：锚点取要素顶点/最大环的重心，再交给 Labeller 动态避让
     for e in els:
@@ -1179,6 +1186,64 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                      stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
             n_poi += 1
 
+    # ---- 山谷 / 山脊名：荒野区唯一可用的地形参照（2026-10-29 补） ----
+    # 此前 draw_osm 只处理 node 的 peak/saddle/place，`natural=valley` 的 way
+    # （贡嘎窗口 38 条、37 条有名字）一条都没画 —— 荒野段图上只剩山峰三角。
+    # 有名字才画；放不下就跳过（fallback=False），不给峰名/湖名让位。
+    n_geo = 0
+    for e in els:
+        t = e.get("tags", {})
+        if t.get("natural") not in ("valley", "ridge"):
+            continue
+        nmv = _pick_name(t)
+        if not nmv or nmv in skip_names:
+            continue
+        if e["type"] == "node":
+            if "lon" not in e:
+                continue
+            x, y = proj(e["lon"], e["lat"])
+        else:
+            pts = _pts_of(e, proj, size)
+            if not pts or len(pts) < 2:
+                continue
+            x, y = pts[len(pts) // 2]
+        if not (0 <= x <= size[0] and 0 <= y <= size[1]):
+            continue
+        _is_valley = t.get("natural") == "valley"
+        _col = (84, 104, 88) if _is_valley else (110, 98, 86)
+        if lab.place(d, nmv, (x, y), f_poi, _col, anchor_right=True,
+                     stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+            n_geo += 1
+
+    # ---- 水源 / 营地 / 补给：徒步者最需要的一类点（2026-10-29 补） ----
+    # 有名字的配字；无名的水源只画小蓝点（知道"这里有水"就够了，写字反而变噪声）。
+    n_extra = {"spring": 0, "water": 0, "camp": 0, "supply": 0}
+    for x, y, name, kind, sub in extras:
+        if kind in ("spring", "water"):
+            r = 2.0 * S
+            d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168), outline=(255, 255, 255))
+            if name and name not in skip_names:
+                if lab.place(d, name, (x, y), f_poi, (26, 84, 138), anchor_right=True,
+                             stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                    n_extra[kind] += 1
+            else:
+                n_extra[kind] += 1
+        elif kind == "camp":
+            r = 3.4 * S
+            d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8), (x + r * 1.15, y + r * 0.8)],
+                      fill=(226, 238, 224), outline=(74, 118, 74))
+            if name and name not in skip_names:
+                if lab.place(d, name, (x, y), f_poi, (60, 92, 60), anchor_right=True,
+                             stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                    n_extra[kind] += 1
+        else:                                   # supply：小卖部 / 补给 / 餐饮
+            r = 2.6 * S
+            d.rectangle([x - r, y - r, x + r, y + r], fill=(206, 168, 96), outline=(255, 255, 255))
+            if name and name not in skip_names:
+                if lab.place(d, name, (x, y), f_poi, (122, 92, 40), anchor_right=True,
+                             stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                    n_extra[kind] += 1
+
     # ---- 海子 / 水系名：蓝色斜体感（用深青蓝 + 白描边），动态避让已有注记 ----
     n_water = 0
     for x, y, name in waters:
@@ -1255,6 +1320,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
               f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
               f"兴趣点 {n_poi}/{len(pois)} · "
+              f"地形名 {n_geo} · 音源 {n_extra['spring'] + n_extra['water']} · "
+              f"营地 {n_extra['camp']} · 补给 {n_extra['supply']} · "
               f"道路编号 {n_road_ref}/{len(road_refs)} · 挤放 {lab.n_overlap}{extra}")
         if _STITCH_STATS["dropped"]:
             print(f"   ⚠ 缝合残链 {_STITCH_STATS['dropped']} 条"

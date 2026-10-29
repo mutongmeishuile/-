@@ -922,13 +922,45 @@ def t_osm_reuse():
         shutil.rmtree(td, ignore_errors=True)
 
 
+def t_labels_vector():
+    """LABELS_VECTOR 坑 + 山谷名渲染 + 补抓脚本（2026-10-29 贡嘎总览回写）。
+
+    这三条都不是"功能测试"，而是**防止同类事故再犯**的静态断言：
+    · 不走 map_svg 的出图必须显式 labels_vector=False，否则 OSM 文字全丢；
+    · draw_osm 必须有 valley/ridge 地形名渲染分支（荒野段只剩三角的老坑）；
+    · _fetch_extra.py 必须存在且查了水源/营地/补给三类 node。
+    """
+    me = Path(__file__).resolve().parent
+    do = (me / "draw_osm.py").read_text(encoding="utf-8")
+    pt = (me.parent / "references" / "pitfalls-terrain.md")
+    ptext = pt.read_text(encoding="utf-8") if pt.exists() else ""
+
+    check("draw_osm 有 LABELS_VECTOR 开关", "LABELS_VECTOR" in do)
+    check("draw_pixels 由 labels_vector 配置决定", 'label_no_crowd' in do and 'draw_pixels' in do)
+    check("坑文档写明 labels_vector 坑", "labels_vector" in ptext and "LABELS_VECTOR" in ptext)
+    check("坑文档写明『日志成功数不可信、要裁 1:1 原图核对』",
+          "records" in ptext and "裁 1:1" in ptext)
+
+    check("draw_osm 渲染山谷/山脊名", '("valley", "ridge")' in do)
+    check("draw_osm 渲染水源/营地/补给（_kind）", "_kind" in do and "spring" in do)
+
+    fe = me / "_fetch_extra.py"
+    check("_fetch_extra.py 存在", fe.exists())
+    if fe.exists():
+        src = fe.read_text(encoding="utf-8")
+        check("补抓脚本查了泉水", 'natural"="spring"' in src)
+        check("补抓脚本查了营地", "camp_site" in src)
+        check("补抓脚本查了补给", 'node["shop"]' in src)
+        check("补抓脚本不把 osm.ch 放首位", "overpass.osm.ch" not in src.split("MIRRORS")[1][:400])
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
-               t_osm_reuse):
+               t_osm_reuse, t_labels_vector):
         try:
             fn()
         except Exception as e:                                      # noqa

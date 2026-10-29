@@ -1193,3 +1193,64 @@ OSM 的国界是**一个国家一个 relation**：珠峰东坡窗口内同时命
 `map_svg._legend_rows` 与 `build_guide._legend_html` 都读 `legend_extra`，两边同步。
 ⚠ 「国界」**不会**被 `GC.is_trail_legend()` 误判成步道（它只认 步道/村道/牧道/公路/马道/
 机耕道/既有道路 和「非本次轨迹」），所以色值走 `it["color"]`，**不会**被强制改成紫罗兰。
+
+## 30. ⚠⚠⚠ `LABELS_VECTOR`：不走 `map_svg` 的出图，OSM 注记**一个字都不会画**（2026-10-29 贡嘎七线总览）
+
+**症状**：总览大图上，山峰只有三角符号、一个名字都没有；单线攻略图却正常。
+用户原话：「为什么只有贡嘎山顶有 osm 地名，其他山峰只有三角」。
+
+**根因**：`draw_osm.py` 默认 `LABELS_VECTOR = True` →
+`lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)` → **False**。
+此时所有 OSM 注记**只写进 `lab.records`，不向图像写像素**，设计上是留给
+`map_svg` 读 `out/*.json` 的 records 再画成 SVG 文字（矢量、清晰、可缩放）。
+
+- 单线攻略图走 `map_svg` → records 被消费 → 有字 ✅
+- **多线总览 / 海报走 `build_bigmap`（另写的一层 SVG），没人消费 records** →
+  三角/点/线都画了（PIL 直绘），文字全丢 ❌
+
+**修法**：自定义出图（非 map_svg 通道）在 `route_def.CFG` 里写
+
+```python
+"labels_vector": False,     # 强制 PIL 直绘注记
+```
+
+**判据（重要）**：日志里 `山峰名 86/117 · 地名 99/112` **照样打印成功数**
+（`lab.place()` 返回 True = "记录成功" ≠ "像素画上了"）。
+→ **唯一可信的核对是裁 1:1 原图看**，别信日志数字。
+
+**同类风险**：任何自建出图层（多线总览、海报、拼版）都适用这条。
+
+## 31. ⚠ 山谷 / 山脊名（`natural=valley` / `ridge`）此前完全没渲染（2026-10-29 同日）
+
+`draw_osm` 只处理 node 的 peak/saddle/place，`natural=valley` 的 **way**
+（贡嘎窗口 38 条、其中 37 条有名字）一条都没画 —— 荒野段（海拔 4000+、
+无人村落）图上就只剩山峰三角，看着"没有地名"。
+已补渲染：取 way 中点，灰绿小字，有名字才画、放不下就跳过（fallback=False）。
+日志新增 `地形名 N`。
+
+## 32. ⚠ 水源 / 营地 / 补给不在主 QUERY 里，要单独补抓（2026-10-29 同日）
+
+主 QUERY 只有路网/水系/地名/峰/垭口/冰川，**没有**
+`natural=spring`、`man_made=water_tap`、`amenity=drinking_water`、
+`tourism=camp_site`、`amenity=shelter|fuel`、`shop=*` ——
+而这些恰是徒步者最关心的「哪里有水、哪里能补给」。
+
+→ 用新增的 `scripts/_fetch_extra.py`：单独一次 Overpass 查这些 node，
+打 `_kind`（spring/water/camp/supply）标记后合并进 `out/osm.json`；
+`draw_osm` 认 `_kind` 画符号（蓝点=水源、绿三角=营地、沙色方块=补给）。
+
+**为什么不塞进主 QUERY**：主 QUERY 是 way 为主的大查询，公共实例本来就容易
+504/半截数据；再加 node 只会更慢更不稳。这几类全是 node，单独查 35 s–4 min。
+
+**镜像实测**：`overpass.private.coffee` 对 node 查询也常 504；
+`overpass-api.de` 稳；`overpass.osm.ch` **无亚洲数据**（查亚洲返回空）。
+
+## 33. ⚠ 多线总览的三个硬坑（2026-10-29 贡嘎七线总览实测）
+
+1. `make_terrain.poi_label_cells()` 会调 `route_def.fmt_ele()` ——
+   多线总览的 `route_def` 只有 CFG/POIS，**必须补一个 `fmt_ele()`**，
+   否则第 6 步（OSM 叠加）才炸，前面 5 步白跑。
+2. 线路名徽标的落点判据要加 `BOX.near_track(rr, 14)` ——
+   只用 `BOX.out/hit` 会让徽标**压在轨迹上**。
+3. 底部图例带高度 `BAND_B` 与落款行的 y（`FY+364`）是**写死配对**的 ——
+   砍 `BAND_B` 会把落款切掉半行；删图例行（如本图无国界）要同步改 `BAND_B`。

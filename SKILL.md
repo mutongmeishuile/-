@@ -156,6 +156,7 @@ agent_created: true
 | gpx | `make_gpx.py` | `<file_stem>.gpx` |
 | qa | `qa_guide.py` | 数值化自检（不产文件，只判成败） |
 | — | `check_window.py` | 窗口自检：名峰是否被切在图外（exit 1 = 图外有个比图里更高的峰）。线路名带峰名的线必跑 |
+| osm2 | `_fetch_extra.py` | **补抓水源 / 营地 / 补给 / 山屋**（主 QUERY 不含这些 node，见 `pitfalls-terrain §32`）。跑一次合并进 `osm.json`，图上多出蓝点（水源）· 绿三角（营地）· 沙色方块（补给）。徒步线建议跑 |
 
 **线路相关的只有一个文件：`scripts/route_def.py`。** 其余 8 个脚本一句线路名都不认，
 全部从 `route_def` 读（`CFG` 文案 / `POIS` 点位 / 里程爬升 / `CFG["kml"]`）。
@@ -528,6 +529,11 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
    极易撞车，症状是"某段文字只占左边一小条"。
 8. **地图「三件套」要缩小 + 动态避让**：图例 / 指北针 / 比例尺由 `guide_common.Placer` 求解落点，
    **硬约束是不压轨迹、互不重叠**；尺寸按 `FURN_*` 系数缩小（图例 ≈0.78、指北针 ≈0.72）。
+9. **OSM 注记默认「只记录不落像素」**（`draw_osm.LABELS_VECTOR=True`）：文字靠 `map_svg`
+   消费 `out/*.json` 的 records 再画成 SVG。**任何不走 `map_svg` 的自定义出图**
+   （多线总览 / 海报 / 拼版）必须在 `route_def.CFG` 写 `"labels_vector": False`，
+   否则图上只剩三角和点、**一个地名都没有**（`pitfalls-terrain §30`）。
+   ⚠ 日志里「山峰名 86/117」照样打成功数，**别信日志** —— 唯一可信的核对是裁 1:1 原图看。
    别用固定四角坐标硬摆，轨迹一变就会压住。
 9. **图例三种放法，用 `CFG["legend_place"]` 选**（**不写 = `"title"`，2026-10-23 起的默认**）：
    - `"title"`（**默认**）：塞进独立高清图的标题带空白区，**图面完全不被遮挡**。左簇符号说明（3×n）、
