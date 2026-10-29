@@ -76,6 +76,35 @@ def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z):
     while z > 12 and _window_px(z, lon0, lat0, lon1, lat1) > DEM_MAX_PX:
         z -= 1
     return z
+
+
+def cap_aspect(lon0, lat0, lon1, lat1, max_ratio):
+    """把窗口的「东西:南北」像素比钳到 max_ratio 以内（只扩不缩，避免裁掉轨迹）。
+
+    背景：底图固定逻辑宽 LOGICAL_W（→ 栅格宽 RASTER_W 固定），高度由窗口南北跨度按比例
+    推出。东西跨度远大于南北的线路（如横向切脊的贡嘎南山脊线，真实约 3.3∶1）会被拉成极扁的
+    横图（≈2.2∶1），与竖图为主的其它线路放在一起很突兀。此函数在「图太宽」时把南北外扩，
+    让宽高比回到上限值，图面更协调；图本来就窄/方则原样不动。
+
+    像素横纵比与 DEM 级别 z 无关（横纵都按 2^z 缩放，互相抵消），所以直接用
+    `GC.mercator_px` 取一个参考 z 算 Δx/Δy 即可；横纵比确定后，把南北跨度按倍率 f 线性
+    外扩（线路跨度小，墨卡托在此范围内近似线性，误差可忽略）。
+    """
+    import math
+    z_ref = DEM_Z
+    x0, y0 = GC.mercator_px(lon0, lat1, z_ref, TILE)   # 左上（纬度高 → y 小）
+    x1, y1 = GC.mercator_px(lon1, lat0, z_ref, TILE)   # 右下（纬度低 → y 大）
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    if dy <= 0:
+        return lon0, lat0, lon1, lat1
+    ratio = dx / dy                                      # = 出图宽高比（z 无关）
+    if ratio <= max_ratio:
+        return lon0, lat0, lon1, lat1
+    f = ratio / max_ratio                                # 南北需放大的倍率
+    lat_mid = (lat0 + lat1) / 2.0
+    new_span = (lat1 - lat0) * f
+    return lon0, lat_mid - new_span / 2.0, lon1, lat_mid + new_span / 2.0
 # ---- 超采样（放大不糊的关键）----
 # 逻辑宽 = 版式宽（SVG viewBox 用），栅格按 LOGICAL_W × SS 出图。
 # SVG 里 <image width="1504"> 会把 3008 的 jpeg 缩回逻辑宽渲染 —— 这等于给浏览器做了 2× 超采样：
@@ -1962,6 +1991,12 @@ def _drop_high_alt_water(osm_path, dem, bbox, snow_m, out_path):
 # ------------------------------------------------------------------ 主流程
 def build_terrain():
     LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
+    # 宽高比钳制：图太宽（东西≫南北）时把南北外扩到上限，图面更协调（详见 cap_aspect）。
+    _cap = _route_cfg("map_aspect_max", None)
+    if _cap:
+        _cap = float(_cap)
+        LON0, LAT0, LON1, LAT1 = cap_aspect(LON0, LAT0, LON1, LAT1, _cap)
+        src = f"{src} · 宽高比钳到 {_cap:g}∶1"
     GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "make_terrain")
     print(f"[1/6] 地图窗口（{src}）: {LON0}, {LAT0} → {LON1}, {LAT1}", flush=True)
     # 线路级可强制 DEM 级别（CFG["dem_z"]）：z14 的平滑会吞掉冰川面的细节，
