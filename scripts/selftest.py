@@ -958,13 +958,31 @@ def t_labels_vector():
         check("补抓脚本不把 osm.ch 放首位", "overpass.osm.ch" not in src.split("MIRRORS")[1][:400])
 
 
+def t_label_knobs():
+    """标注层旋钮的静态断言（2026-10-29 贡嘎九线总览回写）。
+
+    这四个键只影响"地名/峰名的字号与落位"，默认全关、不影响既有线路；
+    断言它们还在，防止后续重构时被顺手删掉（删了不会报错，只会静默回到分级字号/左挪）。
+    """
+    me = Path(__file__).resolve().parent
+    do = (me / "draw_osm.py").read_text(encoding="utf-8")
+    check("draw_osm 支持 osm_label_size（统一字号）", "osm_label_size" in do)
+    check("draw_osm 支持 peak_label_all", "peak_label_all" in do)
+    check("draw_osm 支持 peak_label_tight", "peak_label_tight" in do)
+    check("draw_osm 支持 peak_label_right_only", "peak_label_right_only" in do)
+    check("place() 有 right_only 参数", "right_only=False" in do)
+    # right_only 分支里绝不能出现左侧候选（2026-10-29 用户要求峰名一律在三角右侧）
+    seg = do.split("if right_only:", 1)[-1].split("else:", 1)[0]
+    check("right_only 分支不含左侧候选", "(-r" not in seg)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
-               t_osm_reuse, t_labels_vector):
+               t_osm_reuse, t_labels_vector, t_label_knobs):
         try:
             fn()
         except Exception as e:                                      # noqa

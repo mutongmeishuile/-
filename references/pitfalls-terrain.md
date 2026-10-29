@@ -1270,3 +1270,97 @@ OSM 的国界是**一个国家一个 relation**：珠峰东坡窗口内同时命
 
 **坑中坑**：给 extras（水源/营地）去重时，**无名的点不能一起丢进 `_dedupe_by_name`** ——
 空名字互相视为同名，会被去成 1 个（实测「水源 10 → 0」）。只对具名的去重。
+
+## 35. ⚠⚠ 多线总览的标注层：轨迹压字 / 徽标定位 / 重名抑制（2026-10-29 贡嘎九线总览）
+
+总览图不走 `map_svg`（见 §30），所以单线那套"标注避让轨迹"的能力**默认没有** —— 底图注记烤进 jpg，
+上层 SVG 再画轨迹就直接压字。下面五条是同一天踩出来的。
+
+### 35.1 轨迹压地名：在 Labeller 占位网格里预先 mark 轨迹
+
+单线靠 `map_svg._layout()` 把"压轨迹"罚到 1e6（等价禁放）。总览的等效做法：
+
+```python
+# build_terrain_hi._overlay 里，先算出轨迹栅格坐标
+_proj = draw_osm.make_projector(meta["z"], meta["tx0"], meta["ty0"],
+                                meta["box"], meta["scale"] * MT.SS)   # ← 关键
+```
+
+- ⚠ **`proj_scale` 必须是 `meta["scale"] * SS`**（即 make_terrain 传给 draw_overlay 的 `proj_scale`）。
+  用 `meta["scale"]` 会得到逻辑坐标（0–1800），而 pil 是 5400，标注会整体缩到 1/3 位置。
+- 轨迹点 6 px 网格去重后（九线 ≈ 7800 点），patch `Labeller.__init__` 把它们**直接写进 `self.grid`**：
+
+```python
+def _lab_init(self, size, cell=14):
+    _orig(self, size, cell)
+    c = max(1, self.cell); r = 6.0
+    for (x, y) in TRACK_AVOID_PX:
+        for cx in range(int((x-r)//c), int((x+r)//c)+1):
+            for cy in range(int((y-r)//c), int((y+r)//c)+1):
+                self.grid.add((cx, cy))
+```
+
+- ⚠⚠ **不能走 `self._mark()`**：若同一文件已把 `_mark` patch 成"记录到 LABEL_BOXES"（本技能就是这么导出
+  禁标区的），走它会把这 8000 个轨迹点全当注记框落盘 —— 禁标区 310 → **8504**，上层攻略 POI 无处可放。
+- 半径：r=9 太狠（营地 16→11、补给 1→0），**r=4–6** 够用（轨迹芯线 + 白晕的一半）。
+- **营地/水源/补给要保护**：它们本来就贴着路线，20 px 内的轨迹点不参与避让，否则被整片挤掉。
+- 代价：山峰名 81→75、极少数小地名（如「贡勒」）无处可放。这是"字不被线穿"的必然交换。
+
+### 35.2 徽标"必须靠近某个家具"时，不能用单点候选 + 布尔 hit
+
+- 症状：徽标首选"比例尺正上方"，被路线气泡一撞就落到兜底"左中"，离比例尺几百像素（用户直接报"徽标没了"）。
+- 原因：`Boxes.hit()` 是**布尔**判定，单点候选一失败就跳到下一个语义完全不同的位置。
+- 正解：**面积代价软选** —— 在目标家具上方生成网格（dy 40–800 × dx ±2.2R），算每个候选与 `BOX.b` 的
+  重叠面积占比（不压轨迹的候选再 ×0.55 加权），取最小且 ≤12% 的位置。九线总览最终落在
+  dy=40 / dx=0（比例尺正上方居中），与气泡重叠仅 ~1%。
+
+### 35.3 `OSM_SKIP` 只治"全串完全一致"的重名
+
+- 症状：贡嘎山同屏出现 **7509** 和 **7556** 两个海拔。
+- 真因：OSM 是 `name=贡嘎山 / ele=7508.9`；`route_def.POIS` 手工写的是 `("贡嘎山 7556", …, 7556)`。
+  `skip_names` 由 `GC.pois_of()` 取的是 **POI 名原文**「贡嘎山 7556」，与 OSM 的「贡嘎山」不等 → 拦不住。
+- 修法：`OSM_SKIP = ["贡嘎山"]` 显式列**原串**。同理音译差异（「巴拉拉」vs「巴巴拉」）也只能手工列。
+- 推论：**POI 名带后缀（海拔 / `·` / 括号）时，去重一定失效**，要么改名，要么显式 OSM_SKIP。
+
+### 35.4 POI 名里已带海拔，就别再画副行
+
+`build_bigmap` 的 POI 是"主名 + 副行 ele"。POIS 写成 `("贡嘎山 7556", …)` 会变成
+「贡嘎山 7556」+ 下面一行「7556 m」。加一句：
+
+```python
+_show_ele = bool(ele) and not name.strip()[-4:].isdigit()   # 名字末尾已是 4 位海拔
+```
+
+### 35.5 峰名统一在三角右侧：候选方向要能控，偏移下限别给太小
+
+- `place()` 默认候选是 右→右上→右下→正上→正下→左上→左下→左，密集区右侧被占就**挪到三角左边**
+  （实测 74 个具名峰里 14 个跑到左侧）。
+- 新参数 `right_only=True`：候选改成 `(r,0) / (r,-r) / (r,r) / (r,-2r)`，`r ∈ 2/4/6/9/12` 逻辑 px。
+  实测左侧残留 14 → **0**，严格正右 39 → 44；挤放反而从 116 降到 102（候选变多更好放）。
+- ⚠ **偏移上限 6 px 太小**：垂直只差 55 px 的两座峰（提诺山/梅尔西峰）错不开，会叠成「5630m0m」。
+  6 → 12 并补 `(r,-2r)`（陡右上，抬高约一个字高）后，「多龙果/雅家梗山」分开。
+- ⚠ 若一簇 200×250 px 内挤了 6 个峰（名字各宽 100–130 px），**任何偏移都排不下** ——
+  这时只能 `OSM_SKIP` 掉 1–2 个信息重复度最高的次级点，或缩字号（已 9 号就不建议再缩）。
+
+### 35.6 诊断"标注到底落在哪"：patch `Labeller._emit`，别用 label_boxes 反推
+
+`label_boxes.json` 只有矩形、不含文字，反推时会把**邻峰的框**误配给自己（实测误差很大）。
+可靠做法是临时 patch：
+
+```python
+_orig = draw_osm.Labeller._emit
+def _emit(self, d, text, x, y, font, fill, stroke, sw, ax=None, ay=None):
+    REC.append((text, x, y, ax, ay, font.size))     # ax/ay 是真实锚点
+    return _orig(self, d, text, x, y, font, fill, stroke, sw, ax=ax, ay=ay)
+```
+
+竖直是否居中用 `dy = (y + font.size/2) - ay` 判，`dx = x - ax` 判左右。
+⚠ 诊断脚本会重跑 `build_terrain`，跑完**必须再跑一次 `build_bigmap`**，否则 `out/base_map.jpg`
+与成品不一致；脚本用完即删。
+
+### 35.7 总览项目的 `guide_common.py` 是精简版
+
+只有 `label_font` / `mercator_px` / `make_projector` 等，**没有 `author` / `burn_watermark` / `jpg_meta`**。
+同步新版 `make_terrain.py` 过去后，末尾的 `GC.burn_watermark(pil)` 会 `AttributeError`。
+在项目副本里加 `if hasattr(GC, "burn_watermark")` 跳过即可（总览图本来就不烧水印），
+**不要**整体替换 guide_common —— 会把旧项目的投影/字体/图例接口一起换掉。
