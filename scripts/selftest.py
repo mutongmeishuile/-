@@ -937,9 +937,13 @@ def t_labels_vector():
 
     check("draw_osm 有 LABELS_VECTOR 开关", "LABELS_VECTOR" in do)
     check("draw_pixels 由 labels_vector 配置决定", 'label_no_crowd' in do and 'draw_pixels' in do)
-    check("坑文档写明 labels_vector 坑", "labels_vector" in ptext and "LABELS_VECTOR" in ptext)
-    check("坑文档写明『日志成功数不可信、要裁 1:1 原图核对』",
-          "records" in ptext and "裁 1:1" in ptext)
+    if ptext:
+        check("坑文档写明 labels_vector 坑", "labels_vector" in ptext and "LABELS_VECTOR" in ptext)
+        check("坑文档写明『日志成功数不可信、要裁 1:1 原图核对』",
+              "records" in ptext and "裁 1:1" in ptext)
+    else:
+        # 项目副本里没有 references/（只有技能目录有）→ 文档项跳过，不算失败
+        check("坑文档检查（项目副本无 references/ → 跳过）", True, "跳过")
 
     check("draw_osm 渲染山谷/山脊名", '("valley", "ridge")' in do)
     check("draw_osm 渲染水源/营地/补给（_kind）", "_kind" in do and "spring" in do)
