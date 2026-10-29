@@ -522,7 +522,7 @@ class Labeller:
 
     def place(self, d, text, xy, font, fill, stroke=(255, 255, 255),
               anchor_center=True, force=False, pad=2, stroke_w=1.8, fallback=True,
-              kind="", anchor_right=False, gap=5.0):
+              kind="", anchor_right=False, gap=5.0, right_only=False):
         """放注记。
 
         三种锚定（2026-10-24 用户：标注名称默认在标注点的正右侧，依然考虑动态避让）：
@@ -551,10 +551,17 @@ class Labeller:
         # 候选偏移：以默认位为基准向外做紧凑环形避让，右侧优先。
         U = S
         cand = [(0, 0)]
-        for r in (5, 9, 12):
-            cand += [(r, 0), (r, -r), (r, r),       # 右、右上、右下（保持右侧优先）
-                     (0, -r), (0, r),               # 正上、正下
-                     (-r, -r), (-r, r), (-r, 0)]    # 左上、左下、左侧（最后才用）
+        if right_only:
+            # 只在右侧半球找位（右 / 右上 / 右下），水平可以拉得更远，但绝不换到左侧。
+            # 2026-10-29 用户要求：峰名统一在三角正右侧；密集峰群宁可右移远一点，
+            # 也不要跑到三角左边去（原来的 -r 候选会挪到左侧）。
+            for r in (5, 9, 12, 18, 26, 36, 48):
+                cand += [(r, 0), (r, -r * 0.7), (r, r * 0.7)]
+        else:
+            for r in (5, 9, 12):
+                cand += [(r, 0), (r, -r), (r, r),       # 右、右上、右下（保持右侧优先）
+                         (0, -r), (0, r),               # 正上、正下
+                         (-r, -r), (-r, r), (-r, 0)]    # 左上、左下、左侧（最后才用）
         best = None
         for odx, ody in cand:
             dx, dy = odx * U, ody * U
@@ -1084,6 +1091,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   peak_label_tight → 峰名左缘紧贴三角右缘 0.5 逻辑 px（默认 gap 5.0 太远）
     _peak_all = GC.cfg_flag("peak_label_all", False)
     _peak_tight = GC.cfg_flag("peak_label_tight", False)
+    _peak_right = GC.cfg_flag("peak_label_right_only", False)
     # 分位数按本窗口**所有有高程的峰点**算（含无名字的）——要反映"这片地形上多高算突出"，
     # 而不是 OSM 的命名稀疏度（高峰也常有没录名字的）。
     _ev = [v for v in (_ele_of(p[3]) for p in peaks) if v is not None]
@@ -1138,7 +1146,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         txt = f"{name} {ele}m" if ele else name
         if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
-                     gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0):
+                     gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0,
+                     right_only=_peak_right):
             n_peak += 1
             n_named_done += 1
 
