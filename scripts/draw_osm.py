@@ -1189,14 +1189,20 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # ---- 山谷 / 山脊名：荒野区唯一可用的地形参照（2026-10-29 补） ----
     # 此前 draw_osm 只处理 node 的 peak/saddle/place，`natural=valley` 的 way
     # （贡嘎窗口 38 条、37 条有名字）一条都没画 —— 荒野段图上只剩山峰三角。
-    # 有名字才画；放不下就跳过（fallback=False），不给峰名/湖名让位。
-    n_geo = 0
+    # ⚠ 同一条山谷会被 OSM 拆成多个 way，各带同一个 name（巴王沟实测同屏两遍、
+    #   大沟同屏两遍）→ 必须走 _dedupe_by_name，不然名字会沿山谷写满。
+    geo = []
     for e in els:
         t = e.get("tags", {})
         if t.get("natural") not in ("valley", "ridge"):
             continue
         nmv = _pick_name(t)
         if not nmv or nmv in skip_names:
+            continue
+        # ⚠ 同一要素常同时有 natural=valley + waterway=stream（贡嘎的巴王沟/大沟都是），
+        #   两个通道各画一遍 → 名字同屏重复。约定：**带 waterway 的归水系通道**（蓝色斜体，
+        #   有自己的 _dedupe_by_name），这里只画纯 valley/ridge。
+        if t.get("waterway"):
             continue
         if e["type"] == "node":
             if "lon" not in e:
@@ -1209,7 +1215,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             x, y = pts[len(pts) // 2]
         if not (0 <= x <= size[0] and 0 <= y <= size[1]):
             continue
-        _is_valley = t.get("natural") == "valley"
+        geo.append((x, y, nmv, t.get("natural") == "valley"))
+    # sep 取图宽 12%（与 places 同档）：山谷名之间的合法间距通常远大于这个
+    geo = _dedupe_by_name(geo, max(300.0, size[0] * 0.12) * S, 2)
+    n_geo = 0
+    for x, y, nmv, _is_valley in geo:
         _col = (84, 104, 88) if _is_valley else (110, 98, 86)
         if lab.place(d, nmv, (x, y), f_poi, _col, anchor_right=True,
                      stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
@@ -1218,6 +1228,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # ---- 水源 / 营地 / 补给：徒步者最需要的一类点（2026-10-29 补） ----
     # 有名字的配字；无名的水源只画小蓝点（知道"这里有水"就够了，写字反而变噪声）。
     n_extra = {"spring": 0, "water": 0, "camp": 0, "supply": 0}
+    # ⚠ 只对**具名**的去重：无名水源/营地名字为空，彼此全视为同名 → 会被去成 1 个
+    #   （2026-10-29 实测「水源 10 → 0」）。无名的按坐标容忍共存（画符号不写字）。
+    _extras_named = [e for e in extras if e[2]]
+    _extras_anon = [e for e in extras if not e[2]]
+    extras = _dedupe_by_name(_extras_named, max(300.0, size[0] * 0.12) * S, 2) + _extras_anon
     for x, y, name, kind, sub in extras:
         if kind in ("spring", "water"):
             r = 2.0 * S
