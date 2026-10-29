@@ -1079,6 +1079,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * S, 3, x_idx=1, y_idx=2)
 
     peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
+    # 2026-10-29 新增（默认关，只给总览这类"要求峰名尽量全出"的画幅用）：
+    #   peak_label_all   → 所有具名峰都允许挤放（不再"低分位放不下就丢"）
+    #   peak_label_tight → 峰名左缘紧贴三角右缘 0.5 逻辑 px（默认 gap 5.0 太远）
+    _peak_all = GC.cfg_flag("peak_label_all", False)
+    _peak_tight = GC.cfg_flag("peak_label_tight", False)
     # 分位数按本窗口**所有有高程的峰点**算（含无名字的）——要反映"这片地形上多高算突出"，
     # 而不是 OSM 的命名稀疏度（高峰也常有没录名字的）。
     _ev = [v for v in (_ele_of(p[3]) for p in peaks) if v is not None]
@@ -1086,6 +1091,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         q_hi, q_mid = _pct(_ev, PEAK_TIER_PCT[0]), _pct(_ev, PEAK_TIER_PCT[1])
     else:
         q_hi = q_mid = None       # 样本太少：不做相对分级，一律中档
+    n_named = sum(1 for _p in peaks if _p[2])
+    n_named_done = 0
     for x, y, name, ele in peaks:
         if not name:
             ev0 = _ele_of(ele)
@@ -1123,13 +1130,17 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             f_peak_use, forced, tri_k, col, tcol = f_peak_lo, False, 0.82, (124, 102, 82), (92, 74, 56)
         if name in _force_names:
             forced = True            # 点名峰：允许挤放（fallback 生效）
+        if _peak_all:
+            forced = True            # 全量模式：具名峰一律允许挤放，尽量都出
         tri = [(x, y - 6 * S * tri_k), (x - 5.4 * S * tri_k, y + 3.6 * S * tri_k),
                (x + 5.4 * S * tri_k, y + 3.6 * S * tri_k)]
         d.polygon(tri, fill=col, outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
         if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
+                     gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0):
             n_peak += 1
+            n_named_done += 1
 
     # 冰川名：菱形冰符号 + 深冰蓝粗体 + 白描边。冰川面上只标最大的几条
     # （本区 382 条冰川里只有 18 条有名字），注记里不带高程 —— 冰川看的是范围与末端。
@@ -1338,7 +1349,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   2026-10-17 希夏邦马：字号 ×0.85 + 留白 2→2.8 后由 挤放 N 降到 M。
         bd = f" · 国界 {n_border} 段" if n_border else ""
         print(f"   OSM 叠加：面 {n_poly} · 线 {n_line}{gl}{bd} · "
-              f"山峰名 {n_peak}/{len(peaks)}" + _tier + " · "
+              f"山峰名 {n_peak}/{len(peaks)}（具名 {n_named_done}/{n_named}）" + _tier + " · "
               f"哑口名 {n_saddle}/{len(saddles)} · "
               f"地名 {n_place}/{len(places)} · "
               f"水系名 {n_water}/{len(waters)} · "
