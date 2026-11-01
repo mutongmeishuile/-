@@ -17,7 +17,7 @@
 地形晕渲与等高线照常出图。所以流水线默认以 `--soft` 调用它，
 Overpass 集体抽风不该让整条流水线挂掉。
 """
-import argparse, json, subprocess, sys, time, urllib.parse, urllib.request
+import argparse, json, os, subprocess, sys, time, urllib.parse, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -859,6 +859,448 @@ def summarize(d):
     return kind, names
 
 
+# ============================================================ 本地 PBF 通道（2026-11-01）
+# 为什么要这条通道：公共 Overpass 对大 bbox 的查询有三种坏结局 —— 429（限流）、
+# 504（超时）、以及**最坏的一种**：200 + 半截数据（EBC 那次 542 个要素、path 一条没有、
+# 还没有 remark）。而 OSM 原始数据（ODbL）本来就按省/国家提供常规下载，落到本地后
+# 查询无限速、不可能残缺、还能被几十条线路共用同一份切片。
+#
+# 数据同源：Overpass 也是从同一份 planet 导出的，标签体系与坐标精度一致
+# （PBF 里是 nanodegree 整数，约 1 cm），所以 draw_osm.py **一行都不用改** ——
+# 唯一要做的就是产出与 `out geom` 同 schema 的 osm.json。
+#
+# 面状要素（湖/林/冰川）在 PBF 里是原始 way + multipolygon relation，
+# 必须自己拼环（Overpass 的 `out geom` 帮你内联好了）。拼错的表现是"湖变成碎片"
+# 或"整片不填色" —— 所以这里走 pyosmium 的 `osmium.area`（AreaManager，含
+# island-in-lake 处理），**不要手写拼环**。
+PBF_CACHE_DIR = Path(os.environ.get("HIKING_OSM_PBF_CACHE") or
+                     (Path.home() / ".workbuddy" / "cache" / "hiking-osm"))
+# openstreetmap.fr 的省级切片：每日更新、带 .state.txt（可 pyosmium-up-to-date 增量刷）。
+# ⚠ 实测本机 geofabrik 直接超时（15 s 无响应），openstreetmap.fr 可通但要分块并发
+#   （单连接被限到 ~17 KB/s，12 路并发能到 150–200 KB/s）。
+PBF_URL = "https://download.openstreetmap.fr/extracts/asia/china/{p}-latest.osm.pbf"
+
+# 省份粗包围盒（lon0, lat0, lon1, lat1）。只用于判断"窗口落在哪个省"，
+# **故意放宽到互相重叠**：选错的代价是抓回 0 个要素（下面的闸门会回落到 Overpass），
+# 漏选则等于没这条通道。没列的省份 / 境外线路 → 直接走 Overpass。
+PROVINCE_BBOX = {
+    "sichuan":   (97.30, 26.00, 108.60, 34.40),
+    "yunnan":    (97.40, 21.10, 106.30, 29.30),
+    "xizang":    (78.30, 26.80, 99.20, 36.60),
+    "qinghai":   (89.30, 31.50, 103.20, 39.30),
+    "xinjiang":  (73.30, 34.30, 96.50, 49.20),
+    "gansu":     (92.30, 32.50, 108.80, 42.90),
+    "shaanxi":   (105.40, 31.70, 111.30, 39.60),
+    "shanxi":    (110.20, 34.50, 114.60, 40.80),
+    "hebei":     (113.40, 36.00, 119.90, 42.70),
+    "henan":     (110.30, 31.30, 116.70, 36.40),
+    "hubei":     (108.30, 29.00, 116.20, 33.30),
+    "hunan":     (108.70, 24.60, 114.30, 30.10),
+    "guizhou":   (103.50, 24.50, 109.60, 29.20),
+    "guangxi":   (104.40, 20.80, 112.10, 26.40),
+    "anhui":     (114.80, 29.30, 119.70, 34.70),
+    "fujian":    (115.80, 23.50, 120.50, 28.40),
+    "zhejiang":  (118.00, 27.00, 123.20, 31.20),
+    "jiangxi":   (113.50, 24.40, 118.50, 30.10),
+    "guangdong": (109.60, 20.10, 117.40, 25.60),
+    "liaoning":  (118.80, 38.70, 125.80, 43.50),
+    "jilin":     (121.60, 40.80, 131.40, 46.30),
+    "heilongjiang": (121.10, 43.40, 135.10, 53.60),
+    "neimenggu": (97.10, 37.40, 126.10, 53.40),
+}
+
+_HIGHWAY = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
+            "residential", "living_street", "service", "track", "path", "footway",
+            "steps", "bridleway"}
+_WATERWAY = {"river", "stream", "canal", "drain"}
+_PLACE = {"city", "town", "village", "hamlet", "suburb", "neighbourhood", "locality"}
+_TOURISM_NODE = {"viewpoint", "attraction", "alpine_hut"}
+
+
+def _kind_node(t):
+    return bool(t.get("place") in _PLACE
+                or t.get("natural") in ("peak", "saddle", "valley", "ridge")
+                or t.get("mountain_pass") == "yes"
+                or t.get("tourism") in _TOURISM_NODE
+                or t.get("historic")
+                or t.get("amenity") == "place_of_worship")
+
+
+def _kind_line(t):
+    return bool(t.get("highway") in _HIGHWAY
+                or t.get("waterway") in _WATERWAY
+                or t.get("natural") in ("valley", "ridge"))
+
+
+def _kind_area(t):
+    return bool(t.get("natural") in ("water", "wood", "glacier")
+                or t.get("landuse") in ("reservoir", "forest", "meadow"))
+
+
+def _candidate_provinces(bbox):
+    """窗口中心落进哪些省（按矩形面积从小到大）。
+
+    ⚠ **粗矩形一定会重叠，光靠坐标选不准**。实测亚丁窗口（100.25E/28.26N，四川稻城）
+      同时落在四川和云南的矩形里，云南矩形更小 → 选云南 → 抽出来 2 个要素。
+      所以这里只给**候选排序**，真正定谁，靠下面的 `_pbf_province_ok()` 用数据验。
+    """
+    lon0, lat0, lon1, lat1 = bbox
+    cx, cy = (lon0 + lon1) / 2, (lat0 + lat1) / 2
+    hit = []
+    for p, (x0, y0, x1, y1) in PROVINCE_BBOX.items():
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            hit.append((abs((x1 - x0) * (y1 - y0)), p))
+    hit.sort()
+    return [p for _a, p in hit]
+
+
+def _pick_province(bbox):
+    c = _candidate_provinces(bbox)
+    return c[0] if c else None
+
+
+def _pbf_province_ok(pbf, bbox, need=200, max_scan=None):
+    """切片里到底有没有这个窗口：只数**窗口内的节点**，不进 area 处理（快 9 倍）。
+
+    为什么必须验：省级切片是按**省界**裁的，窗口贴着省界时粗矩形根本分不出
+    "这个点在四川还是云南"。而节点计数是便宜且铁的证据 —— 窗口里一个节点都没有，
+    这片切片就不是本窗口的数据，换下一个候选，别白扫 5 分钟的 area。
+    """
+    import osmium
+    lon0, lat0, lon1, lat1 = bbox
+    t0 = time.time()
+    n = 0
+    for o in osmium.FileProcessor(str(pbf), osmium.osm.NODE):
+        try:
+            la, lo = o.location.lat, o.location.lon
+        except Exception:                                         # noqa
+            continue
+        if lon0 <= lo <= lon1 and lat0 <= la <= lat1:
+            n += 1
+            if n >= need:
+                break
+    ok = n >= need
+    print(f"   切片验省：窗口内节点 {n}{'+' if ok else ''} 个"
+          f"（{time.time() - t0:.0f}s）→ {'命中' if ok else '不是这个省'}")
+    return ok
+
+
+def _pbf_download(prov, jobs=12, total=None):
+    """分块并发下载省级切片（单连接 ~17 KB/s，必须并发）。返回本地路径。"""
+    import threading
+    PBF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    dst = PBF_CACHE_DIR / f"{prov}-latest.osm.pbf"
+    url = PBF_URL.format(p=prov)
+    if total is None:
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                total = int(r.headers.get("Content-Length") or 0)
+        except Exception:                                         # noqa
+            total = 0
+    if not total:
+        print(f"   ✗ 拿不到 {prov} 切片大小（网络不通？）")
+        return None
+    print(f"   下载 {prov} 切片 {total / 1048576:.0f} MB（{jobs} 路并发）→ {dst.name}")
+    step = (total + jobs - 1) // jobs
+    parts = [PBF_CACHE_DIR / f".{prov}.part{i:02d}" for i in range(jobs)]
+    errs = []
+
+    def one(i):
+        s = i * step
+        e = min(s + step - 1, total - 1)
+        if s >= total:
+            return
+        for att in range(4):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": UA,
+                                                           "Range": f"bytes={s}-{e}"})
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    data = r.read()
+                if len(data) == e - s + 1:
+                    parts[i].write_bytes(data)
+                    return
+                raise RuntimeError(f"长度不符 {len(data)} != {e - s + 1}")
+            except Exception as ex:                               # noqa
+                errs.append(repr(ex)[:80])
+                time.sleep(2 + 3 * att)
+
+    ts = [threading.Thread(target=one, args=(i,)) for i in range(jobs)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    if any(not p.exists() for p in parts):
+        print(f"   ✗ 分块下载失败：{errs[-1] if errs else '未知'}")
+        for p in parts:
+            p.unlink(missing_ok=True)
+        return None
+    tmp = dst.with_suffix(".pbf.tmp")
+    with open(tmp, "wb") as w:
+        for p in parts:
+            w.write(p.read_bytes())
+            p.unlink(missing_ok=True)
+    tmp.replace(dst)
+    print(f"   ✓ {dst.name}（{dst.stat().st_size // 1048576} MB）")
+    return dst
+
+
+def _pbf_ensure(prov, allow_download=True):
+    dst = PBF_CACHE_DIR / f"{prov}-latest.osm.pbf"
+    if dst.exists() and dst.stat().st_size > 1048576:
+        print(f"   用本地切片 {dst.name}（{dst.stat().st_size // 1048576} MB）")
+        return dst
+    if not allow_download:
+        return None
+    return _pbf_download(prov)
+
+
+def _rm_tmp(p):
+    """删临时文件，**失败也必须放行**。
+
+    pyosmium 的节点位置缓存是二进制文件，在某些沙箱/权限环境下 unlink 会被拦，
+    删不掉时留一个几 MB 的缓存文件远好过让整条流水线在这里崩掉。
+    """
+    try:
+        p.unlink(missing_ok=True)
+    except Exception:                                             # noqa
+        pass
+
+
+def _fresh(p):
+    """把缓存文件清零再复用（不删，规避上面那个删不掉的坑）。"""
+    try:
+        with open(p, "wb"):
+            pass
+    except Exception:                                             # noqa
+        pass
+    return p
+
+
+def _ring_dicts(ring):
+    """NodeRefList → [{lat, lon}]，精度 7 位（= 1 cm，与 API 一致，不损失）。"""
+    out = []
+    for n in ring:
+        try:
+            out.append({"lat": round(n.lat, 7), "lon": round(n.lon, 7)})
+        except Exception:                                         # noqa
+            pass
+    return out
+
+
+def _pts_extent(pts):
+    if not pts:
+        return None
+    los = [p["lon"] for p in pts]
+    las = [p["lat"] for p in pts]
+    return min(los), min(las), max(los), max(las)
+
+
+def _hit(ext, bbox, pad=0.0):
+    if not ext:
+        return False
+    lon0, lat0, lon1, lat1 = bbox
+    return not (ext[2] < lon0 - pad or ext[0] > lon1 + pad
+                or ext[3] < lat0 - pad or ext[1] > lat1 + pad)
+
+
+def pbf_extract(pbf, bbox, verbose=True):
+    """从本地切片抽出与 `QUERY` 同口径的要素（schema 对齐 Overpass `out geom`）。
+
+    · node    → {type:node, id, lat, lon, tags}
+    · 线状 way → {type:way, id, tags, geometry:[{lat,lon}…]}
+    · 面状（闭合 way / multipolygon）→ **闭合 way 用 way，relation 用 members**，
+      与 Overpass 的表现一致：draw_osm 的 `_poly_rings` 对两者都有分支，
+      relation 的 members 会被 `_stitch` 缝合成环（这里给的是已闭合的整环，直接通过）。
+    """
+    import osmium
+    import osmium.filter
+    lon0, lat0, lon1, lat1 = bbox
+    t0 = time.time()
+    els = {}
+    bnd = {}                      # 国界 relation：id → (tags, member way ids)
+    PBF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _fresh(PBF_CACHE_DIR / "_nodecache.bin")
+    fp = (osmium.FileProcessor(str(pbf), osmium.osm.NODE | osmium.osm.WAY |
+                               osmium.osm.RELATION | osmium.osm.AREA)
+          .with_locations("sparse_file_array," + str(tmp))
+          .with_areas())
+    n_area = 0
+    for o in fp:
+        t = dict(o.tags)
+        if o.is_area():
+            if not _kind_area(t):
+                continue
+            outers, inners = [], []
+            for oring in o.outer_rings():          # ⚠ inner_rings 要传对应的外环
+                g = _ring_dicts(oring)
+                if len(g) >= 3:
+                    outers.append(g)
+                for iring in o.inner_rings(oring):
+                    gi = _ring_dicts(iring)
+                    if len(gi) >= 3:
+                        inners.append(gi)
+            outers = [r for r in outers if len(r) >= 3]
+            inners = [r for r in inners if len(r) >= 3]
+            if not outers or not _hit(_pts_extent([p for r in outers for p in r]), bbox):
+                continue
+            n_area += 1
+            # ⚠ `o.id` 是 AreaManager 内部号（401/601…），OSM 原生 id 在 `orig_id()`
+            #   `is_multipolygon()` 在 relation 派生的 Area 上也会返回 False，
+            #   判"来自关系还是闭合 way"要用 `from_way()`。
+            oid = o.orig_id() if callable(o.orig_id) else o.orig_id
+            if not o.from_way():
+                ms = ([{"type": "way", "role": "outer", "geometry": r} for r in outers]
+                      + [{"type": "way", "role": "inner", "geometry": r} for r in inners])
+                e = {"type": "relation", "id": oid, "tags": t, "members": ms}
+            else:
+                e = {"type": "way", "id": oid, "tags": t, "geometry": outers[0]}
+            pts = [p for r in outers + inners for p in r]
+            ext = _pts_extent(pts)
+            e["bounds"] = {"minlon": ext[0], "minlat": ext[1],
+                           "maxlon": ext[2], "maxlat": ext[3]}
+            els[(e["type"], e["id"])] = e
+        elif o.is_node():
+            if not _kind_node(t):
+                continue
+            try:
+                la, lo = o.location.lat, o.location.lon
+            except Exception:                                     # noqa
+                continue
+            if not (lon0 <= lo <= lon1 and lat0 <= la <= lat1):
+                continue
+            els[("node", o.id)] = {"type": "node", "id": o.id, "lat": la, "lon": lo, "tags": t}
+        elif o.is_way():
+            if not _kind_line(t):
+                continue
+            pts = _ring_dicts(o.nodes)
+            ext = _pts_extent(pts)
+            if len(pts) < 2 or not _hit(ext, bbox):
+                continue
+            els[("way", o.id)] = {"type": "way", "id": o.id, "tags": t, "geometry": pts,
+                                  "bounds": {"minlon": ext[0], "minlat": ext[1],
+                                             "maxlon": ext[2], "maxlat": ext[3]}}
+        elif o.is_relation():
+            if (t.get("boundary") == "administrative" and t.get("admin_level") == "2"):
+                ids = [m.ref for m in o.members if m.type == "w"]
+                if ids:
+                    bnd[o.id] = (t, ids)
+    _rm_tmp(tmp)
+    if verbose:
+        print(f"   切片扫描 {time.time() - t0:.1f}s：{len(els)} 个要素"
+              f"（面 {n_area}）；国界 relation {len(bnd)} 个")
+
+    # 国界：relation 的成员是**整条边界**（中国 relation 1663 个 member，全国 2.2 万 km），
+    # 必须第二遍捞出成员 way 的几何再按窗口裁剪 —— 否则 osm.json 直接涨到 10 MB。
+    if bnd:
+        need = {}
+        for _rid, (_t, ids) in bnd.items():
+            for i in ids:
+                need[i] = None
+        t1 = time.time()
+        tmp2 = _fresh(PBF_CACHE_DIR / "_waycache.bin")
+        try:
+            # ⚠ 必须带 NODE：只读 WAY 时 pyosmium 建不了位置缓存
+            #   （Nodes not read from file. Cannot enable location cache.）
+            fp2 = (osmium.FileProcessor(str(pbf), osmium.osm.NODE | osmium.osm.WAY)
+                   .with_locations("sparse_file_array," + str(tmp2))
+                   .with_filter(osmium.filter.IdFilter(list(need))))
+            for w in fp2:
+                need[w.id] = _ring_dicts(w.nodes)
+        except Exception as e:                                    # noqa
+            print(f"   ⚠ 国界成员几何抓取失败（{repr(e)[:80]}）→ 本篇不画国界")
+        _rm_tmp(tmp2)
+        for rid, (t, ids) in bnd.items():
+            ms = []
+            for i in ids:
+                g = need.get(i)
+                if not g or not _hit(_pts_extent(g), bbox, pad=0.03):
+                    continue
+                ms.append({"type": "way", "role": "outer", "geometry": g})
+            if not ms:
+                continue
+            ext = _pts_extent([p for m in ms for p in m["geometry"]])
+            els[("relation", rid)] = {"type": "relation", "id": rid, "tags": t, "members": ms,
+                                      "bounds": {"minlon": ext[0], "minlat": ext[1],
+                                                 "maxlon": ext[2], "maxlat": ext[3]}}
+        if verbose:
+            _nb = sum(1 for k in els
+                      if k[0] == "relation"
+                      and (els[k].get("tags") or {}).get("admin_level") == "2")
+            print(f"   国界成员 {sum(1 for x in need.values() if x)} 段，"
+                  f"裁到窗口后入册 {_nb} 条（{time.time() - t1:.1f}s）")
+    return list(els.values())
+
+
+def _pbf_cache_valid(d, bbox=None):
+    """PBF 缓存是否还能用：不看元素范围，看**是不是这条窗口抽的**。
+
+    ⚠ 不能照搬 `_cache_covers()`：那是给"按 bbox 抓 Overpass"设计的判据。
+      PBF 抽的是**全量切片裁出的窗口**，四边本来就可能一个要素也没有
+      （满幅无人区的窗口，min/max 够不到边界是常态）—— 用同一把尺子会天天误判"不覆盖"。
+      所以：有要素 + `_bbox` 与本窗口严格一致（容差 1e-6）→ 命中。
+    """
+    if not d or not d.get("elements"):
+        return False
+    if d.get("_source") != "pbf":
+        return False
+    if bbox is None:
+        return True
+    b = d.get("_bbox") or []
+    return len(b) == 4 and all(abs(b[i] - bbox[i]) < 1e-6 for i in range(4))
+
+
+def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40):
+    """本地切片通道：抽窗口 → 写 osm.json（schema 与 Overpass 完全一致）。
+
+    `min_elems` 是**回落闸门**：抽出来少于这个数，多半是省选错了/切片过期，
+    此时退回 Overpass，别拿一份空数据把好好的缓存冲掉。
+    """
+    bbox = (LON0, LAT0, LON1, LAT1)
+    dst = Path(out) if out else CACHE
+    if dst.exists() and not force:
+        try:
+            d0 = json.loads(dst.read_text(encoding="utf-8"))
+        except Exception:                                         # noqa
+            d0 = {}
+        if _pbf_cache_valid(d0, bbox):
+            print(f"命中 PBF 缓存 {dst.name}：{len(d0['elements'])} 个要素")
+            return d0
+
+    cands = [province] if province else _candidate_provinces(bbox)
+    if not cands:
+        msg = "窗口不在已覆盖的省份内（境外/未列省份）→ 本通道不适用"
+        if soft:
+            print(f"   {msg}，回落 Overpass")
+            return fetch(force=force, soft=soft)
+        raise SystemExit(msg)
+    print(f"PBF 通道：窗口 {LON0:.4f},{LAT0:.4f} → {LON1:.4f},{LAT1:.4f}，"
+          f"候选省 {cands}")
+    els, prov, pbf = [], None, None
+    for cand in cands:                       # 逐个候选验，第一个"窗口里有节点"的就是它
+        p = _pbf_ensure(cand)
+        if not p:
+            continue
+        if len(cands) > 1 and not _pbf_province_ok(p, bbox):
+            continue
+        _els = pbf_extract(p, bbox)
+        if len(_els) >= min_elems:
+            els, prov, pbf = _els, cand, p
+            break
+        print(f"   {cand} 只抽出 {len(_els)} 个要素 → 换下一个候选省")
+    if not els:
+        msg = f"所有候选省都抽不出 ≥{min_elems} 个要素 → 回落 Overpass"
+        if soft:
+            print("   ✗ " + msg)
+            return fetch(force=force, soft=soft)
+        raise SystemExit(msg)
+    d = {"elements": els, "_source": "pbf", "_province": prov,
+         "_pbf": pbf.name, "_bbox": list(bbox),
+         "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    print(f"✓ 已写 {dst}（{len(els)} 个要素，{dst.stat().st_size // 1024} KB）")
+    return d
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="忽略缓存重新抓取")
@@ -880,6 +1322,13 @@ if __name__ == "__main__":
                     help="只演练复用（打印会复用谁、补抓几块），不写缓存")
     ap.add_argument("--reuse-min-elems", type=int, default=REUSE_MIN_ELEMS,
                     help=f"donor 要素数下限，低于此判残缺不参与复用（默认 {REUSE_MIN_ELEMS}）")
+    ap.add_argument("--pbf", action="store_true",
+                    help="走本地 OSM 切片（openstreetmap.fr 省级 PBF）抽窗口，完全不碰 Overpass；"
+                         "数据同源、不可能半截，境外/未列省份自动回落")
+    ap.add_argument("--pbf-out", default=None, metavar="路径",
+                    help="把 PBF 通道结果写到指定文件（默认直接写 out/osm.json），用于对照试验")
+    ap.add_argument("--pbf-province", default=None,
+                    help="强制指定省份切片名（如 sichuan）；默认按窗口中心自动选")
     a = ap.parse_args()
     if a.border:
         els = fetch_borders(soft=True)
@@ -890,7 +1339,9 @@ if __name__ == "__main__":
                   f"  {len(e.get('geometry') or [])} 点 / {len(e.get('members') or [])} 成员")
         print("\n⚠ 缓存已改动 → 必须重跑 make_terrain（底图叠加层在底图里烘焙）。")
         sys.exit(0)
-    if a.reuse or a.reuse_dry:
+    if a.pbf or a.pbf_out:
+        data = fetch_pbf(a.pbf_out, a.force, a.soft, a.pbf_province)
+    elif a.reuse or a.reuse_dry:
         data = reuse(a.reuse or "auto", a.force, a.reuse_dry, a.soft, a.reuse_min_elems)
     elif a.shard:
         data = fetch_sharded(a.force, a.tile, a.soft, a.jobs)

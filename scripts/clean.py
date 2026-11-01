@@ -43,6 +43,11 @@ TEMP_SPECS = [
     ("",        "*.bak",                "手工备份"),
     ("",        "*.bak_*",              "手工备份（带后缀）"),
     ("",        "*-攻略长图_raw.png",    "长图中间产物"),
+    # render_map_hi / shoot_guide 的中转页与全分辨率底图：合完 JPG/PNG 后就没用了，
+    # 但一个 40 MB 级 + 一个 10 MB 级，留着会顶掉交付目录一半体积（2026-11-01 实测 54 MB）
+    ("",        "_map_hi.html",         "高清地图渲染中转页"),
+    ("",        "_map_hi.png",          "高清地图全分辨率截图（已合入 JPG）"),
+    ("",        "_shoot_band.html",     "长图分带渲染中转页"),
     ("out",     "base_terrain.jpg",     "地形栅格（未叠 OSM 的中间版，只写不读）"),
     ("out",     "research_brief.md",    "调研提纲（一次性回填清单）"),
     ("out",     "kml_pois.json",        "KML 具名标注（只在 new_route 阶段用）"),
