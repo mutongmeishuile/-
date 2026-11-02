@@ -42,6 +42,22 @@ agent_created: true
 **画完之后还有五件事最容易翻车**（都别等用户来提）：步道**色相**要和等高线错开、主线路线宽与点位符号要成比例、**图例样本必须由出图参数生成**、**文字灰阶要过 4.5:1**、**地图「三件套」（图例 / 指北针 / 比例尺）必须缩小并动态避让，不许压住轨迹**。
 见 `references/legend-and-color.md` 与 `references/pitfalls-map-svg.md` §9。
 
+**线条与符号默认口径（2026-11-03 用户定，均为逻辑 px —— 页面内嵌图与高清图共用同一 viewBox，
+所以改 `map_ss` 只改字面像素数、视觉权重不变；单条线路可用 CFG 覆盖）**
+
+| 项目 | 默认 | CFG 覆盖键 | 生成处 |
+|---|---|---|---|
+| 当日色主线 | **3.0** | `route_w` | `map_svg.ROUTE_W_DEF` |
+| 主线白色衬底 | **3.5** | `route_halo` | `map_svg.ROUTE_HALO_DEF` |
+| 分日界虚线 | **2.0**（白底自动 = 虚线 + 1.25） | `day_dash_w` | `map_svg.DAY_DASH_W_DEF` |
+| 图钉外径（起/终/营地/水源/海子/垭口） | **15** | `pin_d` | `map_svg.PIN_D_DEF` |
+
+⚠ 衬底只比主线宽 0.5 → 白边每侧 0.25 逻辑 px（4512 图上 0.75 px），是"细描边"。
+想要明显的白边就把 `route_halo` 提到 4.2–4.5；衬底一旦 ≤ 主线，白边直接消失且不报错。
+⚠ 图钉外径 15 与 5 km 里程点（d≈14.8）基本同量级 —— 这是有意的，别再把里程点单独放大。
+⚠ 密度预检里的 `< 38 px` 是**预留足迹**（`_PIN_R=19`，避让用），不等于图钉画出来的 15，
+日志已改成「两个预留足迹相切，图钉外径 15 px」，读日志别再当成"图钉 38 px"。
+
 ## 三条地图路线，先选对
 
 | | **C. 自渲染地形底图（首选）** | A. 手绘示意底图 | B. 在线瓦片底图 |
@@ -148,7 +164,7 @@ agent_created: true
 | 步骤 | 脚本 | 产出（一律落 `scripts/out/`） |
 |---|---|---|
 | prep | `prep_track.py` | `track_full.json`（全量原始点）· `track_real.json`（简化点）· `profile_real.json`（等距剖面）· `kml_pois.json` |
-| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级）。`--border` 只补国界并合并；**`--shard` 分片抓取**（大窗口必用，见 `pitfalls-terrain §14`）；**`--reuse` 复用同级项目的 `osm.json`**（同区域新线首选：窗口盖得住就零请求，盖不住的差额矩形再补抓，三道闸门不过就保留原缓存） |
+| osm | `fetch_osm.py` | `osm.json`（OSM 矢量；**可选**，全镜像失败自动降级）。`--border` 只补国界并合并；**`--shard` 分片抓取**（大窗口必用，见 `pitfalls-terrain §14`）；**`--reuse` 复用同级项目的 `osm.json`**（同区域新线首选：窗口盖得住就零请求，盖不住的差额矩形再补抓，三道闸门不过就保留原缓存）；**默认就走本地省级切片（`--pbf`，2026-11-02 起）**：openstreetmap.fr 的 PBF，完全不碰 Overpass、不可能半截；选省探片 ~90 s + 抽取 ~6 min，之后命中缓存秒级。境外/未覆盖省份/跨境窗口/切片拿不到时**自动回落 Overpass**；**跨省线路自动合片**（云南↔西藏、山西↔河北这类，按窗口内节点数挑片再按 id 去重合并）；要强制走 Overpass 用 `--no-pbf`（见 `self-hosted-terrain.md §6`） |
 | dem | `make_terrain.py` | `base_terrain.jpg` · `base_map.jpg` · `base_meta.json`（窗口 / 投影） |
 | html | `build_guide.py` | `<file_stem>-攻略.html` |
 | long | `shoot_guide.py` | `<file_stem>-攻略长图.png` |
@@ -217,6 +233,10 @@ python scripts/prep_track.py                 # KML/GPX 取 route_def.CFG["kml"]�
 python scripts/new_route.py --days 2         # ★ 自动生成 route_def.py 骨架（数字全填好，文案留待办）
 python scripts/research_route.py --region 线路名   # ★ 列出"该去查什么"（用户标注点 + OSM 地物 + 逐条检索清单）→ out/research_brief.md
 #   ↑ 按 research_brief.md 用 WebSearch 把 route_def.py 里的 ★ TODO 逐条回填（模型可自主完成，见下方「自主生成」）
+python scripts/fetch_osm.py                  # ★ 默认：本地 PBF 切片优先，失败自动回落 Overpass
+                                             #   切片在 ~/.workbuddy/cache/hiking-osm/（跨项目复用，勿删）；
+                                             #   首次要下省级切片 90–112 MB；对照试验用 --pbf-out a.json
+python scripts/fetch_osm.py --no-pbf         # 强制 Overpass（临时对比 / 跨境线路 / PBF 出问题）
 python scripts/fetch_osm.py --soft           # 抓不到只丢一层矢量，不中断
 python scripts/fetch_osm.py --reuse          # ★ 同区域新线首选：复用同级项目的 osm.json，
                                              #   窗口盖得住 = 零请求；盖不住的差额矩形补抓。
@@ -226,6 +246,9 @@ python scripts/fetch_osm.py --reuse          # ★ 同区域新线首选：复�
                                              #   ⚠ ≥95% 才秒级（差额 ≤5%）：本地扫描+裁剪约 5 s，
                                              #     差额矩形走 Overpass，每块固定开销 ~1–2 min
                                              #     （不按面积线性）。覆盖 <85% 一律直接整盘抓，别绕路。
+python scripts/cluster_osm.py --dry       # ★ 批量换 PBF 数据时先看规划（分簇/扫描次数）：
+                                             #   一次扫片服务多条线路（川西 34 条 = 1 次扫），
+                                             #   全库 64 条 8 簇 24 次扫；加 --suffix _cl 先试跑
 python scripts/fetch_osm.py --shard --jobs 3 # ★ 大窗口/残缺缓存用这个：≤0.08° 网格逐块抓、
                                              #   失败二分、可断点续跑（公共实例大查询会 504/半截数据）
 python scripts/make_terrain.py               # DEM 晕渲 + 等高线 → 叠 OSM → base_map.jpg
@@ -499,6 +522,8 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | 解析出 0 个点 | `preflight.py` 会替你数 gx:coord / trkpt / LineString；KML 与 GPX 都走 `parse_track_kml.py` |
 | 长线（>100 km）渲底图特别慢 / 内存爆 | `references/self-hosted-terrain.md` §2.1（`pick_dem_z()` 降档，25 min → 1 min） |
 | 图例压住山体 / 占比过大 | `references/pitfalls-map-svg.md` §21（`CFG["legend_outside"]=True`） |
+| **写了 `legend_place="band"` 却一个图例都没有** / 通栏图例带串列 | `references/pitfalls-map-svg.md` §25（`_use_band` 修好前只有旧键 `legend_outside` 出带子；4 列每列仅 356 px，`legend_band_cols=3`） |
+| **标题带图例被压成一行小字**（日志「按 0.62 缩放…可用 989」） | `references/pitfalls-map-svg.md` §26（「可用」只由标题宽决定，改 `sub` 无效；压缩 `days[i]["legend"]` 到两站才降「需要」） |
 | 字体要统一 / 线太粗 / 地名太密 | `references/pitfalls-map-svg.md` §22 |
 | 底图地名看不见 / 全是 □□□ | `references/pitfalls-terrain.md` §11 |
 | 整片区域没起伏 / 山顶出现平板 | `references/pitfalls-terrain.md` §8 / §8a / §8b |

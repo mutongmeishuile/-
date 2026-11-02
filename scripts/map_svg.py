@@ -42,6 +42,17 @@ _LG_S = FURN_LG       # 图例**实际**缩放（build_map_overlay 按高度预�
 EMBED_MAX = 1600      # 网页内嵌底图上限；高清地图用 embed_max=0
 FONT_STACK = "Microsoft YaHei,PingFang SC,Noto Sans CJK SC,Source Han Sans SC,sans-serif"
 PS_BASE = 0.66        # 点位符号／标注基准缩放（0.85 → 0.74 → 0.66：图钉再收两档）
+# ---- 线条与符号默认口径（2026-11-03 用户定；均为**逻辑 px**，与页面内嵌图同一坐标系，
+#      所以换 map_ss 只会改变字面像素数、不改变视觉权重）----
+ROUTE_W_DEF = 3.0       # 当日色主线
+ROUTE_HALO_DEF = 3.5    # 主线白色衬底（要 > ROUTE_W 才有白边）
+DAY_DASH_W_DEF = 2.0    # 分日界虚线
+PIN_D_DEF = 15.0        # 图钉可见外径（起点/终点/营地/水源/海子/垭口同尺寸）
+# 图钉内部字形按同一系数等比缩（基准是「外径 19.8」那版几何）。线路级可用 CFG["pin_d"] 覆盖。
+
+
+def _pin_d():
+    return float(_CFG.get("pin_d") or PIN_D_DEF)
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
 MFS_S = 2.8           # 手机版里程点/线宽的额外放大
 
@@ -208,80 +219,84 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
 def mk_pin(x, y, kind):
     # 2026-10-17 用户反馈：POI 图钉在轨迹上过大，遮挡地名/道路。
     # 统一从 r≈19–20 缩到 r≈14–15，字号同步缩小，与地名同量级。
+    # 2026-11-03 用户定口径：**外径恒 = PIN_D（默认 15 逻辑 px）**，起点/终点/营地/水源/
+    #   海子/垭口同尺寸。内部字形按同一系数 PINS 等比缩，所以只改 PIN_D 一处即可整体收放。
+    PINS = PS * _pin_d() / (2 * 15 * PS_BASE)
+    _R = 15 * PINS          # 外圈半径（所有 kind 统一）
     if kind == "start":
-        r = 14 * PS
+        r = _R
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#D93B2B" stroke="#fff" '
-                f'stroke-width="{4*PS:.1f}"/>'
-                f'<text x="{x}" y="{y+6*PS:.1f}" text-anchor="middle" font-size="{16*PS:.1f}" '
+                f'stroke-width="{4*PINS:.1f}"/>'
+                f'<text x="{x}" y="{y+6*PINS:.1f}" text-anchor="middle" font-size="{16*PINS:.1f}" '
                 f'font-weight="800" fill="#fff">起</text>')
     if kind == "end":
-        r = 14 * PS
+        r = _R
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#0F6E5C" stroke="#fff" '
-                f'stroke-width="{4*PS:.1f}"/>'
-                f'<text x="{x}" y="{y+6*PS:.1f}" text-anchor="middle" font-size="{15*PS:.1f}" '
+                f'stroke-width="{4*PINS:.1f}"/>'
+                f'<text x="{x}" y="{y+6*PINS:.1f}" text-anchor="middle" font-size="{15*PINS:.1f}" '
                 f'font-weight="800" fill="#fff">终</text>')
     if kind in ("peak", "peak_hi"):
         # 山峰：与营地 / 水源 / 村落的构造完全同源 —— 白底圈 + 色盘 + 白色三角。
         # 2026-10-24 改：旧版是「白晕 + 裸色三角」（peak_hi r=14 深红 / peak r=11 灰），
         # 与其它符号两种画风，且同类山峰一大一小。现在两种 kind 几何一致，
         # 若要强调主峰请只改 label 颜色，不要改符号尺寸。
-        return (f'<circle cx="{x}" cy="{y}" r="{15*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{11.6*PS:.1f}" fill="#4A5261"/>'
-                f'<path d="M {x-7.2*PS:.1f},{y+5.2*PS:.1f} L {x},{y-6.6*PS:.1f} '
-                f'L {x+7.2*PS:.1f},{y+5.2*PS:.1f} Z" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{11.6*PINS:.1f}" fill="#4A5261"/>'
+                f'<path d="M {x-7.2*PINS:.1f},{y+5.2*PINS:.1f} L {x},{y-6.6*PINS:.1f} '
+                f'L {x+7.2*PINS:.1f},{y+5.2*PINS:.1f} Z" fill="#fff"/>')
     if kind == "temple":
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#5A4A8A"/>'
-                f'<path d="M {x-7*PS:.1f},{y-0.8*PS:.1f} L {x},{y-7.8*PS:.1f} '
-                f'L {x+7*PS:.1f},{y-0.8*PS:.1f} Z" fill="#fff"/>'
-                f'<rect x="{x-4.6*PS:.1f}" y="{y+0.8*PS:.1f}" width="{9.2*PS:.1f}" '
-                f'height="{5.6*PS:.1f}" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PINS:.1f}" fill="#5A4A8A"/>'
+                f'<path d="M {x-7*PINS:.1f},{y-0.8*PINS:.1f} L {x},{y-7.8*PINS:.1f} '
+                f'L {x+7*PINS:.1f},{y-0.8*PINS:.1f} Z" fill="#fff"/>'
+                f'<rect x="{x-4.6*PINS:.1f}" y="{y+0.8*PINS:.1f}" width="{9.2*PINS:.1f}" '
+                f'height="{5.6*PINS:.1f}" fill="#fff"/>')
     if kind == "camp":
-        return (f'<circle cx="{x}" cy="{y}" r="{15*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{11.6*PS:.1f}" fill="{D1_C}"/>'
-                f'<path d="M {x-7.5*PS:.1f},{y+6*PS:.1f} L {x},{y-6.7*PS:.1f} '
-                f'L {x+7.5*PS:.1f},{y+6*PS:.1f} Z" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{11.6*PINS:.1f}" fill="{D1_C}"/>'
+                f'<path d="M {x-7.5*PINS:.1f},{y+6*PINS:.1f} L {x},{y-6.7*PINS:.1f} '
+                f'L {x+7.5*PINS:.1f},{y+6*PINS:.1f} Z" fill="#fff"/>')
     if kind == "water":
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#0F8A9B"/>'
-                f'<path d="M {x},{y-6.6*PS:.1f} C {x+6.6*PS:.1f},{y+0.7*PS:.1f} '
-                f'{x+5.2*PS:.1f},{y+6.6*PS:.1f} {x},{y+6.6*PS:.1f} C {x-5.2*PS:.1f},{y+6.6*PS:.1f} '
-                f'{x-6.6*PS:.1f},{y+0.7*PS:.1f} {x},{y-6.6*PS:.1f} Z" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PINS:.1f}" fill="#0F8A9B"/>'
+                f'<path d="M {x},{y-6.6*PINS:.1f} C {x+6.6*PINS:.1f},{y+0.7*PINS:.1f} '
+                f'{x+5.2*PINS:.1f},{y+6.6*PINS:.1f} {x},{y+6.6*PINS:.1f} C {x-5.2*PINS:.1f},{y+6.6*PINS:.1f} '
+                f'{x-6.6*PINS:.1f},{y+0.7*PINS:.1f} {x},{y-6.6*PINS:.1f} Z" fill="#fff"/>')
     if kind == "warn":
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#D0871B"/>'
-                f'<text x="{x}" y="{y+5.4*PS:.1f}" text-anchor="middle" '
-                f'font-size="{15*PS:.1f}" font-weight="900" fill="#fff">!</text>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PINS:.1f}" fill="#D0871B"/>'
+                f'<text x="{x}" y="{y+5.4*PINS:.1f}" text-anchor="middle" '
+                f'font-size="{15*PINS:.1f}" font-weight="900" fill="#fff">!</text>')
     if kind == "pass":
         # 垭口：倒三角 + 横杠（山鞍形）
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<path d="M {x-9*PS:.1f},{y-5*PS:.1f} L {x+9*PS:.1f},{y-5*PS:.1f} '
-                f'L {x},{y+8*PS:.1f} Z" fill="#8B5E3C"/>'
-                f'<rect x="{x-7*PS:.1f}" y="{y-8*PS:.1f}" width="{14*PS:.1f}" '
-                f'height="{3*PS:.1f}" rx="{1.5*PS:.1f}" fill="#8B5E3C"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<path d="M {x-9*PINS:.1f},{y-5*PINS:.1f} L {x+9*PINS:.1f},{y-5*PINS:.1f} '
+                f'L {x},{y+8*PINS:.1f} Z" fill="#8B5E3C"/>'
+                f'<rect x="{x-7*PINS:.1f}" y="{y-8*PINS:.1f}" width="{14*PINS:.1f}" '
+                f'height="{3*PINS:.1f}" rx="{1.5*PINS:.1f}" fill="#8B5E3C"/>')
     if kind == "ford":
         # 涉滩：水滴 + 波纹
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#2E86AB"/>'
-                f'<path d="M {x-6*PS:.1f},{y-1*PS:.1f} Q {x-3*PS:.1f},{y-5*PS:.1f} '
-                f'{x},{y-1*PS:.1f} Q {x+3*PS:.1f},{y+3*PS:.1f} {x+6*PS:.1f},{y-1*PS:.1f}" '
-                f'stroke="#fff" stroke-width="{2.2*PS:.1f}" fill="none" stroke-linecap="round"/>'
-                f'<path d="M {x-6*PS:.1f},{y+3.5*PS:.1f} Q {x-3*PS:.1f},{y-0.5*PS:.1f} '
-                f'{x},{y+3.5*PS:.1f} Q {x+3*PS:.1f},{y+7*PS:.1f} {x+6*PS:.1f},{y+3.5*PS:.1f}" '
-                f'stroke="#fff" stroke-width="{2.2*PS:.1f}" fill="none" stroke-linecap="round"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PINS:.1f}" fill="#2E86AB"/>'
+                f'<path d="M {x-6*PINS:.1f},{y-1*PINS:.1f} Q {x-3*PINS:.1f},{y-5*PINS:.1f} '
+                f'{x},{y-1*PINS:.1f} Q {x+3*PINS:.1f},{y+3*PINS:.1f} {x+6*PINS:.1f},{y-1*PINS:.1f}" '
+                f'stroke="#fff" stroke-width="{2.2*PINS:.1f}" fill="none" stroke-linecap="round"/>'
+                f'<path d="M {x-6*PINS:.1f},{y+3.5*PINS:.1f} Q {x-3*PINS:.1f},{y-0.5*PINS:.1f} '
+                f'{x},{y+3.5*PINS:.1f} Q {x+3*PINS:.1f},{y+7*PINS:.1f} {x+6*PINS:.1f},{y+3.5*PINS:.1f}" '
+                f'stroke="#fff" stroke-width="{2.2*PINS:.1f}" fill="none" stroke-linecap="round"/>')
     if kind == "poi":
         # 地标：菱形
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<path d="M {x},{y-10*PS:.1f} L {x+7.5*PS:.1f},{y} '
-                f'L {x},{y+10*PS:.1f} L {x-7.5*PS:.1f},{y} Z" fill="#6B4FA0"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<path d="M {x},{y-10*PINS:.1f} L {x+7.5*PINS:.1f},{y} '
+                f'L {x},{y+10*PINS:.1f} L {x-7.5*PINS:.1f},{y} Z" fill="#6B4FA0"/>')
     if kind == "village":
         # 村落：小房子
-        return (f'<circle cx="{x}" cy="{y}" r="{14*PS:.1f}" fill="#fff" opacity="0.95"/>'
-                f'<circle cx="{x}" cy="{y}" r="{10.8*PS:.1f}" fill="#C4703A"/>'
-                f'<path d="M {x-7*PS:.1f},{y-0.5*PS:.1f} L {x},{y-7*PS:.1f} '
-                f'L {x+7*PS:.1f},{y-0.5*PS:.1f} Z" fill="#fff"/>'
-                f'<rect x="{x-5*PS:.1f}" y="{y-0.5*PS:.1f}" width="{10*PS:.1f}" '
-                f'height="{6*PS:.1f}" fill="#fff"/>')
+        return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
+                f'<circle cx="{x}" cy="{y}" r="{10.8*PINS:.1f}" fill="#C4703A"/>'
+                f'<path d="M {x-7*PINS:.1f},{y-0.5*PINS:.1f} L {x},{y-7*PINS:.1f} '
+                f'L {x+7*PINS:.1f},{y-0.5*PINS:.1f} Z" fill="#fff"/>'
+                f'<rect x="{x-5*PINS:.1f}" y="{y-0.5*PINS:.1f}" width="{10*PINS:.1f}" '
+                f'height="{6*PINS:.1f}" fill="#fff"/>')
     return ""
 
 
@@ -475,7 +490,7 @@ def _report_poi_density(POIS, pin_xy):
     s = [p for p in pairs if p[0] >= hard]
     print(f"   点位密度预检：{n} 个点位 · 最近 {pairs[0][0]:.0f} px")
     if h:
-        print(f"     · 符号会叠（< {hard:.0f} px = 一个图钉直径）：{len(h)} 对 —— "
+        print(f"     · 符号会叠（< {hard:.0f} px = 两个预留足迹相切，图钉外径 {_pin_d():.0f} px）：{len(h)} 对 —— "
               + "、".join(f"{a}×{b} {d:.0f}px" for d, a, b in h))
         print("       → 确认这两条是否值得各占一个图钉；要清爽就合并（如把垭口并入邻近营地）")
     if s:
@@ -938,7 +953,8 @@ def build_map_overlay(mobile=False):
     # ⚠ 线宽与符号要成比例：主线太粗会盖住底图等高线、也压掉点位符号。
     #   2026-10-09 亚丁线「线太粗」→ 5.4/8.6 降到 4.0/6.2；
     #   2026-10-21 珠峰东坡扩窗后线相对更粗、压地名 → 再收到 3.0/4.9。
-    ROUTE_W, HALO_W = 3.0 * M, 4.9 * M
+    ROUTE_W = float(_CFG.get("route_w") or ROUTE_W_DEF) * M
+    HALO_W = float(_CFG.get("route_halo") or ROUTE_HALO_DEF) * M
     _TRK, _TRK_HW = XY, (ROUTE_W + HALO_W) / 2 + 1.0
     o.append(f'<path d="{d_of(XY)}" fill="none" stroke="#FFFFFF" stroke-width="{HALO_W}" '
              f'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
@@ -1007,15 +1023,16 @@ def build_map_overlay(mobile=False):
                  f'fill="#3A4250">{target}</text>')
 
     # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
+    _dash_w = float(_CFG.get("day_dash_w") or DAY_DASH_W_DEF)
     for _bi in _split_is[1:-1] if len(_split_is) > 2 else [SPLIT_I]:
         sx, sy = XY[_bi]
         # ⚠ 2026-10-21：原来这条分日界是"白色胶囊底 + 2.4 粗虚线"，线宽收到 3.0 之后
         #   它反而比主线还抢眼（图上像一排白色药丸）。改成细虚线 + 极窄白底。
         o.append(f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
-                 f'stroke="#FFFFFF" stroke-width="{2.4*M:.1f}" stroke-linecap="round" '
+                 f'stroke="#FFFFFF" stroke-width="{(_dash_w + 1.25) * M:.1f}" stroke-linecap="round" '
                  f'opacity="0.85"/>'
                  f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
-                 f'stroke="#6C7480" stroke-width="{1.15*M:.1f}" '
+                 f'stroke="#6C7480" stroke-width="{_dash_w * M:.1f}" '
                  f'stroke-dasharray="{7*M:.0f} {5*M:.0f}" stroke-linecap="round"/>')
 
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
