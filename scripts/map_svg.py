@@ -1379,14 +1379,26 @@ TITLE_LINE = "#C6D0C4"
 TITLE_INK_MUTED = "#5F6B60"
 
 
+def _use_band(with_title):
+    """独立高清图下要不要加通栏图例带。
+
+    ⚠ 2026-11-02 修：`out_size()` 与 `render_svg()` 原先只认旧的 `legend_outside`，
+    于是显式写 `CFG["legend_place"]="band"`（SKILL.md 三种放法之一）时
+    **图面内图例被关掉、图下方又不画带** → 整幅图一个图例都没有，且不报错。
+    现在统一走 `_legend_place()`：显式 "band" 与旧 `legend_outside=True` 等价。
+    """
+    return bool(with_title) and _legend_place() == "band"
+
+
 def out_size(with_title=False):
     """输出逻辑尺寸。带名称带时高度加 TITLE_H —— render_map_hi 要按它算画布高。
 
-    `legend_outside` 打开时，独立高清图下方还要再加一条图例带（高度由
-    `_legend_band_geom()` 算）。⚠ 画布高与 viewBox 高必须同源，否则会被 letterbox。
+    `legend_place="band"`（或旧的 `legend_outside`）打开时，独立高清图下方还要再加
+    一条图例带（高度由 `_legend_band_geom()` 算）。⚠ 画布高与 viewBox 高必须同源，
+    否则会被 letterbox。
     """
     h = IH + (_title_h() if with_title else 0)
-    if with_title and _legend_outside():
+    if _use_band(with_title):
         h += _legend_band_geom()["h"]
     return IW, h
 
@@ -1731,7 +1743,7 @@ def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=Fa
                f'href="data:image/jpeg;base64,{_embed_jpeg(embed_max)}"/>')
     cls = "mapsvg map-p" if mobile else "mapsvg map-d"
     band = _title_h() if with_title else 0
-    lb = _legend_band_geom()["h"] if (with_title and _legend_outside()) else 0
+    lb = _legend_band_geom()["h"] if _use_band(with_title) else 0
     vh = IH + band + lb
     # 字体**只在根节点声明一次**：这样 OSM 地名、POI 标注、里程数字全部同一套字，
     # 不再出现"底图地名是黑体、POI 标注落到浏览器默认衬线"的混排（2026-10-21 用户指出）。
