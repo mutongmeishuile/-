@@ -44,10 +44,10 @@ FONT_STACK = "Microsoft YaHei,PingFang SC,Noto Sans CJK SC,Source Han Sans SC,sa
 PS_BASE = 0.66        # 点位符号／标注基准缩放（0.85 → 0.74 → 0.66：图钉再收两档）
 # ---- 线条与符号默认口径（2026-11-03 用户定；均为**逻辑 px**，与页面内嵌图同一坐标系，
 #      所以换 map_ss 只会改变字面像素数、不改变视觉权重）----
-ROUTE_W_DEF = 3.0       # 当日色主线
-ROUTE_HALO_DEF = 3.5    # 主线白色衬底（要 > ROUTE_W 才有白边）
-DAY_DASH_W_DEF = 2.0    # 分日界虚线
-PIN_D_DEF = 15.0        # 图钉可见外径（起点/终点/营地/水源/海子/垭口同尺寸）
+ROUTE_W_DEF = 2.0       # 当日色主线
+ROUTE_HALO_SIDE_DEF = 1.0   # 主线**每侧**白色描边宽度（总衬底 = 主线 + 2×此值）
+DAY_DASH_W_DEF = 1.0    # 分日界虚线
+PIN_D_DEF = 5.0         # 图钉可见外径（起点/终点/营地/水源/海子/垭口同尺寸）
 # 图钉内部字形按同一系数等比缩（基准是「外径 19.8」那版几何）。线路级可用 CFG["pin_d"] 覆盖。
 
 
@@ -223,6 +223,18 @@ def mk_pin(x, y, kind):
     #   海子/垭口同尺寸。内部字形按同一系数 PINS 等比缩，所以只改 PIN_D 一处即可整体收放。
     PINS = PS * _pin_d() / (2 * 15 * PS_BASE)
     _R = 15 * PINS          # 外圈半径（所有 kind 统一）
+    # 2026-11-03：外径收到 5 之后，内部字形只剩 2–3 px、只会糊成脏点 ——
+    # 低于 8 px 自动退化成「白色细环 + 单色实心点」，可辨识度反而更高。
+    if _pin_d() < 8:
+        _dc = {"start": "#D93B2B", "end": "#0F6E5C", "camp": D1_C, "water": "#0F8A9B",
+               "peak": "#4A5261", "peak_hi": "#4A5261", "temple": "#5A4A8A",
+               "warn": "#D0871B", "pass": "#8B5E3C", "ford": "#2E86AB",
+               "poi": "#6B4FA0", "village": "#C4703A"}.get(kind)
+        if _dc:
+            return (f'<circle cx="{x}" cy="{y}" r="{_R:.1f}" fill="{_dc}" stroke="#FFFFFF" '
+                    f'stroke-width="{max(0.8, _R * 0.36):.1f}"/>')
+        return ""
+
     if kind == "start":
         r = _R
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#D93B2B" stroke="#fff" '
@@ -954,7 +966,10 @@ def build_map_overlay(mobile=False):
     #   2026-10-09 亚丁线「线太粗」→ 5.4/8.6 降到 4.0/6.2；
     #   2026-10-21 珠峰东坡扩窗后线相对更粗、压地名 → 再收到 3.0/4.9。
     ROUTE_W = float(_CFG.get("route_w") or ROUTE_W_DEF) * M
-    HALO_W = float(_CFG.get("route_halo") or ROUTE_HALO_DEF) * M
+    # 「白色描边」按**每侧**宽度定义：总衬底 = 主线 + 2×描边。
+    # 若按总宽写（1.0 < 2.0），白边会被主线完全盖住、且不报错 —— 所以这里显式换算。
+    _halo_side = float(_CFG.get("route_halo_side") or ROUTE_HALO_SIDE_DEF)
+    HALO_W = (ROUTE_W / M + 2 * _halo_side) * M
     _TRK, _TRK_HW = XY, (ROUTE_W + HALO_W) / 2 + 1.0
     o.append(f'<path d="{d_of(XY)}" fill="none" stroke="#FFFFFF" stroke-width="{HALO_W}" '
              f'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
@@ -1007,8 +1022,11 @@ def build_map_overlay(mobile=False):
         x, y = XY[i]
         z = MFS_S if mobile else 1.0
         nd = len(str(target))
-        rr = (7.4 if nd <= 2 else 9.8) * z
-        fs = (10.0 if nd <= 2 else 8.8) * z
+        # 2026-11-03 用户要求「公里数数字动态适应」：圈径随位数走，字号再按圈内可用宽度反算
+        # （数字按 0.60 字宽估），保证 3 位数也不会顶出圈外、2 位数不会虚胖。
+        rr = (5.8 if nd <= 2 else 7.6) * z
+        fs = (8.6 if nd <= 2 else 7.6) * z
+        fs = min(fs, (2 * rr - 2.4) / (0.60 * nd))
         # 里程点**撞上营地/垭口图钉就跳过**：圆圈压住倒三角，读者会以为垭口在那儿
         # （2026-10-27 实测「195」压在 主措什贡垭口 图标上）。少一个 5 km 点无伤大雅。
         if any((x - px) ** 2 + (y - py) ** 2 < (rr + _PIN_R + 2) ** 2 for px, py in pin_xy):
