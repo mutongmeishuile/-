@@ -29,7 +29,7 @@ if str(HERE) not in sys.path:
 import guide_common as GC                                           # noqa: E402
 
 # 目标经纬度窗口：**不写死**，与 make_terrain.py / fetch_osm.py 同源，
-# 由 guide_common.resolve_bbox() 从轨迹包围盒推（+8% 留白），可在 route_def.CFG["bbox"] 覆盖。
+# 由 guide_common.resolve_bbox() 从轨迹包围盒推（默认 +35% 留白），可在 route_def.CFG["bbox"] 覆盖。
 LON0, LAT0, LON1, LAT1, _src = GC.resolve_bbox()
 GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "build_base_map")
 
