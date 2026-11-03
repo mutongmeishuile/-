@@ -74,8 +74,20 @@ def _window_px(z, lon0, lat0, lon1, lat1):
     return abs(x1 - x0) * abs(y1 - y0)
 
 
-def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z):
-    """按窗口大小把 DEM 缩放降到合理的档位（返回实际使用的 z）。"""
+# 默认起档：**14**（2026-11-03 定）。数据源最高 z15 只在个别小窗口（< 20 km）才有实际意义，
+# 而 z15 的像素数是 z14 的 4 倍 —— 长线窗口动辄十几分钟、几 GB 内存，收益却是零
+# （4512–6016 px 的成品上，z14 的 8 m/px 已经有 1.5–2 倍余量）。
+# 需要更细的线路仍可用 CFG["dem_z"]=15 显式要，**但要知道自己在干什么**。
+DEM_Z_DEFAULT = min(DEM_Z, 14)
+
+
+def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z_DEFAULT):
+    """按窗口大小把 DEM 缩放降到合理的档位（返回实际使用的 z）。
+
+    ⚠ 大窗口（> DEM_MAX_PX）仍会自动降档 —— 这是内存/耗时护栏，不是质量问题：
+      122×102 km 的窗口在 z14 是 171 M px（约 9 分钟），在 z12 只有 11 M px。
+      确实需要 z14 的长线，用 CFG["dem_z"]=14 绕过本函数（见 build_terrain 的分支）。
+    """
     while z > 12 and _window_px(z, lon0, lat0, lon1, lat1) > DEM_MAX_PX:
         z -= 1
     return z
@@ -1997,8 +2009,12 @@ def _drop_high_alt_water(osm_path, dem, bbox, snow_m, out_path):
 def build_terrain():
     LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
     # 宽高比钳制：图太宽（东西≫南北）时把南北外扩到上限，图面更协调（详见 cap_aspect）。
-    _cap = _route_cfg("map_aspect_max", None)
-    if _cap:
+    # 默认把宽高比钳到 1.5:1（2026-11-03 定）：东西向长线（如萨普 128×50 km = 2.54:1）
+    # 会出成一根扁带子，放进竖版攻略里很突兀。cap_aspect 只扩南北、不裁轨迹，
+    # 本来就窄/方的线路（比例 < 1.5）原样不动 —— 所以这是个"只治过宽"的安全默认。
+    # 想要其他上限：CFG["map_aspect_max"]=1.3/1.7；设 0/False 明确关闭。
+    _cap = _route_cfg("map_aspect_max", 1.5)
+    if _cap is not None and float(_cap or 0) > 0:
         _cap = float(_cap)
         LON0, LAT0, LON1, LAT1 = cap_aspect(LON0, LAT0, LON1, LAT1, _cap)
         src = f"{src} · 宽高比钳到 {_cap:g}∶1"
