@@ -42,6 +42,7 @@
 | **文字有一圈"白色阴影"/发虚** | `references/pitfalls-map-svg.md` §13（描边宽度控制在字号的 11–15%，别删） |
 | **底图"一片单色"、看不出高差（色带写死了）** | `references/pitfalls-terrain.md` §4 首条（**通用 ramp + p2–p98 拉伸**，无雪区不给雪色端） |
 | **Overpass 镜像全体 504/500/证书错** | `references/pitfalls-terrain.md` §9（先探活再定序，osm.ch 首选；`fetch_osm.py --soft` 可降级） |
+| **图上门牌/河流/步道明显偏少，`osm.json` 里 `waterway=river` 竟然是 0 条** | 不是数据源稀，是**Overpass 给了半截数据**（200 + 无 remark）。判据与修法见 `pitfalls-terrain.md` §14。**默认路径（PBF 切片）已不会这样**：`python scripts/fetch_osm.py --force` 重抽一次即可换成 PBF 版本 |
 | **底图与攻略 POI 出现两条同地注记** | `references/pitfalls-terrain.md` §10（skip_names 要含「·」前核心地名） |
 | **同一座山在页面上有两个海拔数字** | `references/track-prep.md` §6（轨迹 GPS 偏低 20–50 m → **曲线用 GPS、印出来的数用 DEM**） |
 | **总里程比作者口述多一倍、剖面出现两道空白悬崖（`seg_id` 多个值）** | `references/track-prep.md` §8（两步路 KML 的**平行备选段**被全并：`--longest` 只留主线，**并把 `CFG["kml_keep"]` 写进 route_def**，否则 make_all wave0 会悄悄撤销） |

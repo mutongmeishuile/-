@@ -15,7 +15,7 @@
     python draw_osm.py                       # 就地叠加 out/base_map.jpg
     python draw_osm.py in.jpg out.jpg        # 指定输入输出
 """
-import json, math, sys
+import json, math, re, sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -634,6 +634,28 @@ def _clean_name(s):
 # 取名的键顺序：先 `name`（OSM 的"通用名"，本地语），再各变体的中文标签。
 _NAME_KEYS = ("name", "name:zh", "name:zh-Hans", "name:zh-CN")
 
+# 占位名 / 消歧后缀：`湖泊KW`、`湖泊ks`、`湖泊12` 这类名字**一个地理信息都没有**，
+# 画在图上就是噪声，而且排在图例旁边极易被误读成正经地名。
+# 2026-11-03 梅里-他念两区总览实测：窗口内 16 个湖是「湖泊+1~3 位 ASCII」，
+# 分布在四条河谷里，一屏能看到 4 个 —— 不滤掉整张图都显得像半成品。
+# ⚠ 只匹配「通用类名 + 纯 ASCII 短后缀」，不碰真名（"湖泊群""月亮湖"都不会命中）。
+NAME_JUNK_RE = re.compile(r"^(?:湖泊|海子|水塘|水库|无名湖?)\s*[A-Za-z0-9]{0,3}$")
+
+
+def _junk_name(v):
+    """是不是 OSM 里那种"给无名水体编号"的占位名。"""
+    if not v:
+        return False
+    if NAME_JUNK_RE.match(v.strip()):
+        return True
+    for pat in (GC.cfg("name_junk_re", None) or []):      # 线路级追加正则
+        try:
+            if re.match(pat, v.strip()):
+                return True
+        except re.error:
+            continue
+    return False
+
 
 def _pick_name(t):
     """从 tags 里取一个**能画**的名字；取不到返回 ""。
@@ -655,8 +677,10 @@ def _pick_name(t):
     """
     for k in _NAME_KEYS:
         v = (t.get(k) or "").strip()
-        if v:
+        if v and not _junk_name(v):               # 占位名当"无名"处理，别再往下试别的键
             return v
+        if v:
+            return ""
     en = (t.get("name:en") or "").strip()
     if not en:
         return ""

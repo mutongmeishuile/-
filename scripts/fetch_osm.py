@@ -1,21 +1,34 @@
 # -*- coding: utf-8 -*-
-"""抓取 OSM 矢量要素（Overpass API）→ 本地缓存，供地形底图叠加。
+"""抓取 OSM 矢量要素 → 本地缓存，供地形底图叠加。
 
-为什么走 Overpass 而不是 tile.openstreetmap.org：
-  官方瓦片服务的 Tile Usage Policy **明文禁止批量下载/爬取**，
-  但 OSM **原始数据**（ODbL 许可）经 Overpass 导出是受人欢迎的正当用法，
-  自己渲染还能完全控制配色、线宽、注记密度。
+**默认走本地 PBF 切片（2026-11-02 起）**，Overpass 退为兜底：
+  · PBF：openstreetmap.fr 省级切片 → 本地按窗口抽。数据同源（同 planet），
+    标签/坐标与 Overpass 一致（差别只在环起点）；**不可能返回半截数据**，
+    且一次下载可被同省几十条线路共用。代价：首次下载 90–112 MB（约 14 min，分块并发），
+    之后每抽一个窗口约 5–6 分钟，命中缓存秒级。
+  · Overpass：429 / 504 / **200+半截数据无 remark** 三连的源头。
+    仅在「境外或未覆盖省份」「切片拿不到」「抽出来要素数过少」时兜底。
+
+为什么不用 tile.openstreetmap.org：官方瓦片服务 Tile Usage Policy 明文禁止批量下载，
+而 OSM 原始数据（ODbL 许可）自己取用、自己渲染是正当用法，还能完全控制配色/线宽/注记密度。
 
 用法：
-    python fetch_osm.py                 # 用轨迹自动推的窗口抓取并缓存
-    python fetch_osm.py --force         # 忽略缓存重新抓
-    python fetch_osm.py --soft          # 全镜像失败也算成功（流水线不中断，只丢矢量层）
-    python fetch_osm.py --reuse         # 复用同级项目的 osm.json（差额补抓），同区域新线首选
+    python fetch_osm.py                 # ★ 默认：PBF 切片优先，失败自动回落 Overpass
+    python fetch_osm.py --no-pbf        # 强制走 Overpass（临时对比 / PBF 出问题时的退路）
+    python fetch_osm.py --force         # 忽略缓存重新取
+    python fetch_osm.py --soft          # 取不到也算成功（流水线不中断，只丢矢量层）
+    python fetch_osm.py --reuse         # 复用同级项目的 osm.json（差额补抓），同区域新线**最快**
     python fetch_osm.py --reuse 梅里外转攻略   # 指定 donor；--reuse-dry 只演练不写盘
+    python fetch_osm.py --shard         # 强制分片走 Overpass（PBF 不可用时的兜底）
+    python fetch_osm.py --pbf-out a.json --pbf-province sichuan   # 对照试验 / 强制指定省
 
-**这一步是可选的**：抓不到只意味着底图上少一层道路/水系/地名，
-地形晕渲与等高线照常出图。所以流水线默认以 `--soft` 调用它，
-Overpass 集体抽风不该让整条流水线挂掉。
+**这一步是可选的**：取不到只意味着底图上少一层道路/水系/地名，地形晕渲与等高线照常出图。
+所以流水线默认以 `--soft` 调用它 —— 任何一侧抽风都不该让整条流水线挂掉。
+
+环境变量：
+    HIKING_OSM_MODE=overpass     等价于 --no-pbf（全局关掉 PBF 默认）
+    HIKING_OSM_PBF_CACHE=<目录>  切片缓存位置（默认 ~/.workbuddy/cache/hiking-osm）
+    HIKING_OSM_PBF_AUTODL=0      切片缺失时不自动下载，直接回落 Overpass
 """
 import argparse, json, os, subprocess, sys, time, urllib.parse, urllib.request
 from pathlib import Path
@@ -31,8 +44,16 @@ import guide_common as GC                                           # noqa: E402
 
 # 窗口与 make_terrain.py 完全同源（同一个 resolve_bbox()）——
 # 旧版这里写死了一份常量，改线路时极易只改一处，导致矢量与地形整体错位。
-LON0, LAT0, LON1, LAT1, _src = GC.resolve_bbox()
-BBOX = f"{LAT0},{LON0},{LAT1},{LON1}"
+# 窗口来自当前项目的轨迹。**不在项目目录里 import 也算合法**（批量工具 `cluster_osm.py`
+# 需要在工作区根目录一次服务几十条线路）—— 那时窗口是 None，只能走 `--cluster-bbox`。
+try:
+    LON0, LAT0, LON1, LAT1, _src = GC.resolve_bbox()
+    BBOX = f"{LAT0},{LON0},{LAT1},{LON1}"
+except SystemExit:
+    LON0 = LAT0 = LON1 = LAT1 = None
+    BBOX = None
+    _src = "未指定（需 --cluster-bbox 或在本项目目录下运行）"
+    print("（当前目录不是线路项目：窗口未指定，仅支持 --cluster-bbox 模式）")
 
 UA = "hiking-route-guide/1.0 (offline guide map; contact: local user)"
 
@@ -50,7 +71,7 @@ def _query(bbox):
     """生成整条查询语句（bbox 形如 "lat0,lon0,lat1,lon1"）。
 
     ⚠ 2026-10-26 起是**函数**而不是模块常量：`--shard` 分片抓取要逐块换 bbox。
-      老调用点不受影响 —— 下面仍有 `QUERY = _query(BBOX)`。
+      老调用点不受影响 —— 下面仍有 `QUERY = _query(BBOX) if BBOX else None`。
     """
     return f"""
 [out:json][timeout:180];
@@ -87,7 +108,7 @@ out geom;
 """
 
 
-QUERY = _query(BBOX)
+QUERY = _query(BBOX) if BBOX else None
 # 国界（admin_level=2）2026-10-25 补：用户看珠峰东坡地图问「缺少国界」。
 # 珠峰/洛子/马卡鲁全骑在中尼边界上，窗口里国界是所有地理要素里**信息量最大的那条线**
 # （哪座山在境外、徒步终点离边界多远），但原 QUERY 只抓 highway/waterway/自然要素，
@@ -883,10 +904,13 @@ PBF_URL = "https://download.openstreetmap.fr/extracts/asia/china/{p}-latest.osm.
 # 省份粗包围盒（lon0, lat0, lon1, lat1）。只用于判断"窗口落在哪个省"，
 # **故意放宽到互相重叠**：选错的代价是抓回 0 个要素（下面的闸门会回落到 Overpass），
 # 漏选则等于没这条通道。没列的省份 / 境外线路 → 直接走 Overpass。
+# ⚠ 键名 = **切片文件名**（openstreetmap.fr 的 slug），不是拼音。
+#   实测：西藏是 `tibet` 不是 `xizang`，内蒙古是 `inner_mongolia` 不是 `neimenggu`
+#   —— 写错不会报错，只会 404 → 静默回落 Overpass，等于这条通道对那片区域不存在。
 PROVINCE_BBOX = {
     "sichuan":   (97.30, 26.00, 108.60, 34.40),
     "yunnan":    (97.40, 21.10, 106.30, 29.30),
-    "xizang":    (78.30, 26.80, 99.20, 36.60),
+    "tibet":     (78.30, 26.80, 99.20, 36.60),
     "qinghai":   (89.30, 31.50, 103.20, 39.30),
     "xinjiang":  (73.30, 34.30, 96.50, 49.20),
     "gansu":     (92.30, 32.50, 108.80, 42.90),
@@ -906,7 +930,15 @@ PROVINCE_BBOX = {
     "liaoning":  (118.80, 38.70, 125.80, 43.50),
     "jilin":     (121.60, 40.80, 131.40, 46.30),
     "heilongjiang": (121.10, 43.40, 135.10, 53.60),
-    "neimenggu": (97.10, 37.40, 126.10, 53.40),
+    "inner_mongolia": (97.10, 37.40, 126.10, 53.40),
+    "ningxia":   (104.20, 35.20, 107.70, 39.40),
+    "shandong":  (114.80, 34.30, 122.80, 38.40),
+    "jiangsu":   (116.30, 30.70, 121.90, 35.20),
+    "beijing":   (115.40, 39.40, 117.60, 41.10),
+    "tianjin":   (116.70, 38.50, 118.10, 40.30),
+    "chongqing": (105.20, 28.10, 110.20, 32.20),
+    "shanghai":  (120.80, 30.60, 122.10, 31.90),
+    "hainan":    (108.60, 18.10, 111.10, 20.20),
 }
 
 _HIGHWAY = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
@@ -937,21 +969,29 @@ def _kind_area(t):
                 or t.get("landuse") in ("reservoir", "forest", "meadow"))
 
 
-def _candidate_provinces(bbox):
-    """窗口中心落进哪些省（按矩形面积从小到大）。
+def _candidate_provinces(bbox, min_frac=0.02):
+    """窗口与哪些省有实质重叠（按重叠面积占窗口的比例，降序）。
 
-    ⚠ **粗矩形一定会重叠，光靠坐标选不准**。实测亚丁窗口（100.25E/28.26N，四川稻城）
-      同时落在四川和云南的矩形里，云南矩形更小 → 选云南 → 抽出来 2 个要素。
-      所以这里只给**候选排序**，真正定谁，靠下面的 `_pbf_province_ok()` 用数据验。
+    ⚠ **粗矩形一定会重叠，光靠坐标选不准**：实测亚丁窗口（100.25E/28.26N，四川稻城）
+      同时压在四川和云南的矩形里，云南矩形更小 —— 只要"中心落入"就会选错。
+      所以这里只给**候选**，谁真有数据靠 `_pbf_node_hits()` 数节点定。
+
+    ⚠ 用**矩形重叠**而不是"中心落入"：跨省线路（梅里外转 云南↔西藏、
+      大五朝台 山西↔河北、腾格里 甘肃↔内蒙古）的窗口常常一大半在邻省，
+      只看中心会把邻省整片丢掉，而且不报错。
     """
     lon0, lat0, lon1, lat1 = bbox
-    cx, cy = (lon0 + lon1) / 2, (lat0 + lat1) / 2
+    w, h = lon1 - lon0, lat1 - lat0
+    area = max(1e-12, w * h)
     hit = []
     for p, (x0, y0, x1, y1) in PROVINCE_BBOX.items():
-        if x0 <= cx <= x1 and y0 <= cy <= y1:
-            hit.append((abs((x1 - x0) * (y1 - y0)), p))
-    hit.sort()
-    return [p for _a, p in hit]
+        ow = max(0.0, min(lon1, x1) - max(lon0, x0))
+        oh = max(0.0, min(lat1, y1) - max(lat0, y0))
+        frac = ow * oh / area
+        if frac >= min_frac:
+            hit.append((frac, p))
+    hit.sort(reverse=True)
+    return [p for _f, p in hit]
 
 
 def _pick_province(bbox):
@@ -959,12 +999,14 @@ def _pick_province(bbox):
     return c[0] if c else None
 
 
-def _pbf_province_ok(pbf, bbox, need=200, max_scan=None):
-    """切片里到底有没有这个窗口：只数**窗口内的节点**，不进 area 处理（快 9 倍）。
+def _pbf_node_hits(pbf, bbox):
+    """切片里落在窗口内的**节点数** —— 用来判断"这片切片到底是不是这个窗口的数据"。
 
-    为什么必须验：省级切片是按**省界**裁的，窗口贴着省界时粗矩形根本分不出
-    "这个点在四川还是云南"。而节点计数是便宜且铁的证据 —— 窗口里一个节点都没有，
-    这片切片就不是本窗口的数据，换下一个候选，别白扫 5 分钟的 area。
+    ⚠ 阈值法行不通，必须**比大小**：省级切片按省界裁，但边界两侧都带缓冲，
+      邻省切片在窗口里也会有节点。实测亚丁窗口：云南切片 235 个节点（省界那条缝），
+      四川切片 20118 个节点、539 条路。用"≥N 就算命中"会同时命中两片。
+    → 候选全探一遍，节点最多的那片才是数据本片。纯节点扫描 ~30 s/90 MB，
+      比带 area 的完整抽取（5–6 min）便宜一个量级。
     """
     import osmium
     lon0, lat0, lon1, lat1 = bbox
@@ -977,12 +1019,8 @@ def _pbf_province_ok(pbf, bbox, need=200, max_scan=None):
             continue
         if lon0 <= lo <= lon1 and lat0 <= la <= lat1:
             n += 1
-            if n >= need:
-                break
-    ok = n >= need
-    print(f"   切片验省：窗口内节点 {n}{'+' if ok else ''} 个"
-          f"（{time.time() - t0:.0f}s）→ {'命中' if ok else '不是这个省'}")
-    return ok
+    print(f"   探片 {Path(pbf).name}：窗口内节点 {n} 个（{time.time() - t0:.0f}s）")
+    return n
 
 
 def _pbf_download(prov, jobs=12, total=None):
@@ -1049,6 +1087,9 @@ def _pbf_ensure(prov, allow_download=True):
         print(f"   用本地切片 {dst.name}（{dst.stat().st_size // 1048576} MB）")
         return dst
     if not allow_download:
+        return None
+    if os.environ.get("HIKING_OSM_PBF_AUTODL", "1") in ("0", "false", "no"):
+        print(f"   切片 {dst.name} 不存在，且 HIKING_OSM_PBF_AUTODL=0 → 不自动下载")
         return None
     return _pbf_download(prov)
 
@@ -1230,6 +1271,76 @@ def pbf_extract(pbf, bbox, verbose=True):
     return list(els.values())
 
 
+# ============================================================ 簇扫描（2026-11-02）
+# 为什么要有：单次抽取 ~5–6 分钟的**绝大部分是"把整省读一遍"的固定开销**，与窗口面积无关
+# （实测三个完全不同窗口都是 302–357 s，而 48 MB 的西藏切片只要 175 s → 成本 ∝ 切片数据量）。
+# 于是同省的 N 条线路会重复付 N 次这个固定成本：川西 34 条 = 2.8 h 反复读同一份四川切片。
+# 解法：**扫一次"簇"（多个窗口的并集），再按窗口裁剪**（裁剪是亚秒级）。
+CLUSTER_DIR = PBF_CACHE_DIR / "clusters"
+
+
+def _bbox_eq(a, b, tol=1e-6):
+    return bool(a) and len(a) == 4 and all(abs(float(a[i]) - float(b[i])) < tol for i in range(4))
+
+
+def _cluster_path(prov, bbox):
+    tag = "_".join(f"{v:.3f}" for v in bbox)
+    return CLUSTER_DIR / f"{prov}_{tag}.json"
+
+
+def clip_els(els, bbox, pad=0.0):
+    """按窗口裁剪要素（只判 bbox 相交，不裁几何 —— 与 Overpass `out geom` 的口径一致）。"""
+    out = []
+    for e in els:
+        x = _el_extent(e)
+        if not x:
+            continue
+        if x[2] < bbox[0] - pad or x[0] > bbox[2] + pad:
+            continue
+        if x[3] < bbox[1] - pad or x[1] > bbox[3] + pad:
+            continue
+        out.append(e)
+    return out
+
+
+def cluster_extract(prov, bbox, force=False, pbf=None):
+    """扫一次切片、覆盖一整片区域（多个线路窗口的并集）→ 簇缓存文件。
+
+    只是"更大的 pbf_extract"，闸门不在这里做：簇本来就该大于单个窗口，
+    要素数/越境这类判断必须留到裁剪成单窗口之后（`fetch_pbf`）。
+    """
+    CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
+    dst = _cluster_path(prov, bbox)
+    if dst.exists() and not force:
+        try:
+            d = json.loads(dst.read_text(encoding="utf-8"))
+        except Exception:                                         # noqa
+            d = {}
+        if (d.get("_source") == "pbf-cluster" and d.get("_province") == prov
+                and _bbox_eq(d.get("_bbox"), bbox)):
+            print(f"   命中簇缓存 {dst.name}：{len(d['elements'])} 个要素")
+            return dst
+    pbf = pbf or _pbf_ensure(prov)
+    if not pbf:
+        return None
+    print(f"   簇扫描 {prov}：{bbox[0]:.3f},{bbox[1]:.3f} → {bbox[2]:.3f},{bbox[3]:.3f}")
+    els = pbf_extract(pbf, bbox)
+    d = {"elements": els, "_source": "pbf-cluster", "_province": prov,
+         "_pbf": pbf.name, "_bbox": list(bbox),
+         "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    dst.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    print(f"   簇缓存已写 {dst.name}（{len(els)} 个要素，"
+          f"{dst.stat().st_size // 1048576} MB）")
+    return dst
+
+
+def _pt_count(e):
+    """要素的顶点数（跨片去重时"留信息更全的那份"）。"""
+    if e.get("geometry"):
+        return len(e["geometry"])
+    return sum(len(m.get("geometry") or []) for m in e.get("members") or [])
+
+
 def _pbf_cache_valid(d, bbox=None):
     """PBF 缓存是否还能用：不看元素范围，看**是不是这条窗口抽的**。
 
@@ -1248,11 +1359,15 @@ def _pbf_cache_valid(d, bbox=None):
     return len(b) == 4 and all(abs(b[i] - bbox[i]) < 1e-6 for i in range(4))
 
 
-def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40):
+def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
+              cluster=None):
     """本地切片通道：抽窗口 → 写 osm.json（schema 与 Overpass 完全一致）。
 
     `min_elems` 是**回落闸门**：抽出来少于这个数，多半是省选错了/切片过期，
     此时退回 Overpass，别拿一份空数据把好好的缓存冲掉。
+
+    `cluster`：给一个簇缓存文件（`cluster_extract()` 的产物）→ 直接裁剪、不扫描。
+    批量出图时同省几十个窗口共扫一次，单窗口成本从 ~5 min 降到亚秒。
     """
     bbox = (LON0, LAT0, LON1, LAT1)
     dst = Path(out) if out else CACHE
@@ -1264,37 +1379,138 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40):
         if _pbf_cache_valid(d0, bbox):
             print(f"命中 PBF 缓存 {dst.name}：{len(d0['elements'])} 个要素")
             return d0
+        # 已有 **Overpass 来源** 的可用缓存：不为了"换成 PBF"白抽 5–6 分钟。
+        # 默认路径既然改成了 PBF，这里必须显式说清楚"没升级、要升级怎么办"，
+        # 否则以后会有人以为默认已经全是 PBF 数据。
+        if d0.get("elements") and _cache_covers(d0):
+            _when = d0.get("_fetched_at")
+            if not _when:
+                try:                                   # 老缓存没记时间，用文件 mtime 兜底
+                    _when = time.strftime("%Y-%m-%d", time.localtime(dst.stat().st_mtime))
+                except Exception:                      # noqa
+                    _when = "日期未知"
+            print(f"现有缓存可用（{len(d0['elements'])} 个要素，来源 "
+                  f"{d0.get('_source') or 'overpass'}，{_when}）"
+                  f"→ 直接沿用；要换成 PBF 抽的版本加 --force")
+            return d0
 
-    cands = [province] if province else _candidate_provinces(bbox)
-    if not cands:
-        msg = "窗口不在已覆盖的省份内（境外/未列省份）→ 本通道不适用"
-        if soft:
-            print(f"   {msg}，回落 Overpass")
+    els, prov, pbf = None, None, None
+
+    if cluster:                                   # ── 簇缓存：裁剪，不扫描
+        cp = Path(cluster)
+        try:
+            dc = json.loads(cp.read_text(encoding="utf-8"))
+        except Exception as e:                                    # noqa
+            print(f"   ✗ 簇缓存读不了（{cp}）：{repr(e)[:80]} → 回落 Overpass")
             return fetch(force=force, soft=soft)
-        raise SystemExit(msg)
-    print(f"PBF 通道：窗口 {LON0:.4f},{LAT0:.4f} → {LON1:.4f},{LAT1:.4f}，"
-          f"候选省 {cands}")
-    els, prov, pbf = [], None, None
-    for cand in cands:                       # 逐个候选验，第一个"窗口里有节点"的就是它
-        p = _pbf_ensure(cand)
-        if not p:
+        _all = dc.get("elements") or []
+        els = clip_els(_all, bbox)
+        prov = dc.get("_province") or "cluster"
+        pbf = Path(dc.get("_pbf") or "cluster")
+        print(f"   簇缓存 {cp.name}：{len(_all)} → 裁到本窗口 {len(els)} 个要素")
+
+    if els is None:
+        cands = [province] if province else _candidate_provinces(bbox)
+        if not cands:
+            msg = "窗口不在已覆盖的省份内（境外/未列省份）→ 本通道不适用"
+            if soft:
+                print(f"   {msg}，回落 Overpass")
+                return fetch(force=force, soft=soft)
+            raise SystemExit(msg)
+        print(f"PBF 通道：窗口 {LON0:.4f},{LAT0:.4f} → {LON1:.4f},{LAT1:.4f}，"
+              f"候选省 {cands}")
+        # 候选省逐个探片（只数节点）。**跨省线路要合片**：梅里外转 云南↔西藏、
+        # 大五朝台 山西↔河北、腾格里 甘肃↔内蒙古 —— 只取节点最多的那一片，
+        # 另一半会静默消失；而省界缓冲又会给邻省留一圈毛边，所以两条都有门槛。
+        probe, missing = [], []
+        if len(cands) == 1:
+            # ⚠ 单候选省**不探片**：探片只是自我验证，白花 35–45 s。
+            #   真有"这省没数据"的情况，后面的要素数闸门会兜住。
+            p = _pbf_ensure(cands[0])
+            if p:
+                probe = [(1, cands[0], p)]
+                print(f"   单候选省 {cands[0]} → 跳过探片")
+            else:
+                missing = list(cands)
+        else:
+            for cand in cands:
+                p = _pbf_ensure(cand)
+                if p:
+                    probe.append((_pbf_node_hits(p, bbox), cand, p))
+                else:
+                    missing.append(cand)
+        if not probe:
+            print("   ✗ 没有可用的切片 → 回落 Overpass")
+            return fetch(force=force, soft=soft)
+        probe.sort(key=lambda x: -x[0])
+        _best = probe[0][0]
+        if _best <= 0:
+            print("   ✗ 所有候选切片在窗口内一个节点都没有 → 回落 Overpass")
+            return fetch(force=force, soft=soft)
+        # 次片门槛：绝对 ≥60 个节点，且 ≥ 最好那片的 6%。低于此的是省界毛边，
+        # 白抽 6 分钟换几十个要素不值；高于此的说明这条线真的跨过去了。
+        # ⚠ 单候选省跳过探片时 probe 里的 hits 是**占位 1**（没有真探），
+        #   拿它去过 60 的门槛必然空手而归 —— 后面 picks[0] 直接 IndexError。
+        #   这条路径必须显式认下这唯一一片。
+        if len(cands) == 1 and len(probe) == 1 and probe[0][0] <= 1:
+            picks = probe[:1]
+        else:
+            picks = [x for x in probe if x[0] >= max(60, 0.06 * _best)][:3]
+        if len(probe) > 1:
+            print("   选片：" + "、".join(f"{c}={n}" for n, c, _p in probe)
+                  + (" → 合并 " + "+".join(c for _n, c, _p in picks) if len(picks) > 1 else ""))
+        if missing and len(picks) == 1 and len(probe) == 1:
+            print(f"   ⚠ 另有切片未取到（{','.join(missing)}）→ 窗口可能有一部分不在这片里，"
+                  f"继续抽，结束后由越境闸门裁决")
+
+        els_map, per = {}, []
+        for hits, prov_i, pbf_i in picks:
+            print(f"   ── 抽取 {prov_i}")
+            part = pbf_extract(pbf_i, bbox)
+            for e in part:
+                k = (e["type"], e["id"])
+                old = els_map.get(k)
+                if old is None or _pt_count(e) > _pt_count(old):
+                    els_map[k] = e
+            per.append(f"{prov_i} {len(part)}")
+        els = list(els_map.values())
+        prov = picks[0][1] if len(picks) == 1 else "+".join(c for _n, c, _p in picks)
+        pbf = picks[0][2]
+        if len(picks) > 1:
+            print(f"   合并：{' + '.join(per)} → 去重后 {len(els)} 个要素")
+
+    # 越境闸门：省级切片按**行政边界**裁，跨境线路（珠峰东坡、尼泊尔几线）只能拿到
+    # 境内那一半，而且不报错。判据 = 要素范围有没有铺到窗口四边；差得太多（>35% 跨度）
+    # 说明窗口有一大块不在片子里，改走 Overpass（它不分国界，两边都给）。
+    _ext = None
+    for e in els:
+        x = _el_extent(e)
+        if not x:
             continue
-        if len(cands) > 1 and not _pbf_province_ok(p, bbox):
-            continue
-        _els = pbf_extract(p, bbox)
-        if len(_els) >= min_elems:
-            els, prov, pbf = _els, cand, p
-            break
-        print(f"   {cand} 只抽出 {len(_els)} 个要素 → 换下一个候选省")
-    if not els:
-        msg = f"所有候选省都抽不出 ≥{min_elems} 个要素 → 回落 Overpass"
+        _ext = x if _ext is None else (min(_ext[0], x[0]), min(_ext[1], x[1]),
+                                       max(_ext[2], x[2]), max(_ext[3], x[3]))
+    if _ext:
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        gaps = {"西": (_ext[0] - bbox[0]) / w, "南": (_ext[1] - bbox[1]) / h,
+                "东": (bbox[2] - _ext[2]) / w, "北": (bbox[3] - _ext[3]) / h}
+        worst = max(gaps, key=lambda k: gaps[k])
+        if gaps[worst] > 0.35:
+            print(f"   ⚠ 要素范围在「{worst}」侧离窗口边还差 {gaps[worst] * 100:.0f}% —— "
+                  f"窗口很可能有相当一部分不在已取到的切片里（跨境？邻省切片缺失？）"
+                  f"→ 回落 Overpass（不分省界，整窗一次给全）")
+            return fetch(force=force, soft=soft)
+    if len(els) < min_elems:
+        msg = (f"只抽出 {len(els)} 个要素（< {min_elems}）→ 疑似切片过期/省份未覆盖，"
+               f"回落 Overpass")
         if soft:
             print("   ✗ " + msg)
             return fetch(force=force, soft=soft)
         raise SystemExit(msg)
     d = {"elements": els, "_source": "pbf", "_province": prov,
-         "_pbf": pbf.name, "_bbox": list(bbox),
+         "_pbf": getattr(pbf, "name", str(pbf)), "_bbox": list(bbox),
          "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    if cluster:
+        d["_cluster"] = Path(cluster).name
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
     print(f"✓ 已写 {dst}（{len(els)} 个要素，{dst.stat().st_size // 1024} KB）")
@@ -1323,12 +1539,20 @@ if __name__ == "__main__":
     ap.add_argument("--reuse-min-elems", type=int, default=REUSE_MIN_ELEMS,
                     help=f"donor 要素数下限，低于此判残缺不参与复用（默认 {REUSE_MIN_ELEMS}）")
     ap.add_argument("--pbf", action="store_true",
-                    help="走本地 OSM 切片（openstreetmap.fr 省级 PBF）抽窗口，完全不碰 Overpass；"
-                         "数据同源、不可能半截，境外/未列省份自动回落")
+                    help="[兼容参数] 走本地 OSM 切片 —— **现在这是默认行为**，无需再传")
+    ap.add_argument("--no-pbf", action="store_true",
+                    help="强制走 Overpass（等价 HIKING_OSM_MODE=overpass）；"
+                         "用于临时对比或 PBF 出问题时的退路")
     ap.add_argument("--pbf-out", default=None, metavar="路径",
                     help="把 PBF 通道结果写到指定文件（默认直接写 out/osm.json），用于对照试验")
     ap.add_argument("--pbf-province", default=None,
                     help="强制指定省份切片名（如 sichuan）；默认按窗口中心自动选")
+    ap.add_argument("--cluster", default=None, metavar="簇缓存.json",
+                    help="用簇缓存裁剪本窗口（不扫描）：批量出图时同省多线路共扫一次")
+    ap.add_argument("--cluster-bbox", default=None, metavar="lon0,lat0,lon1,lat1",
+                    help="【批量用】扫这个并集窗口 → 写簇缓存；不需要在本项目目录下运行")
+    ap.add_argument("--cluster-out", default=None, metavar="路径",
+                    help="簇缓存输出路径；默认 ~/.workbuddy/cache/hiking-osm/clusters/")
     a = ap.parse_args()
     if a.border:
         els = fetch_borders(soft=True)
@@ -1339,12 +1563,56 @@ if __name__ == "__main__":
                   f"  {len(e.get('geometry') or [])} 点 / {len(e.get('members') or [])} 成员")
         print("\n⚠ 缓存已改动 → 必须重跑 make_terrain（底图叠加层在底图里烘焙）。")
         sys.exit(0)
-    if a.pbf or a.pbf_out:
-        data = fetch_pbf(a.pbf_out, a.force, a.soft, a.pbf_province)
-    elif a.reuse or a.reuse_dry:
+    _mode = os.environ.get("HIKING_OSM_MODE", "").strip().lower()
+    _pbf_on = not a.no_pbf and _mode not in ("overpass", "osm", "api")
+    if a.cluster_bbox:
+        # 【批量用】只扫一个"簇窗口"，不产出 osm.json —— 交给 cluster_osm.py 裁剪分发。
+        # 不需要在本项目目录下运行（窗口全部来自参数）。
+        try:
+            bb = tuple(float(x) for x in a.cluster_bbox.replace("，", ",").split(","))
+            assert len(bb) == 4
+        except Exception:                                         # noqa
+            raise SystemExit("--cluster-bbox 需要 4 个逗号分隔的数：lon0,lat0,lon1,lat1")
+        provs = [a.pbf_province] if a.pbf_province else _candidate_provinces(bb)
+        if not provs:
+            raise SystemExit(f"簇窗口 {bb} 不在已覆盖的省份内")
+        ok = 0
+        for prov in provs:
+            p = _pbf_ensure(prov)
+            if not p:
+                print(f"   ✗ {prov} 切片拿不到，跳过")
+                continue
+            if len(provs) > 1 and _pbf_node_hits(p, bb) < 60:
+                print(f"   {prov} 在簇窗口内几乎没有节点 → 跳过")
+                continue
+            dst = Path(a.cluster_out) if (a.cluster_out and len(provs) == 1) \
+                else _cluster_path(prov, bb)
+            CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
+            if dst.exists() and not a.force:
+                cur = json.loads(dst.read_text(encoding="utf-8"))
+                if (cur.get("_source") == "pbf-cluster" and cur.get("_province") == prov
+                        and _bbox_eq(cur.get("_bbox"), bb)):
+                    print(f"   ✓ 已有簇缓存 {dst}（{len(cur['elements'])} 个要素）")
+                    ok += 1
+                    continue
+            print(f"   簇扫描 {prov}：{bb[0]:.3f},{bb[1]:.3f} → {bb[2]:.3f},{bb[3]:.3f}")
+            els = pbf_extract(p, bb)
+            cur = {"elements": els, "_source": "pbf-cluster", "_province": prov,
+                   "_pbf": p.name, "_bbox": list(bb),
+                   "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            dst.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+            print(f"   ✓ 簇缓存 {dst.name}（{len(els)} 个要素，"
+                  f"{dst.stat().st_size // 1048576} MB）")
+            ok += 1
+        sys.exit(0 if ok else 1)
+    if a.reuse or a.reuse_dry:
         data = reuse(a.reuse or "auto", a.force, a.reuse_dry, a.soft, a.reuse_min_elems)
     elif a.shard:
         data = fetch_sharded(a.force, a.tile, a.soft, a.jobs)
+    elif _pbf_on:
+        # ★ 默认：本地切片优先；fetch_pbf 内部在「境外/未覆盖省/拿不到切片/要素过少」
+        #   四种情况下自行回落 Overpass，所以这里不需要再包一层 try。
+        data = fetch_pbf(a.pbf_out, a.force, a.soft, a.pbf_province, cluster=a.cluster)
     else:
         data = fetch(a.force, a.soft)
     if not data.get("elements"):
