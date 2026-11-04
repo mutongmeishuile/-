@@ -1336,13 +1336,21 @@ def _contour_tint(base, mode, dmin=None):
     # 不加这一步，240 的雪面 ×0.46 = 110 —— 近黑线压在纯白上，25 m 间距一密就成了"布纹"。
     snow = np.clip((lum - 200.0) / 45.0, 0.0, 1.0)
     k = k + (SNOW_CONTOUR_DARKEN[mode] - k) * snow
+    # ⚠ 2026-11-04 全部改成就地/布尔索引：22000–24000 px 画幅下
+    #   原写法同时要 3 个 (H,W) + 2 个 (H,W,3) 临时数组（约 6 + 8 GB），必然 OOM。
     bright = lum >= CONTOUR_LIGHT_T
-    tgt = np.where(bright, lum * k, lum + add)
-    tgt = np.where(bright, np.minimum(tgt, lum - dmin), np.maximum(tgt, lum + dmin))
-    tgt = np.clip(tgt, 6.0, 252.0)
-    col = base * (tgt / np.maximum(lum, 1.0))[:, :, None]          # 保住底图色相
-    col = col * (1 - CONTOUR_DESAT) + tgt[:, :, None] * CONTOUR_DESAT   # 彩度让给底图
-    return np.clip(col, 0, 255)
+    tgt = lum * k
+    tgt[~bright] = lum[~bright] + add
+    tgt[bright] = np.minimum(tgt[bright], lum[bright] - dmin)
+    tgt[~bright] = np.maximum(tgt[~bright], lum[~bright] + dmin)
+    np.clip(tgt, 6.0, 252.0, out=tgt)
+    ratio = tgt / np.maximum(lum, 1.0)                             # 保住底图色相
+    col = base * ratio[:, :, None]
+    del ratio
+    col *= (1 - CONTOUR_DESAT)                                     # 彩度让给底图
+    col += tgt[:, :, None] * CONTOUR_DESAT
+    del tgt, bright, lum
+    return np.clip(col, 0, 255, out=col)
 
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,

@@ -738,7 +738,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         两者在单线项目里恰好相等（4512/1504 = 3 = ss），所以单线一个字都不会变；
         但区域总览把画幅拉到 16000–24000 时（ss 仍是 4），旧写法会让字相对画幅越缩越小。
         """
-        return max(6, int(round(v * size[0] / 1504.0)))
+        return max(6, int(round(v * S)))
 
     data = json.loads(osm_path.read_text(encoding="utf-8"))
     els = data["elements"]
