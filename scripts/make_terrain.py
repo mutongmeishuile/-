@@ -1044,13 +1044,17 @@ def shade_rgb(rgb, hs, snow_w=None):
     更狠的环境光/方向光配比（0.58/0.60）塑形 —— 受光近白、背光中灰，冰面才有立体感。
     背光面只剩 68% 亮度），"雪线之上偏白"就立不住 → 向无山影的设色按权重回抬，
     保留一部分立体感的同时让雪面回到白色。"""
+    # ⚠ 全程 float32：win 248 M px 时任何一处被提升成 float64 就是 +5.5 GB，
+    #   2026-11-04 念青东五线总览（z13 / 1.2 万×2 万）实测就是在这里 OOM 的。
+    rgb = np.asarray(rgb, np.float32)
+    hs = np.asarray(hs, np.float32)
     img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
     if TINT_COOL > 0:
-        t = np.clip((0.5 - hs) * 2.0, 0, 1)[..., None]        # 越暗 → 越冷
+        t = np.clip((0.5 - hs) * 2.0, 0, 1).astype(np.float32)[..., None]   # 越暗 → 越冷
         c = np.asarray(TINT_COOL_RGB, np.float32)
         img = img * (1 - TINT_COOL * t) + img * c * (TINT_COOL * t)
     if TINT_WARM > 0:
-        t = np.clip((hs - 0.5) * 2.0, 0, 1)[..., None]        # 越亮 → 越暖
+        t = np.clip((hs - 0.5) * 2.0, 0, 1).astype(np.float32)[..., None]   # 越亮 → 越暖
         c = np.asarray(TINT_WARM_RGB, np.float32)
         img = img * (1 - TINT_WARM * t) + img * c * (TINT_WARM * t)
     over = img > HL_CLIP
@@ -1061,7 +1065,7 @@ def shade_rgb(rgb, hs, snow_w=None):
         # 受光面仍是近白，背光面压到中灰 —— 冰川的刃脊、冰瀑、雪盆才立得起来。
         # 量测口径：同一片雪坡的"低频明暗 std"应 ≥ 35（回抬版只有 30 左右，肉眼就是白纸）。
         w = np.asarray(snow_w, np.float32)[..., None]
-        shaped = np.clip(rgb * (0.58 + 0.60 * hs)[..., None], 0, 255)
+        shaped = np.clip(rgb * (0.58 + 0.60 * hs)[..., None], 0, 255).astype(np.float32)
         img = img * (1 - w) + shaped * w
     return img
 
