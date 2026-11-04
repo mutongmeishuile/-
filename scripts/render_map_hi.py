@@ -24,6 +24,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+# 20000 px 级底图（>178 MP）会撞 PIL 的 DecompressionBomb 上限 —— 底图是自己渲的，关掉。
+Image.MAX_IMAGE_PIXELS = None
+
 import guide_common as GC
 import map_svg as MS
 import route_def as RD
@@ -110,15 +113,24 @@ def _page_html(svg_str, oy=0, bh=None):
 # 白底外圈：SVG 被浏览器缩放到几千 px 宽时，最外 1–2 px 会因插值露出页面白底
 # （2026-10-24 大横断实测：仅第 0 列与最后一列 >60% 白，其余全有内容 —— 不是裁切）。
 # 判白带时忽略外圈；真被裁时白带宽几十 px，照样抓得到。
+# ⚠ 2026-11-04 郭喀拉 29 天（18048 px 宽 = SS 12）：外圈白边涨到 **6 px** ——
+#   SVG 里底图那条 <image> 的亚像素内缩，在 12 倍超采样下变成 6 个纯白像素列，
+#   固定 3 px 的忽略量不够，被判成"白带"、连续 4 次重截后直接报错。
+#   → 改成按图宽自适应（每 2000 px 宽留 1 px），下限仍是 3。
 _EDGE_IGNORE = 3
+
+
+def _edge_ignore(a):
+    return max(_EDGE_IGNORE, int(round(a.shape[1] / 2000)))
 
 
 def _white_ratio(a):
     """去掉外圈后的最白行 / 最白列比例。"""
-    if a.shape[0] <= 2 * _EDGE_IGNORE or a.shape[1] <= 2 * _EDGE_IGNORE:
+    e = _edge_ignore(a)
+    if a.shape[0] <= 2 * e or a.shape[1] <= 2 * e:
         white = (a > 246).all(2)
     else:
-        white = (a[_EDGE_IGNORE:-_EDGE_IGNORE, _EDGE_IGNORE:-_EDGE_IGNORE] > 246).all(2)
+        white = (a[e:-e, e:-e] > 246).all(2)
     return white.mean(1).max(), white.mean(0).max()
 
 
@@ -130,10 +142,11 @@ _WHITE_MIN_RUN = 3
 
 def _white_runs(a):
     """最长连续"近乎全白"的行数 / 列数（去掉外圈）。"""
-    if a.shape[0] <= 2 * _EDGE_IGNORE or a.shape[1] <= 2 * _EDGE_IGNORE:
+    e = _edge_ignore(a)
+    if a.shape[0] <= 2 * e or a.shape[1] <= 2 * e:
         white = (a > 246).all(2)
     else:
-        white = (a[_EDGE_IGNORE:-_EDGE_IGNORE, _EDGE_IGNORE:-_EDGE_IGNORE] > 246).all(2)
+        white = (a[e:-e, e:-e] > 246).all(2)
 
     def _max_run(frac, thr=0.6):
         best = run = 0

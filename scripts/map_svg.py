@@ -1017,7 +1017,10 @@ def build_map_overlay(mobile=False):
     # ⚠ 三位数（105 km 等）在固定 r=7.4 的圆里必然溢出 → 用户看到「105 挤在圈里」。
     #   按位数自适应：三位数加大半径 + 略缩字号，保证文字完整落在圆内。
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]     # 提前算：里程点要避开图钉
-    for target in range(5, int(TOTAL_KM) + 1, 5):
+    # 里程点间隔：默认 5 km。**长线（>200 km）必须放大**，否则 469 km 会画 94 个圆圈、
+    # 整条线变成一串珠子（2026-11-04 郭喀拉29天实测）。CFG["km_step"] 覆盖。
+    _km_step = max(1, int(GC.cfg("km_step", 5) or 5))
+    for target in range(_km_step, int(TOTAL_KM) + 1, _km_step):
         i = min(range(len(KM)), key=lambda j: abs(KM[j] - target))
         x, y = XY[i]
         z = MFS_S if mobile else 1.0
@@ -1389,6 +1392,10 @@ def self_check(mobile=False, placed=None):
 # ---------------------------------------------------------------- 外壳
 def _embed_jpeg(max_w=EMBED_MAX):
     from PIL import Image
+    # 20000 px 级底图（18048×15941 ≈ 288 MP）会撞 PIL 的 DecompressionBomb 上限
+    # （178 MP）："Image size ... exceeds limit ... could be decompression bomb"。
+    # 底图是自己渲的，关掉这道保险是安全的；不关的话 build_guide 直接在 embed 阶段崩。
+    Image.MAX_IMAGE_PIXELS = None
     im = Image.open(GC.OUT / "base_map.jpg").convert("RGB")
     if max_w and im.width > max_w:
         im = im.resize((max_w, round(im.height * max_w / im.width)), Image.LANCZOS)

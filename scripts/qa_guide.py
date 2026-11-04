@@ -22,6 +22,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+# 20000 px 级高清地图（>178 MP）会撞 PIL DecompressionBomb 上限 —— 是自己渲的图，关掉。
+Image.MAX_IMAGE_PIXELS = None
+
 import guide_common as GC
 import route_def as RD
 
