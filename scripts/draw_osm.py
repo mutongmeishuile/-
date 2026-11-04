@@ -718,6 +718,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         return pil
     skip_names = set(skip_names or ())
     S = float(px_scale)
+    # 道路线宽缩放（CFG["road_scale"]）：大窗口线路要压细，见 road 分支说明。
+    _rs_scale = float(GC.cfg("road_scale", 1.0) or 1.0)
     global NO_CROWD
     NO_CROWD = _cfg_flag("label_no_crowd", False)
 
@@ -893,8 +895,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_border += len(pts)
         elif kind == "road":
             core, w, ed = ROAD_STYLE[sub]
-            d.line(pts, fill=ed, width=W(w) + W(2), joint="curve")   # 描边
-            d.line(pts, fill=core, width=W(w), joint="curve")
+            # 线宽按线路缩放：ROAD_STYLE 的宽度是给「几十 km 窗口」定的，几百 km 的
+            # 大窗口上 5 px 的公路等于 1 km 宽，压在图上像一条河（2026-11-04 郭喀拉29天）。
+            # CFG["road_scale"]（默认 1）整体缩放芯线与描边。
+            _rs = _rs_scale
+            d.line(pts, fill=ed, width=W(w * _rs) + W(2 * max(0.5, _rs)), joint="curve")
+            d.line(pts, fill=core, width=W(w * _rs), joint="curve")
             n_line += 1
             # 收集道路注记，稍后在地名注记之后尝试标注（优先级低于地名）。
             # 2026-10-24 博罗科努补：**无 ref 但有 name 的道路也要标**。
@@ -1222,26 +1228,36 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         col = (40, 40, 40) if kind in ("city", "town") else (62, 62, 62)
         # 点位符号跟着字号收一档（2026-10-17）：字缩 0.85 后，大圆点配小字会"头重脚轻"
         r = (2.7 if kind in ("city", "town") else 2.2) * S
-        d.ellipse([x - r, y - r, x + r, y + r], fill=(70, 70, 70), outline=(255, 255, 255))
+        # ⚠ 圆点必须**跟注记一起出生**：NO_CROWD 下大部分地名放不下（郭喀拉 29 天窗口
+        #   721 条只落 92 条），旧写法先无脑画点、再去试注记 → 图上多出几百个
+        #   「没有名字的黑点」，用户第一眼就投诉（2026-11-04）。
         if lab.place(d, name, (x, y), f, col, anchor_right=True,
                      stroke_w=2 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
+            # ⚠ 矢量模式（LABELS_VECTOR）下**不能**在栅格上画这个点：文字由 map_svg
+            #   重排，拥挤的直接丢弃（本窗口 721 → 92），于是几百个点没有名字留在图上
+            #   （2026-11-04 郭喀拉29天用户投诉）。map_svg 会在每个成功落位的地名锚点
+            #   画 r=1.3 的小圆，点与字天然同生同灭。
+            if lab.draw_pixels:
+                d.ellipse([x - r, y - r, x + r, y + r], fill=(70, 70, 70),
+                          outline=(255, 255, 255))
             n_place += 1
 
     n_poi = 0
     for x, y, name, kind in pois:
         if not name or name in skip_names:
             continue
-        if kind == "temple":
-            d.rectangle([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S], fill=(178, 96, 72),
-                        outline=(255, 255, 255))
-        else:
-            r = 2.4 * S
-            d.ellipse([x - r, y - r, x + r, y + r], fill=(96, 132, 96),
-                      outline=(255, 255, 255))
         # 兴趣点名（观景点/民宿/寺庙）优先级最低：**不放 fallback** ——
         # 它们的价值远低于"被压住"的代价，而峰名/湖名/地名宁可轻微重叠也要显示。
+        # ⚠ 符号同样只在注记落位成功后才画（否则留下无名的绿点）。
         if lab.place(d, name, (x, y), f_poi, (58, 66, 56), anchor_right=True,
                      stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+            if kind == "temple":
+                d.rectangle([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S], fill=(178, 96, 72),
+                            outline=(255, 255, 255))
+            else:
+                r = 2.4 * S
+                d.ellipse([x - r, y - r, x + r, y + r], fill=(96, 132, 96),
+                          outline=(255, 255, 255))
             n_poi += 1
 
     # ---- 山谷 / 山脊名：荒野区唯一可用的地形参照（2026-10-29 补） ----

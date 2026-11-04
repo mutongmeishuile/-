@@ -872,6 +872,16 @@ def _badge_place(sb, D, gap, track, pins, anchors):
     x0, y0, x1, y1 = sb
     sbw = x1 - x0
     mid = (y0 + y1) / 2.0 - D / 2.0
+    # CFG["badge_above"]=True → 只放「正上方居中」这一个位置。
+    # 用户口径（2026-11-04 郭喀拉 29 天）：「徽标就摆在比例尺正上方」——宁可压住底图路网，
+    # 也不要为了让开一条乡道而横移/抬高（那会看着像飘在山坡中间，不像比例尺的署名）。
+    if _CFG.get("badge_above"):
+        _bx = x0 + (sbw - D) / 2.0
+        _by = y0 - gap - D
+        _box = (_bx, _by, _bx + D, _by + D)
+        if (_box[0] >= _PAD and _box[1] >= _PAD
+                and _box[2] <= IW - _PAD and _box[3] <= IH - _PAD):
+            return _box, "正上方（强制）", "居中"
     cands = []
     # 档位代价按 k² 长：**"紧贴比例尺"比"不压路网"更重要** —— 比例尺在城区/山脚时，
     # 上方整片都是 OSM 路网（实测一个 99 px 圆里 106 个节点），若按线数重罚就必然一路抬高，
