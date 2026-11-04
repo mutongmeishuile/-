@@ -1142,12 +1142,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             ev0 = _ele_of(ele)
             if PEAK_UNNAMED_ELE and ev0:
                 k = 0.72
-                d.polygon([(x, y - 6 * S * k), (x - 5.4 * S * k, y + 3.6 * S * k),
-                           (x + 5.4 * S * k, y + 3.6 * S * k)],
-                          fill=(150, 140, 124), outline=(255, 255, 255))
                 if lab.place(d, f"{ev0:.0f}", (x, y), f_peak_lo, (120, 106, 88),
                              anchor_right=True, stroke_w=1.8 * S, pad=LBL_PAD * S,
                              fallback=False, kind="peak"):
+                    if lab.draw_pixels:
+                        d.polygon([(x, y - 6 * S * k), (x - 5.4 * S * k, y + 3.6 * S * k),
+                                   (x + 5.4 * S * k, y + 3.6 * S * k)],
+                                  fill=(150, 140, 124), outline=(255, 255, 255))
                     n_peak += 1
             continue
         if name in skip_names:
@@ -1178,12 +1179,17 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             forced = True            # 全量模式：具名峰一律允许挤放，尽量都出
         tri = [(x, y - 6 * S * tri_k), (x - 5.4 * S * tri_k, y + 3.6 * S * tri_k),
                (x + 5.4 * S * tri_k, y + 3.6 * S * tri_k)]
-        d.polygon(tri, fill=col, outline=(255, 255, 255))
         txt = f"{name} {ele}m" if ele else name
+        # ⚠ 三角必须跟注记一起出生：矢量模式下 map_svg 会丢掉挤不下的峰名
+        #   （本窗口 199 → 49），旧写法先画三角再试注记 → 图上 150 个无字三角
+        #   （2026-11-05 用户「没有标注的 osm 地名标记符号也去掉」）。
+        #   矢量模式下三角由 map_svg 在地名锚点补画，三角与字同生同灭。
         if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
                      gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0,
                      right_only=_peak_right):
+            if lab.draw_pixels:
+                d.polygon(tri, fill=col, outline=(255, 255, 255))
             n_peak += 1
             n_named_done += 1
 
@@ -1211,11 +1217,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if not name or name in skip_names:
             continue
         r = 4.2 * S
-        d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
-                  fill=(255, 244, 232), outline=(176, 96, 32))
         txt = f"{name} {ele}m" if ele else name
+        # 符号跟注记一起出生（同 places / peaks）：矢量模式下 map_svg 只在落位的地名
+        # 锚点补小圆，栅格这边再画就成了"没有名字的倒三角"。
         if lab.place(d, txt, (x, y), f_water, (150, 78, 24), anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
+            if lab.draw_pixels:
+                d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
+                          fill=(255, 244, 232), outline=(176, 96, 32))
             n_saddle += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}

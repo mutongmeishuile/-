@@ -735,7 +735,17 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             _ax, _ay = it["x"], it["y"]
             _cx = min(max(_ax, box[0]), box[2])
             _cy = min(max(_ay, box[1]), box[3])
-            _is_peak = f[0] - f[2] > 12 and f[0] < 110     # 棕色系 = 峰名，锚点已有三角
+            _is_peak = f[0] - f[2] > 12 and f[0] < 110     # 棕色系 = 峰名
+            if _is_peak:
+                # 三角改由矢量层画（2026-11-05）：draw_osm 在矢量模式下不再把三角烤进栅格
+                # ——它先画三角再去试注记，挤不下的峰名被丢，图上就留一堆无字三角。
+                # 现在三角与字同生同灭，锚点也统一有符号。
+                _tr_ = 2.9
+                out.append(f'<path d="M {_ax:.1f},{_ay - _tr_:.1f} '
+                           f'L {_ax + _tr_ * 0.92:.1f},{_ay + _tr_ * 0.62:.1f} '
+                           f'L {_ax - _tr_ * 0.92:.1f},{_ay + _tr_ * 0.62:.1f} Z" '
+                           f'fill="{c1}" stroke="#FFFFFF" stroke-width="0.7" '
+                           f'stroke-linejoin="round"/>')
             if not _is_peak:
                 # **每个**地名都在锚点上打一个小圆 —— 这是"这个字标的是哪"最直接的答案。
                 # 只给被推远的那几个画圆是不够的：紧贴锚点的名字反而更让人怀疑它指哪儿。
