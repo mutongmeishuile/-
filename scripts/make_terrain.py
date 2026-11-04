@@ -2156,8 +2156,12 @@ def build_terrain():
         t0, t1 = SNOW_ROCK_T
         rock = np.clip((slope - t0) / max(t1 - t0, 1e-6), 0.0, 1.0)
         above = np.clip((dem_tint - (snow_m - 120)) / 260.0, 0.0, 1.0)  # 残雪过渡带 120 m
-        w = (above * rock * _srm)[..., None]
-        rgb = rgb * (1 - w) + np.array(SNOW_ROCK_RGB, np.float32) * w
+        # ⚠ 全程 float32 + 就地：w 由 float64 除法得来，一旦让 numpy 自动提升，
+        #   (12012, 20680, 3) 的临时数组就是 5.55 GB（2026-11-04 实测 OOM）。
+        w = (above * rock * _srm).astype(np.float32)[..., None]
+        rgb *= (1.0 - w)
+        rgb += np.asarray(SNOW_ROCK_RGB, np.float32) * w
+        del w
     snow_w = np.clip((dem_tint - snow_m) / 500.0, 0.0, 1.0) * 0.85
     img = shade_rgb(rgb, hs, snow_w=snow_w, snow_shape=_sshape)
     # ⚠ 大画幅（24000 px / 334 M px）下这两步各要 3.7 GB：就地 clip + 立刻释放
