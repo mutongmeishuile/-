@@ -1049,14 +1049,25 @@ def shade_rgb(rgb, hs, snow_w=None):
     rgb = np.asarray(rgb, np.float32)
     hs = np.asarray(hs, np.float32)
     img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
+    # ⚠ in-place 改写：原式 `img*(1-w) + img*c*w` 同时存在 3 个 (H,W,3) 临时数组，
+    #   248 M px 时每个 2.78 GB，实测直接 ArrayMemoryError。等价改写为
+    #   `img *= 1 + (c-1)*w`，只占 1 个临时数组（2026-11-04 念青东总览实测）。
     if TINT_COOL > 0:
         t = np.clip((0.5 - hs) * 2.0, 0, 1).astype(np.float32)[..., None]   # 越暗 → 越冷
-        c = np.asarray(TINT_COOL_RGB, np.float32)
-        img = img * (1 - TINT_COOL * t) + img * c * (TINT_COOL * t)
+        w = TINT_COOL * t
+        tmp = np.asarray(TINT_COOL_RGB, np.float32) - 1.0                   # (c-1)
+        tmp = tmp * w                                                       # (c-1)*w
+        tmp += 1.0
+        img *= tmp
+        del tmp, w, t
     if TINT_WARM > 0:
         t = np.clip((hs - 0.5) * 2.0, 0, 1).astype(np.float32)[..., None]   # 越亮 → 越暖
-        c = np.asarray(TINT_WARM_RGB, np.float32)
-        img = img * (1 - TINT_WARM * t) + img * c * (TINT_WARM * t)
+        w = TINT_WARM * t
+        tmp = np.asarray(TINT_WARM_RGB, np.float32) - 1.0
+        tmp = tmp * w
+        tmp += 1.0
+        img *= tmp
+        del tmp, w, t
     over = img > HL_CLIP
     img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
     if snow_w is not None:
