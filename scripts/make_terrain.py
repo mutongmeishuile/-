@@ -1038,46 +1038,47 @@ TINT_WARM_RGB = (1.05, 1.00, 0.95)
 
 
 def shade_rgb(rgb, hs, snow_w=None):
-    """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。纯 numpy，输入输出都是 float 数组。
-    snow_w：雪线以上**强塑形**权重（0–1，由高程渐入）。注意方向与 2026-10-20 之前相反：
-    早先是"向无山影的设色回抬"（怕雪被涂灰），结果雪线以上整体被抹平；现在改为在雪面用
-    更狠的环境光/方向光配比（0.58/0.60）塑形 —— 受光近白、背光中灰，冰面才有立体感。
-    背光面只剩 68% 亮度），"雪线之上偏白"就立不住 → 向无山影的设色按权重回抬，
-    保留一部分立体感的同时让雪面回到白色。"""
-    # ⚠ 全程 float32：win 248 M px 时任何一处被提升成 float64 就是 +5.5 GB，
-    #   2026-11-04 念青东五线总览（z13 / 1.2 万×2 万）实测就是在这里 OOM 的。
-    rgb = np.asarray(rgb, np.float32)
-    hs = np.asarray(hs, np.float32)
-    img = rgb * (AMBIENT + DIRECTIONAL * hs)[..., None]
-    # ⚠ in-place 改写：原式 `img*(1-w) + img*c*w` 同时存在 3 个 (H,W,3) 临时数组，
-    #   248 M px 时每个 2.78 GB，实测直接 ArrayMemoryError。等价改写为
-    #   `img *= 1 + (c-1)*w`，只占 1 个临时数组（2026-11-04 念青东总览实测）。
-    if TINT_COOL > 0:
-        t = np.clip((0.5 - hs) * 2.0, 0, 1).astype(np.float32)[..., None]   # 越暗 → 越冷
-        w = TINT_COOL * t
-        tmp = np.asarray(TINT_COOL_RGB, np.float32) - 1.0                   # (c-1)
-        tmp = tmp * w                                                       # (c-1)*w
-        tmp += 1.0
-        img *= tmp
-        del tmp, w, t
-    if TINT_WARM > 0:
-        t = np.clip((hs - 0.5) * 2.0, 0, 1).astype(np.float32)[..., None]   # 越亮 → 越暖
-        w = TINT_WARM * t
-        tmp = np.asarray(TINT_WARM_RGB, np.float32) - 1.0
-        tmp = tmp * w
-        tmp += 1.0
-        img *= tmp
-        del tmp, w, t
-    over = img > HL_CLIP
-    img[over] = HL_CLIP + (img[over] - HL_CLIP) * HL_KEEP     # 高光软限幅，亮而不白
-    if snow_w is not None:
-        # 雪面塑形（2026-10-20 贡嘎大环）：原来是"向无山影的设色回抬"，雪线以上越白越平。
-        # 改成用**更强的明暗塑形**（环境光 0.58 / 方向光 0.60，比地面的 0.60/0.50 更狠）：
-        # 受光面仍是近白，背光面压到中灰 —— 冰川的刃脊、冰瀑、雪盆才立得起来。
-        # 量测口径：同一片雪坡的"低频明暗 std"应 ≥ 35（回抬版只有 30 左右，肉眼就是白纸）。
-        w = np.asarray(snow_w, np.float32)[..., None]
-        shaped = np.clip(rgb * (0.58 + 0.60 * hs)[..., None], 0, 255).astype(np.float32)
-        img = img * (1 - w) + shaped * w
+    """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。
+
+    ⚠ 2026-11-04 **按行分块**实现：248 M px 的大窗口下，单个 (H,W,3) float32 临时数组
+    就是 2.78 GB，原式 `img*(1-w) + img*c*w` 同时要 3 个 → 念青东五线总览实测连续 OOM。
+    分块后峰值降到 ~1/6，代价只是多几次 for 循环（H=12012 时 6 块）。
+
+    snow_w：雪线以上**强塑形**权重（0–1，由高程渐入）。方向是"雪面用更狠的
+    环境光/方向光配比（0.58/0.60）塑形"—— 受光近白、背光中灰，冰面才有立体感。
+    """
+    rgb32 = np.asarray(rgb, np.float32)
+    hs32 = np.asarray(hs, np.float32)
+    sw = None if snow_w is None else np.asarray(snow_w, np.float32)
+    H = rgb32.shape[0]
+    img = np.empty_like(rgb32)
+    CH = 2048                                    # 每块行数（块内临时数组 ≈ 0.47 GB）
+    cool = np.asarray(TINT_COOL_RGB, np.float32) - 1.0
+    warm = np.asarray(TINT_WARM_RGB, np.float32) - 1.0
+    for y0 in range(0, H, CH):
+        y1 = min(H, y0 + CH)
+        r = rgb32[y0:y1]
+        h = hs32[y0:y1]
+        out = r * (AMBIENT + DIRECTIONAL * h)[..., None]
+        if TINT_COOL > 0:
+            t = np.clip((0.5 - h) * 2.0, 0, 1).astype(np.float32)[..., None]
+            out *= 1.0 + cool * (TINT_COOL * t)      # 等价 img*(1-w) + img*c*w
+            del t
+        if TINT_WARM > 0:
+            t = np.clip((h - 0.5) * 2.0, 0, 1).astype(np.float32)[..., None]
+            out *= 1.0 + warm * (TINT_WARM * t)
+            del t
+        over = out > HL_CLIP
+        out[over] = HL_CLIP + (out[over] - HL_CLIP) * HL_KEEP    # 高光软限幅
+        if sw is not None:
+            w = sw[y0:y1][..., None]
+            shaped = np.clip(r * (0.58 + 0.60 * h)[..., None], 0, 255).astype(np.float32)
+            shaped -= out
+            shaped *= w
+            out += shaped
+            del shaped, w
+        img[y0:y1] = out
+        del out, r, h
     return img
 
 
@@ -2136,7 +2137,11 @@ def build_terrain():
         rgb = rgb * (1 - w) + np.array(SNOW_ROCK_RGB, np.float32) * w
     snow_w = np.clip((dem_tint - snow_m) / 500.0, 0.0, 1.0) * 0.85
     img = shade_rgb(rgb, hs, snow_w=snow_w)
-    img = np.clip(img, 0, 255).astype(np.uint8)
+    # ⚠ 大画幅（24000 px / 334 M px）下这两步各要 3.7 GB：就地 clip + 立刻释放
+    #   rgb/hs/snow_w，否则 paint_contours 还要 copy 一份时必 OOM（2026-11-04 实测）。
+    del rgb, hs, snow_w
+    np.clip(img, 0, 255, out=img)
+    img = img.astype(np.uint8)
     # BICUBIC 而非 LANCZOS：LANCZOS 在陡崖等高反差处会产生振铃，被随后的 USM 放大成"颗粒噪点"。
     pil = Image.fromarray(img, "RGB").resize((RASTER_W, RASTER_H), Image.BICUBIC)
     # USM 提锐：30 m DEM 在 z15 已被过采样 7×，天生柔；提锐才能让山脊/冲沟"立"起来
