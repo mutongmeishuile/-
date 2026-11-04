@@ -1329,31 +1329,37 @@ def _contour_tint(base, mode, dmin=None):
       * CONTOUR_MIN_DELTA 兜底：中间调单纯乘法可能只差 5–6 级明度，肉眼读不出，
         强制拉开到最小差值，保证"处处看得到线"。
     """
-    lum = base @ np.asarray([0.299, 0.587, 0.114], np.float32)
-    k, add, _dm = (CONTOUR_DARKEN[mode], CONTOUR_LIGHTEN[mode], CONTOUR_MIN_DELTA[mode])
+    # ⚠ 2026-11-04 **按行分块**：230 M px 画幅下 `lum[bool]` 这类布尔索引一次就要
+    #   783 MiB（实测直接 ArrayMemoryError），而且原写法同时要 3 个 (H,W)。
+    #   分块后每块的临时数组 ≈ 160 MB，39 级等高线叠加也不再累积。
+    k0, add, _dm = (CONTOUR_DARKEN[mode], CONTOUR_LIGHTEN[mode], CONTOUR_MIN_DELTA[mode])
     dmin = _dm if dmin is None else float(dmin)
-    # 雪原减淡（2026-10-20 贡嘎大环）：亮度 >200 的像素把压暗系数往 SNOW_CONTOUR_DARKEN 收。
-    # 不加这一步，240 的雪面 ×0.46 = 110 —— 近黑线压在纯白上，25 m 间距一密就成了"布纹"。
-    snow = np.clip((lum - 200.0) / 45.0, 0.0, 1.0)
-    k = k + (SNOW_CONTOUR_DARKEN[mode] - k) * snow
-    # ⚠ 2026-11-04 全部改成就地/布尔索引：22000–24000 px 画幅下
-    #   原写法同时要 3 个 (H,W) + 2 个 (H,W,3) 临时数组（约 6 + 8 GB），必然 OOM。
-    bright = lum >= CONTOUR_LIGHT_T
-    tgt = lum * k
-    tgt[~bright] = lum[~bright] + add
-    tgt[bright] = np.minimum(tgt[bright], lum[bright] - dmin)
-    tgt[~bright] = np.maximum(tgt[~bright], lum[~bright] + dmin)
-    np.clip(tgt, 6.0, 252.0, out=tgt)
-    ratio = tgt / np.maximum(lum, 1.0)                             # 保住底图色相
-    # ⚠ 就地写回 base（调用方传的是 f.copy()，可以改）：原写法 `col = base * ratio` 每级
-    #   新建一个 (H,W,3)（22000 px 时 3.14 GB），39 级等高线累积触发 OOM。
-    base *= ratio[:, :, None]
-    del ratio
-    base *= (1 - CONTOUR_DESAT)                                    # 彩度让给底图
-    base += tgt[:, :, None] * CONTOUR_DESAT
-    del tgt, bright, lum
-    return np.clip(base, 0, 255, out=base)
-
+    H = base.shape[0]
+    CH = 2048
+    wcol = np.asarray([0.299, 0.587, 0.114], np.float32)
+    for y0 in range(0, H, CH):
+        y1 = min(H, y0 + CH)
+        blk = base[y0:y1]
+        lum = blk @ wcol
+        snow = np.clip((lum - 200.0) / 45.0, 0.0, 1.0)
+        k = k0 + (SNOW_CONTOUR_DARKEN[mode] - k0) * snow
+        del snow
+        bright = lum >= CONTOUR_LIGHT_T
+        tgt = lum * k
+        alt = lum + add
+        np.maximum(alt, lum + dmin, out=alt)                 # 暗底：提亮到至少 +dmin
+        np.minimum(tgt, lum - dmin, out=tgt)                 # 亮底：压暗到至少 −dmin
+        np.copyto(tgt, alt, where=~bright)
+        del alt, bright
+        np.clip(tgt, 6.0, 252.0, out=tgt)
+        ratio = tgt / np.maximum(lum, 1.0)                   # 保住底图色相
+        del lum
+        blk *= ratio[:, :, None]
+        del ratio
+        blk *= (1 - CONTOUR_DESAT)                           # 彩度让给底图
+        blk += tgt[:, :, None] * CONTOUR_DESAT
+        del tgt
+        np.clip(blk, 0, 255, out=blk)
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
                    minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
