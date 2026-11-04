@@ -1360,6 +1360,7 @@ def _contour_tint(base, mode, dmin=None):
         blk += tgt[:, :, None] * CONTOUR_DESAT
         del tgt
         np.clip(blk, 0, 255, out=blk)
+    return base          # 就地改的是 base 的视图，调用方仍按返回值取色（别丢这一行）
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
                    minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
