@@ -83,6 +83,14 @@ def _shot_bands():
     while y < _IH:
         bands.append((y, min(band_logical, _IH - y)))
         y += band_logical
+    # ⚠ 末带过薄就并进上一带。2026-11-05 郭喀拉29天（IH=842、带高 120）：
+    #   末带只剩 **2 逻辑 px**（24 px 物理高），截出来整条都是页面白底 → 连续判白、
+    #   重截 4 次后直接报错。阈值取 1/4 带高，合并后面积仍在 shot_max_mp 之内。
+    if len(bands) >= 2 and bands[-1][1] < band_logical * 0.25:
+        _y0 = bands[-2][0]
+        _end = bands[-1][0] + bands[-1][1]
+        bands[-2] = (_y0, _end - _y0)
+        bands.pop()
     return bands
 
 
