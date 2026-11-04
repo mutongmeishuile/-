@@ -1037,7 +1037,7 @@ TINT_COOL_RGB = (0.90, 0.95, 1.04)
 TINT_WARM_RGB = (1.05, 1.00, 0.95)
 
 
-def shade_rgb(rgb, hs, snow_w=None):
+def shade_rgb(rgb, hs, snow_w=None, snow_shape=(0.58, 0.60)):
     """分层设色 × 晕渲 → 明暗塑形 +（可选）阴阳分色。
 
     ⚠ 2026-11-04 **按行分块**实现：248 M px 的大窗口下，单个 (H,W,3) float32 临时数组
@@ -1072,7 +1072,7 @@ def shade_rgb(rgb, hs, snow_w=None):
         out[over] = HL_CLIP + (out[over] - HL_CLIP) * HL_KEEP    # 高光软限幅
         if sw is not None:
             w = sw[y0:y1][..., None]
-            shaped = np.clip(r * (0.58 + 0.60 * h)[..., None], 0, 255).astype(np.float32)
+            shaped = np.clip(r * (snow_shape[0] + snow_shape[1] * h)[..., None], 0, 255).astype(np.float32)
             shaped -= out
             shaped *= w
             out += shaped
@@ -1345,12 +1345,14 @@ def _contour_tint(base, mode, dmin=None):
     tgt[~bright] = np.maximum(tgt[~bright], lum[~bright] + dmin)
     np.clip(tgt, 6.0, 252.0, out=tgt)
     ratio = tgt / np.maximum(lum, 1.0)                             # 保住底图色相
-    col = base * ratio[:, :, None]
+    # ⚠ 就地写回 base（调用方传的是 f.copy()，可以改）：原写法 `col = base * ratio` 每级
+    #   新建一个 (H,W,3)（22000 px 时 3.14 GB），39 级等高线累积触发 OOM。
+    base *= ratio[:, :, None]
     del ratio
-    col *= (1 - CONTOUR_DESAT)                                     # 彩度让给底图
-    col += tgt[:, :, None] * CONTOUR_DESAT
+    base *= (1 - CONTOUR_DESAT)                                    # 彩度让给底图
+    base += tgt[:, :, None] * CONTOUR_DESAT
     del tgt, bright, lum
-    return np.clip(col, 0, 255, out=col)
+    return np.clip(base, 0, 255, out=base)
 
 
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
@@ -2134,17 +2136,24 @@ def build_terrain():
     #   两者叠加 → 雪原变成"白纸 + 等高线"，贡嘎主峰群 2400 m 高差全是平的。
     #   现在改为：**雪面用更强的明暗塑形**（见 shade_rgb 的 shaped），只保留一点点回抬。
     # 雪线以上按坡度混岩：陡壁露岩、缓坡积雪（比"线以上全白"真实得多）
-    if SNOW_ROCK_MIX > 0:
+    # 雪面口径可按线路覆盖（2026-11-04）：
+    #   "snow_rock_mix" 陡壁露岩比例 —— 区域总览这种 1:20 万尺度上，0.42 会让雪区布满
+    #     灰岩条纹，远看像"花斑"；调小后雪原才连片。
+    #   "snow_shape"    雪面明暗配比 (ambient, directional)。单线 1:5 万用 0.58/0.60 出立体感；
+    #     总览尺度上对比过强会把雪切成一块块亮斑，用 0.80/0.26 更接近"雪原"。
+    _srm = _route_cfg("snow_rock_mix", SNOW_ROCK_MIX)
+    _sshape = _route_cfg("snow_shape", (0.58, 0.60))
+    if _srm > 0:
         gy, gx = np.gradient(dem)
         res_m = 156543.03392 * np.cos(np.radians(lat_c)) / (2 ** meta["z"])   # DEM 像元边长（米）
         slope = np.sqrt(gx ** 2 + gy ** 2) / max(res_m, 1e-6)
         t0, t1 = SNOW_ROCK_T
         rock = np.clip((slope - t0) / max(t1 - t0, 1e-6), 0.0, 1.0)
         above = np.clip((dem_tint - (snow_m - 120)) / 260.0, 0.0, 1.0)  # 残雪过渡带 120 m
-        w = (above * rock * SNOW_ROCK_MIX)[..., None]
+        w = (above * rock * _srm)[..., None]
         rgb = rgb * (1 - w) + np.array(SNOW_ROCK_RGB, np.float32) * w
     snow_w = np.clip((dem_tint - snow_m) / 500.0, 0.0, 1.0) * 0.85
-    img = shade_rgb(rgb, hs, snow_w=snow_w)
+    img = shade_rgb(rgb, hs, snow_w=snow_w, snow_shape=_sshape)
     # ⚠ 大画幅（24000 px / 334 M px）下这两步各要 3.7 GB：就地 clip + 立刻释放
     #   rgb/hs/snow_w，否则 paint_contours 还要 copy 一份时必 OOM（2026-11-04 实测）。
     del rgb, hs, snow_w
