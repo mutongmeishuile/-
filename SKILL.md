@@ -475,7 +475,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
   | `CFG["map_ss"]` | 3 | 底图超采样倍率（栅格 = 1504 × SS）。**只加锐度、不加信息** —— DEM 上限见下 |
   | `CFG["embed_max"]` | 1600 | 网页内嵌底图的像素上限。浏览器放大 200% 还糊，先动它 |
   | `CFG["jpg_quality"]` / `embed_quality` | 86 / 86 | JPEG 质量（4:4:4 不抽样）。细线多的图 86 的块效应最明显 |
-  | `CFG["shot_max_mp"]` / `shot_band_min_logical"]` | 45 / 600 | 分带截图的单带面积上限与最小带高。**map_ss ≥ 5 必调**：单带 >31 MP 会被 Chromium 截成白带 |
+  | `CFG["shot_max_mp"]` / `CFG["shot_band_min_logical"]` | 45 / 600 | 分带截图的单带面积上限与最小带高。**map_ss ≥ 5 必调**：单带 >31 MP 会被 Chromium 截白。⚠ 两个键**必须成对改**：`band_logical = max(shot_band_min_logical, band_px // map_ss)`，默认 600 在 `map_ss=8` 时把带高钉成 4800 物理 px（≈58 MP/带）→ 首带连截 4 次全白后 `render_map_hi` 直接报错「第 1 带连续 4 次截出白带」。20000 px 级出图用 `shot_max_mp: 30` + `shot_band_min_logical: 55`（2026-11-05 伯舒拉岭三线实测） |
   | `CFG["map_aspect_max"]` | 无（不限制） | 地图**宽∶高**上限（如 `1.6`）。底图固定宽 1504×SS，高度由窗口南北跨度推出；东西跨度远大于南北的横向切脊线会被拉成极扁横图，设此值可把**南北外扩**到该比例，图面更协调。只扩不缩，图本来就窄/方则原样不动 |
   | `CFG["scale_bar_frac"]` | 0.16 | 比例尺目标长度占**图宽**的比例。过宽的线路把比例尺收到一成左右（如 `0.10`）即可 |
   | `CFG["osm_label_size"]` | 无（保持分级） | 把所有 OSM 地名**拉平成同一字号**（如 `13` 或 `9`）。默认按类别/高程分 8 档（镇 15.5 / 村 14 / 小村 12.5 / 峰 14·13·11 / 水系·POI 11.5）；地名密集的总览图分档会显得杂乱 |
