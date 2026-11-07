@@ -2340,13 +2340,24 @@ def build_terrain():
         paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
                        m_per_px=_m_per_px, w_px=_w_px, raster_shape=(RASTER_H, RASTER_W))
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
+    # ⚠ CFG["snowline_draw"]=False 只关**这条蓝虚线**，地貌垂直带的雪色照旧按 snow_m 分档。
+    #   为什么需要这个开关（2026-11-07 GHT 全幅实测）：雪线掩膜是「任何 below/above 交界」，
+    #   在地势平缓的高原面上，5350 m 等高线会绕出上千个小闭环 → 虚线节距又被放大到
+    #   117/234 输出 px，整片高原变成蓝色方块麻点。窗口跨到整条喜马拉雅时只留色带更干净。
     scale_raster_y = RASTER_H / dh
-    snow_mask = paint_snowline(arr, dem_ref, level=snow_m,
-                               raster_shape=(RASTER_H, RASTER_W))
+    _snow_draw = _route_cfg("snowline_draw", True)
+    if _snow_draw:
+        snow_mask = paint_snowline(arr, dem_ref, level=snow_m,
+                                   raster_shape=(RASTER_H, RASTER_W))
+    else:
+        snow_mask = None
     pil = Image.fromarray(arr, "RGB")
     snow_cells = set()
     if snow_mask is None:
-        print(f"   雪线 {snow_m:.0f} m：不在本窗口高程范围内，跳过")
+        if _snow_draw:
+            print(f"   雪线 {snow_m:.0f} m：不在本窗口高程范围内，跳过")
+        else:
+            print(f"   雪线 {snow_m:.0f} m：CFG['snowline_draw']=False → 只留色带，不画蓝虚线")
     else:
         pil, snow_cells = draw_snowline_label(
             pil, dem, snow_m, (scale_raster, scale_raster_y),
