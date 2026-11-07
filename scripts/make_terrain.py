@@ -2306,14 +2306,39 @@ def build_terrain():
     _w_px = None
     if _cw:
         _w_px = (int(_cw[0]), int(_cw[1]))
+    # 两种线宽口径（2026-11-07 用户先选「逻辑宽恒定」，随后改为「输出 px 固定」）：
+    #   · 默认 False → `contour_width` 单位是**基准栅格 px**，出图时掩膜整体放大 ×SS/3，
+    #     所以逻辑宽恒定（4512 图 1/2 px，19552 图 4.33/8.66 px，换算逻辑宽仍 1/3、2/3）。
+    #   · True       → `contour_width` 单位是**最终图上的实际像素**，无论 SS 多大都恒
+    #     为首 1 / 计 2 px。代价：线覆盖率 ∝ 1/放大倍数（缩图会变淡），且与选档判据
+    #     （在基准栅格上测）脱钩。默认关，别影响既有线路。
+    _abs_px = bool(_route_cfg("contour_width_absolute", False))
+    _k = RASTER_W / _ref_w
+    if _abs_px:
+        _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_w_px[0]}/{_w_px[1]} px@{_ref_w}px 基准 → ×{RASTER_W / _ref_w:.2f} 出图）…")
+              f"线宽 {_wp[0]}/{_wp[1]} px@出图，固定不随超采变化）…")
+    elif _w_px:
+        print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+              f"线宽 {_w_px[0]}/{_w_px[1]} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
     else:
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_w_major} px@{_ref_w}px 基准 → ×{RASTER_W / _ref_w:.2f} 出图）…")
+              f"线宽 {_w_major} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
     arr = np.asarray(pil).copy()
-    paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
-                   m_per_px=_m_per_px, w_px=_w_px, raster_shape=(RASTER_H, RASTER_W))
+    if _abs_px:
+        # 只在**出图栅格**上重算 band edges（1 px 原始边线），再按固定 px 加宽；
+        # 等高距、陡坡省略的物理坡度仍来自基准 plan（m_per_px 同比缩小即可）。
+        # ⚠ 这张 dem_raster 用完立刻 del —— 226 MP 画幅下它是 900 MB，
+        #   留着会与 paint_contours 的 f / base 一起撞内存上限。
+        dem_raster = np.asarray(
+            Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS))
+        _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
+        paint_contours(arr, dem_raster, 0, 0, minor=c_minor, major=c_major,
+                       m_per_px=_m_per_px / _k, w_px=_wp)
+        del dem_raster
+    else:
+        paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
+                       m_per_px=_m_per_px, w_px=_w_px, raster_shape=(RASTER_H, RASTER_W))
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     scale_raster_y = RASTER_H / dh
     snow_mask = paint_snowline(arr, dem_ref, level=snow_m,

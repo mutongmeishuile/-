@@ -1172,6 +1172,47 @@ def t_contour_ss_invariant():
           f"{a * 100:.2f}% → {b * 100:.2f}%")
 
 
+def t_contour_width_absolute():
+    """两种线宽口径的判据（2026-11-07 用户改口径：「设计的首 1/计 2 px，不随超采变化」）。
+
+    覆盖率 = 线宽 × 线长 / 面积。出图放大 k 倍时：
+      · 逻辑宽恒定（默认）：宽、长各 ×k，面积 ×k² → **覆盖率守恒**；
+      · 输出 px 固定（CFG["contour_width_absolute"]=True）：宽不变、长 ×k、
+        面积 ×k² → 覆盖率降为 **1/k**。
+    两条断言分别钉住这两种口径，谁把模式弄反都会立刻红。
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        import make_terrain as MT
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+    h, w, k = 200, 320, 4
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    dem = 4600 + 260 * np.sin(xx / 29.0) + 190 * np.sin(yy / 37.0) + 70 * np.sin((xx + yy) / 17.0)
+    H, W = h * k, w * k
+    dem_big = np.asarray(Image.fromarray(dem, "F").resize((W, H), Image.BILINEAR),
+                         dtype=np.float32)
+    kw = dict(minor=25, major=100, derived=False, w_px=(1, 2))
+    cov0 = (MT.paint_contours(np.full((h, w, 3), 210, np.uint8), dem, **kw) != 210).any(2).mean()
+    cov_a = (MT.paint_contours(np.full((H, W, 3), 210, np.uint8), dem,
+                               raster_shape=(H, W), **kw) != 210).any(2).mean()
+    cov_b = (MT.paint_contours(np.full((H, W, 3), 210, np.uint8), dem_big,
+                               **kw) != 210).any(2).mean()
+    check("默认口径：掩膜放大 4× 后线覆盖率守恒（逻辑宽恒定）",
+          abs(cov_a - cov0) <= 0.12 * cov0,
+          f"{cov0 * 100:.2f}% → {cov_a * 100:.2f}%")
+    check("absolute 口径：出图放大 4× 后覆盖率约降为 1/4（输出 px 固定）",
+          0.17 * cov0 < cov_b < 0.36 * cov0,
+          f"{cov0 * 100:.2f}% → {cov_b * 100:.2f}%（期望 ≈{cov0 * 100 / 4:.2f}%）")
+    check("contour_width_absolute 默认关闭（既有线路不受影响）",
+          MT._route_cfg("contour_width_absolute", False) is False,
+          f"实际 {MT._route_cfg('contour_width_absolute', False)!r}")
+    check("CONTOUR_WIDTH 设计值仍是 首1/计2 px", tuple(MT.CONTOUR_WIDTH) == (1, 2),
+          str(MT.CONTOUR_WIDTH))
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1183,7 +1224,8 @@ def main():
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal,
-               t_pbf_registry, t_map_ss_env, t_contour_ss_invariant, t_logging):
+               t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
+               t_contour_width_absolute, t_logging):
         try:
             if VERBOSE:
                 fn()
