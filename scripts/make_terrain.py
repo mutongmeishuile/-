@@ -1399,6 +1399,9 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
         n_skip = int((m_minor & ~keep_minor).sum())
         m_minor &= keep_minor
         m_major &= keep_major
+        # 立即释放：这三个 float32 全幅数组 ≈ 3.4 GB/张（16000×18770），
+        # 下面 f / base / col 还要各占一张同尺寸的图 —— 不删就会撞进程内存上限。
+        del gy, gx, tan_slope, keep_minor, keep_major
     if w_px is not None:
         # 陡坡省略先作用在 1 px 原始边线上，再按线路指定的固定 px 宽加粗 ——
         # 这样"陡坡省略"仍然生效（只是加宽后的线会向省略区伸出 1 px，属正常制图行为）。
@@ -1422,7 +1425,11 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
         else:
             col = np.asarray(C_MINOR if mode == 0 else C_MAJOR, np.float32)
         f[mask] = f[mask] * (1 - a) + col * a
-    np.copyto(rgb, np.clip(f, 0, 255).astype(np.uint8))
+    # ⚠ 就地 clip + 先出 uint8 再 copyto：`np.clip(f,0,255).astype(uint8)` 会同时
+    #   持有 f(3.36 GB) + clip 副本(3.36 GB) + uint8(1.1 GB)。全幅大图（>250 MP）
+    #   上这就是压垮进程的那一根稻草（2026-11-05 伯舒拉岭三线总览实测）。
+    np.clip(f, 0, 255, out=f)
+    np.copyto(rgb, f.astype(np.uint8))
     n_lv = int((dem_out.max() - dem_out.min()) // minor)
     print(f"   等高线 每 {minor:.0f} m（计曲线每 {major:.0f} m），约 {n_lv} 级，"
           f"线覆盖 {m_minor.mean()*100:.1f}% 像素"
@@ -2162,7 +2169,10 @@ def build_terrain():
         w = (above * rock * _srm).astype(np.float32)[..., None]
         rgb *= (1.0 - w)
         rgb += np.asarray(SNOW_ROCK_RGB, np.float32) * w
-        del w
+        # ⚠ 这 5 个都是 **DEM 分辨率**的 float32 全幅数组（z14 / 320 M px 时各 1.28 GB，
+        #   合计 6.4 GB），用完不删会一路活到 paint_contours —— 那里光 rgb/f/base/tint
+        #   就要 11 GB，加起来直接撞进程内存上限（2026-11-05 伯舒拉岭三线总览实测 OOM）。
+        del w, gy, gx, slope, rock, above
     snow_w = np.clip((dem_tint - snow_m) / 500.0, 0.0, 1.0) * 0.85
     img = shade_rgb(rgb, hs, snow_w=snow_w, snow_shape=_sshape)
     # ⚠ 大画幅（24000 px / 334 M px）下这两步各要 3.7 GB：就地 clip + 立刻释放
