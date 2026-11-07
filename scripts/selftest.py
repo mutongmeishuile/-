@@ -1103,6 +1103,75 @@ def t_logging():
     check("默认不打印细节", not F._VERBOSE, str(F._VERBOSE))
 
 
+def t_contour_ss_invariant():
+    """等高线几何与超采样倍率脱钩（2026-11-07 用户：「等高线不随超采变动」）。
+
+    旧口径把一切建在 `dem_out`（= RASTER_W 宽）上 → 覆盖率 ∝ 1/画幅高度、
+    线宽是固定栅格 px、雪线虚线节距也是固定栅格 px。于是同一条线
+    SS=3 选 25 m、SS=4 选 20 m、SS=13 选 10 m（珠峰东坡实测 25 m 覆盖
+    18.5% → 13.8% → 4.0%），线还越画越细 —— 那次大画幅只能手钉 `contour_minor`。
+
+    这里断言三件事：
+      ① 基准栅格尺寸与 SS 无关（宽恒 = LOGICAL_W × CONTOUR_REF_SS）；
+      ② 同一份地形在 SS=3 / SS=13 两个进程里选出的等高距**逐字相等**；
+      ③ 掩膜放大 N 倍后线占比不变（否则"放大"就等于"变细"）。
+    """
+    import os as _os
+    import subprocess
+    try:
+        import numpy as np
+        import make_terrain as MT
+    except BaseException as e:                                      # noqa
+        print(f"         （跳过：{type(e).__name__}: {e}）")
+        return
+    for name in ("contour_ref_size", "contour_plan", "_upsample_mask"):
+        if not hasattr(MT, name):
+            check(f"make_terrain 有 {name}", False, "缺失")
+            return
+
+    # ① 基准尺寸：两种画幅比例，宽度必须都是 LOGICAL_W×CONTOUR_REF_SS
+    want = MT.LOGICAL_W * MT.CONTOUR_REF_SS
+    w1 = MT.contour_ref_size((1200, 900))[0]
+    w2 = MT.contour_ref_size((3000, 500))[0]
+    check("基准栅格宽恒 = LOGICAL_W×CONTOUR_REF_SS（与 SS、画幅比例无关）",
+          w1 == want and w2 == want, f"{w1}/{w2} vs {want}")
+
+    # ② 同一地形在 SS=3 / SS=13 下选档一致（子进程真读 HIKING_MAP_SS）
+    _code = (
+        "import numpy as np, make_terrain as m;"
+        "y,x=np.mgrid[0:1700,0:2900].astype(np.float32);"
+        "dem=4600+900*np.sin(x/210.0)+650*np.sin(y/170.0)+380*np.sin((x+y)/95.0);"
+        "r=m.contour_plan(dem,28.0,14,verbose=False);"
+        "print(r[2],r[3],m.SS,m.RASTER_W)"
+    )
+    got = {}
+    for ss in ("3", "13"):
+        try:
+            p = subprocess.run([sys.executable, "-c", _code], cwd=str(HERE),
+                               env=dict(_os.environ, HIKING_MAP_SS=ss),
+                               capture_output=True, text=True, timeout=240)
+            got[ss] = (p.stdout or "").split()
+        except Exception as e:                                      # noqa
+            got[ss] = []
+            check(f"SS={ss} 子进程跑得起来", False, f"{type(e).__name__}: {e}")
+    ok2 = bool(got.get("3")) and got.get("3")[:2] == got.get("13", [None, None])[:2]
+    check("同一地形 SS=3 / SS=13 选出的等高距相同", ok2,
+          f"SS=3 → {got.get('3')} / SS=13 → {got.get('13')}")
+    if got.get("13"):
+        check("SS=13 的画幅确实是 19552 px（对照：几何仍在 4512 基准上）",
+              got["13"][2:] == ["13", "19552"], str(got["13"]))
+
+    # ③ 掩膜放大后线占比不变：斜线在 4× 放大下仍占同样的比例
+    h, w = 300, 400
+    yy, xx = np.mgrid[0:h, 0:w]
+    m = ((xx + yy) % 23 < 1)
+    up = MT._upsample_mask(m, (h * 4, w * 4))
+    a, b = m.mean(), up.mean()
+    check("掩膜放大 4× 后线占比不变（±5%，自适应阈值守恒）",
+          up.shape == (h * 4, w * 4) and abs(a - b) <= 0.05 * a,
+          f"{a * 100:.2f}% → {b * 100:.2f}%")
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1114,7 +1183,7 @@ def main():
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal,
-               t_pbf_registry, t_map_ss_env, t_logging):
+               t_pbf_registry, t_map_ss_env, t_contour_ss_invariant, t_logging):
         try:
             if VERBOSE:
                 fn()

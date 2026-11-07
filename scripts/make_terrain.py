@@ -212,11 +212,23 @@ SNOW_ROCK_T = (1.05, 1.75)    # 46° 起混 / 60° 全岩（只有真陡壁才�
 SNOW_ROCK_RGB = (156, 156, 160)
 TINT_BAND_M = 0.0
 CONTOUR_DILATE = (0, 0)
-# 线宽默认（首, 计），单位**栅格 px**，不随超采样倍率变化（2026-10-28 用户定默认）。
+# 线宽默认（首, 计），单位**基准栅格 px**（= 4512 px 画幅上的 px，见 CONTOUR_REF_SS），
+# 不随超采样倍率变化（2026-10-28 用户定默认）。出图时掩膜放大 → 线宽跟着等比放大。
 # 奇数宽走十字膨胀、偶数宽走方形膨胀（见 `_widen`），所以 2 px 也是精确 2 px。
 # 线路级覆盖：CFG["contour_width"] = (2, 3)；显式写 None 退回旧行为
-# （首线恒 1 px、计线 max(0, SS-2) 补偿）。
+# （首线恒 1 px、计线 max(0, 3-2) 补偿）。
 CONTOUR_WIDTH = (1, 2)
+# ---- 等高线几何基准栅格（2026-11-07 用户：「等高线不随超采变动」）----
+# 超采样 SS 只该是"清晰度旋钮"，不该改等高线的**几何**。但旧实现把一切建在
+# `dem_out`（= RASTER_W 宽）上：选档覆盖率 ∝ 1/画幅高度、线宽是固定栅格 px、
+# 雪线虚线节距也是固定栅格 px —— 于是同一条线 SS=3 选 25 m、SS=4 选 20 m、SS=13 选 10 m
+# （珠峰东坡实测 25 m 覆盖 18.5% → 13.8% → 4.0%，level 数直接翻倍），
+# 线还越画越细、雪线虚线糊成实线。这就是 2026-11-07 那次大画幅"必须手钉 contour_minor" 的根因。
+# → 现在所有像素级几何（等高距选档、陡坡省略、线宽、虚线节距）一律在**基准栅格**上定义，
+#   出图只把掩膜放大到 RASTER_W（放大不改变相对线宽）。
+#   基准取 3 = 4512 px：0.15/0.20 覆盖率区间（2026-10-25）与 (1,2) 线宽（10-28）
+#   都是在这个画幅上定的；换基准等于把 37 条线路的选档结果集体推翻。
+CONTOUR_REF_SS = 3
 # 陡坡省略阈值（tan，不是角度）：超过就不画该档等高线。理由见 paint_contours 的注释。
 # 45° = 1.0；63° = 2.0。可按线路在 route_def.CFG 覆盖。
 STEEP_SKIP_MINOR = 1.0
@@ -1134,7 +1146,7 @@ def _box_dilate(m, w):
 
 
 def _widen(m, w_px):
-    """把 1 px 的线加宽到**精确** w_px 宽（单位：栅格像素）。
+    """把 1 px 的线加宽到**精确** w_px 宽（单位：基准栅格像素）。
 
     为什么要有它：`_dilate_n` 是十字膨胀，宽度只能是奇数（1 / 3 / 5 …）。
     但「计曲线 2 px、首曲线 1 px，且**不随超采样变化**」这种诉求需要偶数宽度
@@ -1147,6 +1159,63 @@ def _widen(m, w_px):
     if w % 2 == 1:
         return _dilate_n(m, (w - 1) // 2)
     return _box_dilate(m, w)
+
+
+def contour_ref_size(dem_shape):
+    """等高线几何的**基准栅格**尺寸 (W, H) —— 宽恒 = LOGICAL_W × CONTOUR_REF_SS。
+
+    与出图超采样倍率无关：超采样只决定"把这张掩膜放大几倍"，
+    不参与等高距/线宽/陡坡省略的任何计算（见 CONTOUR_REF_SS 的说明）。
+    """
+    w = LOGICAL_W * CONTOUR_REF_SS
+    h = max(1, int(round(dem_shape[0] * w / float(dem_shape[1]))))
+    return w, h
+
+
+def _upsample_mask(m, shape):
+    """把基准栅格的线掩膜放大到出图栅格，**线占比守恒**。
+
+    为什么不是简单阈值：双线性放大后取固定 128 会系统性变细（4× 实测 4.35% → 3.81%，
+    掉 12%）—— 放大反而把线抹细，正是要避免的那种"随超采样变动"。
+    这里用直方图反解阈值：选一个 thr 让放大后的线像素数等于基准栅格的线像素数，
+    于是"放大 N 倍"严格等于"线宽放大 N 倍"。
+
+    双线性而不是最近邻：SS=13 时每级放大 4.3×，最近邻会让斜向等高线变成 4 px 楼梯。
+    """
+    shape = (int(shape[0]), int(shape[1]))
+    if tuple(shape) == tuple(m.shape):
+        return m
+    if not m.any():
+        return np.zeros(shape, bool)
+    im = Image.fromarray((m * 255).astype(np.uint8), "L")
+    a = np.asarray(im.resize((shape[1], shape[0]), Image.BILINEAR))
+    hist = np.bincount(a.ravel(), minlength=256)
+    keep = a.size - np.cumsum(hist)          # keep[k] = 像素值 > k 的个数
+    want = m.mean() * a.size                 # 目标线像素数（基准栅格的占比）
+    thr = int(np.argmin(np.abs(keep - want)))
+    return a > thr
+
+
+def contour_plan(dem, lat_c, z, verbose=True):
+    """等高线几何方案 —— **完全不看出图栅格 / 超采样倍率**。
+
+    返回 (dem_ref, m_per_px, minor, major, cov, ref_w)。
+
+    这是 2026-11-07「等高线不随超采变动」的落点：等高距选档、陡坡省略、
+    线宽、雪线虚线节距全部只依赖这份 dem_ref（基准栅格），出图时才把掩膜放大。
+    搬到这里而不是留在 build_terrain 里，是为了让 selftest 能在**不同
+    HIKING_MAP_SS 下跑同一份地形**并断言选档结果逐字相等（回归守卫）。
+    """
+    ref_w, ref_h = contour_ref_size(dem.shape)
+    dem_ref = np.asarray(
+        Image.fromarray(np.asarray(dem, np.float32), "F").resize((ref_w, ref_h),
+                                                                Image.LANCZOS),
+        dtype=np.float32)
+    # m_per_px 必须**先算**：选档判据要用它复刻陡坡省略（2026-10-25），否则算出来的
+    # 覆盖率是"没省略的线数"，高山线会系统性低估实际密度、选粗一档。
+    m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)) / (ref_w / dem.shape[1])
+    minor, major, cov = pick_contour_interval(dem_ref, verbose=verbose, m_per_px=m_per_px)
+    return dem_ref, m_per_px, minor, major, cov, ref_w
 
 
 def contour_coverage(dem_out, interval):
@@ -1372,7 +1441,7 @@ def _contour_tint(base, mode, dmin=None):
 def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
                    minor=CONTOUR_MINOR, major=CONTOUR_MAJOR,
                    derived=CONTOUR_DERIVED, m_per_px=None,
-                   alpha=None, dmin=None, w_px=None):
+                   alpha=None, dmin=None, w_px=None, raster_shape=None):
     """在输出分辨率上栅格化等高线并写入 RGB 数组。
 
     原理：band = floor(elev / 间隔)，相邻像素 band 不同即该处有一条等高线。
@@ -1381,6 +1450,10 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
 
     derived=True 时线色由底图逐像素派生（见 `_contour_tint`），
     这是"等高线配色与该区域渲染颜色接近"的实现处。
+
+    `dem_out` 必须是**基准栅格**的 DEM（见 `contour_ref_size`），不是出图栅格 ——
+    线宽、陡坡省略、覆盖率因此与超采样倍率脱钩（2026-11-07）。给了
+    `raster_shape=(H, W)` 就把掩膜放大到出图尺寸；不给则假定 `rgb` 与 `dem_out` 同尺寸。
     """
     b_minor = np.floor(dem_out / minor).astype(np.int32)
     b_major = np.floor(dem_out / major).astype(np.int32)
@@ -1414,6 +1487,13 @@ def paint_contours(rgb, dem_out, w_minor=0, w_major=2,
         # 这样"陡坡省略"仍然生效（只是加宽后的线会向省略区伸出 1 px，属正常制图行为）。
         m_minor = _widen(m_minor, int(w_px[0]))
         m_major = _widen(m_major, int(w_px[1]))
+    if raster_shape is not None:
+        _rs = (int(raster_shape[0]), int(raster_shape[1]))
+        if _rs != m_minor.shape:
+            # 基准栅格掩膜 → 出图栅格：超采样只放大掩膜，不改几何（见 CONTOUR_REF_SS）。
+            # 放大在加宽之后做，所以线宽的相对值是"基准 px / 基准宽"，与 SS 无关。
+            m_minor = _upsample_mask(m_minor, _rs)
+            m_major = _upsample_mask(m_major, _rs)
     # alpha 融合写回（rgb 是 uint8，必须过 float，否则整数回绕会把线画成黑块）
     f = rgb.astype(np.float32)
     base = f.copy() if derived else None
@@ -1504,11 +1584,15 @@ def _snowline_from_cfg():
     return SNOWLINE_LEVEL
 
 
-def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL):
+def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL, raster_shape=None):
     """雪线：DEM level 等高线处叠蓝色虚线（arr 原地改）。返回 mask；高度不在窗口内返回 None。
 
     与 paint_contours 同一套 band-edge 原理，但用横向条纹打掩码变成虚线，
     并加粗一格 —— 缩图进长图后仍要看得出来。
+
+    `dem_out` 与 `paint_contours` 一样必须是**基准栅格**的 DEM：
+    虚线节距 9/18 px 也是"基准 px"，出图时随掩膜一起放大（否则 SS=13 时
+    18 px 节距只有 1.4 逻辑 px，虚线糊成实线）。给了 `raster_shape=(H, W)` 就放大。
     """
     below = dem_out < level
     cross = np.zeros(dem_out.shape, bool)
@@ -1517,11 +1601,18 @@ def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL):
     cross = _dilate(cross)
     if not cross.any():
         return None
-    stripe = (np.arange(cross.shape[1])[None, :] % 18) < 9       # 横向条纹 → 虚线
+    stripe = (np.arange(cross.shape[1])[None, :] % 18) < 9       # 横向条纹 → 虚线（基准 px）
     mask = cross & stripe
+    if raster_shape is not None:
+        _rs = (int(raster_shape[0]), int(raster_shape[1]))
+        if _rs != mask.shape:
+            mask = _upsample_mask(mask, _rs)
     f = arr.astype(np.float32)
     f[mask] = f[mask] * (1 - A_SNOWLINE) + np.asarray(C_SNOWLINE, np.float32) * A_SNOWLINE
-    np.copyto(arr, np.clip(f, 0, 255).astype(np.uint8))
+    # ⚠ 就地 clip：`np.clip(f,…).astype(uint8)` 在 226 MP 上要额外 900 MB 的 clip 副本
+    #   （与 paint_contours 同一个坑，见那里的注释）。
+    np.clip(f, 0, 255, out=f)
+    np.copyto(arr, f.astype(np.uint8))
     return mask
 
 
@@ -2193,12 +2284,11 @@ def build_terrain():
     pil = pil.filter(ImageFilter.UnsharpMask(radius=UNSHARP[0], percent=UNSHARP[1],
                                              threshold=UNSHARP[2]))
 
-    dem_out = np.asarray(Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS),
-                         dtype=np.float32)
-    # m_per_px 必须**先算**：选档判据要用它复刻陡坡省略（2026-10-25），否则算出来的
-    # 覆盖率是"没省略的线数"，高山线会系统性低估实际密度、选粗一档。
-    _m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / scale_raster
-    c_minor, c_major, c_cov = pick_contour_interval(dem_out, m_per_px=_m_per_px)
+    # 等高线几何一律在**基准栅格**上算（宽 4512 px，与超采样 SS 无关）：
+    # 超采样只负责"把这张掩膜放大几倍"，不参与等高距/线宽/陡坡省略/虚线节距
+    # 的任何计算（2026-11-07 用户「等高线不随超采变动」，详见 CONTOUR_REF_SS）。
+    # 顺带把旧的 dem_out（RASTER_W 宽 float32，SS=13 时 900 MB）整块省掉。
+    dem_ref, _m_per_px, c_minor, c_major, c_cov, _ref_w = contour_plan(dem, lat_c, meta["z"])
     # 计曲线间隔也可单独指定：CFG["contour_major"]。
     # 为什么需要：首曲线被固定成非整数倍时（如 15 m），`nice_major()` 只能给 75 m ——
     # 高程注记变成 75/150/225 这种不好读的数字。单独指定 100 m 就回到规范值。
@@ -2206,27 +2296,28 @@ def build_terrain():
     if _cmaj:
         c_major = float(_cmaj)
         print(f"   计曲线间隔由线路指定：{c_major:g} m")
-    _w_major = max(CONTOUR_DILATE[1], SS - 2)
+    # 老路径（contour_width=None）的计线补偿也按**基准 px**：SS-2 在 SS=13 时是 11 px，
+    # 放到基准栅格上等于 11/4512 的粗线（整幅糊成灰带）。基准口径恒为 3-2=1。
+    _w_major = max(CONTOUR_DILATE[1], CONTOUR_REF_SS - 2)
     # 线宽默认 CONTOUR_WIDTH=(1,2)，可按线路用 CFG["contour_width"] 覆盖，
-    # 单位**栅格 px**，不随超采样变；显式 None 退回老行为（首线 1 px、计线 SS-2 补偿）。
+    # 单位**基准栅格 px**（= 4512 px 画幅上的 px），不随超采样变；
+    # 显式 None 退回老行为（首线 1 px、计线基准 1 px 补偿）。
     _cw = _route_cfg("contour_width", CONTOUR_WIDTH)
     _w_px = None
     if _cw:
         _w_px = (int(_cw[0]), int(_cw[1]))
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_w_px[0]}/{_w_px[1]} px@{RASTER_W}px，不随超采样变化）…")
+              f"线宽 {_w_px[0]}/{_w_px[1]} px@{_ref_w}px 基准 → ×{RASTER_W / _ref_w:.2f} 出图）…")
     else:
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_w_major}@{RASTER_W}px）…")
+              f"线宽 {_w_major} px@{_ref_w}px 基准 → ×{RASTER_W / _ref_w:.2f} 出图）…")
     arr = np.asarray(pil).copy()
-    # 线宽补偿：SS>2 时等高线像素数不跟着涨，缩到 1600 内嵌/长图后会发虚
-    # （4512→1600 只有 0.35×，1 px 线只盖住 35% 像素）。计曲线补 1 px。
-    _w_major = max(CONTOUR_DILATE[1], SS - 2)
-    paint_contours(arr, dem_out, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
-                   m_per_px=_m_per_px, w_px=_w_px)
+    paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
+                   m_per_px=_m_per_px, w_px=_w_px, raster_shape=(RASTER_H, RASTER_W))
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     scale_raster_y = RASTER_H / dh
-    snow_mask = paint_snowline(arr, dem_out, level=snow_m)
+    snow_mask = paint_snowline(arr, dem_ref, level=snow_m,
+                               raster_shape=(RASTER_H, RASTER_W))
     pil = Image.fromarray(arr, "RGB")
     snow_cells = set()
     if snow_mask is None:
@@ -2248,7 +2339,9 @@ def build_terrain():
          "raster": [RASTER_W, RASTER_H], "ss": SS,
          "box": meta["box"], "bbox": [LON0, LAT0, LON1, LAT1], "z": meta["z"],
          "tx0": meta["tx0"], "ty0": meta["ty0"],
-         "contour": {"minor": c_minor, "major": c_major},   # 本次自适应选定的等高距
+         # 本次自适应选定的等高距；`ref_w` 记几何基准宽（超采样再怎么变，这个值不变，
+         # 排查"等高距怎么跟上次不一样"时先看它是不是同一个基准）。
+         "contour": {"minor": c_minor, "major": c_major, "ref_w": _ref_w},
          # 出图雪线（已含月档偏移）：图例 desc 是手写的，没有这个键就没法自动比对 ——
          # 2026-10-25 贡嘎 fork 实测 desc 写 5100 / 图上画 4950 的图文打架就是这么来的。
          # 下游 build_guide / map_svg / qa_guide 经 GC.check_snowline_legend 比对告警。

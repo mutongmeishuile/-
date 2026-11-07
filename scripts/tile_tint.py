@@ -23,6 +23,7 @@
 """
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -217,11 +218,18 @@ def build(tile_path=None, erase=True, verbose=True):
         img = tint
 
     print("[5/6] 本地 DEM 重绘等高线 + 高程标注（自绘的线才与地形严格同位）…")
-    dem_out = np.asarray(Image.fromarray(dem, "F").resize((MT.RASTER_W, RASTER_H),
-                                                          Image.LANCZOS), dtype=np.float32)
+    # 与 make_terrain 同口径：等高线几何一律在基准栅格上算（锐超采样不改等高距/线宽），
+    # 见 make_terrain.CONTOUR_REF_SS。这里若留在 RASTER_W 上，B 路线的等高距也会随
+    # map_ss 变（SS=3 选 25 m、SS=13 选 10 m），A/B 两条路线就不同款了。
+    dem_ref = np.asarray(
+        Image.fromarray(dem, "F").resize(MT.contour_ref_size(dem.shape), Image.LANCZOS),
+        dtype=np.float32)
+    _rw = MT.contour_ref_size(dem.shape)[0]
+    _mpp = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** meta["z"])) / (_rw / dw)
     arr = img.copy()
-    c_minor, c_major, _ = MT.pick_contour_interval(dem_out)
-    MT.paint_contours(arr, dem_out, *MT.CONTOUR_DILATE, minor=c_minor, major=c_major)
+    c_minor, c_major, _ = MT.pick_contour_interval(dem_ref, m_per_px=_mpp)
+    MT.paint_contours(arr, dem_ref, *MT.CONTOUR_DILATE, minor=c_minor, major=c_major,
+                      m_per_px=_mpp, raster_shape=(RASTER_H, MT.RASTER_W))
     pil = Image.fromarray(arr, "RGB")
     scale_raster_y = RASTER_H / dh
     pil, seed_cells = MT.draw_contour_labels(
