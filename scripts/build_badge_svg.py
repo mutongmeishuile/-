@@ -3,10 +3,12 @@
 
 什么时候需要跑它：
   · 换头像照片 / 改昵称或小红书号 / 想把徽标里那两行字再放大一点。
-  · 平时不用跑 —— `assets/avatar_ring.svg` 已经是构建好的成品（116 KB，自包含）。
+  · 平时不用跑 —— `assets/avatar_ring.svg` 已经是构建好的成品（222 KB，自包含）。
 
 它做的事（也是当初为什么要有这一步）：
-  1. 原稿 881 KB，其中 854 KB 是 1200×1200 的 PNG 照片 → 压到 640×640 JPEG（约 108 KB）；
+  1. 原稿 881 KB，其中 854 KB 是 1200×1200 的 PNG 照片 → 重采样成 1024×1024 JPEG
+     （2026-11-07 起；此前是 640：19552 px 大图里徽标要显示 1820 px，640 被放大 2.8 倍
+     一眼就糊。源照片本身只有 680 px，1024 是"放大 + 轻度锐化"的折中，体积 222 KB）；
   2. **刻度环和两行文字保持矢量** —— 地图上放大看不会糊，这是清晰度的根；
   3. 文字重排：原稿账号字号只有 22/1200，缩到地图徽标（直径 120–140 逻辑 px）上
      只剩 3.7 px 字高，矢量也读不出；改成 名称 66 / 账号 46、两行拉开，
@@ -16,6 +18,7 @@
     python scripts/build_badge_svg.py                      # 用默认值重建
     python scripts/build_badge_svg.py --account 559314345  # 换号（会写进两处：描边层 + 前景层）
     python scripts/build_badge_svg.py --name-size 70 --id-size 50 --photo 800
+    python scripts/build_badge_svg.py --photo 1600         # 超大画幅：允许放大（自动加锐化）
 """
 import argparse
 import base64
@@ -24,7 +27,7 @@ import re
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 HERE = Path(__file__).resolve().parent
 ASSETS = HERE.parent / "assets"
@@ -47,14 +50,23 @@ def main():
         sys.exit(f"找不到源文件：{SRC}")
     s = SRC.read_text(encoding="utf-8")
 
-    # ---- 1. 照片降采样 ----
+    # ---- 1. 照片尺寸 ----
+    # ⚠ 以前只能**降**采样（`if max(im.size) > a.photo`）。2026-11-07 珠峰东坡 19552 px
+    #   大图实测：徽标 140 逻辑 px × SS 13 = **1820 px**，而内嵌照片只有 640 px →
+    #   被放大 2.8 倍，1:1 裁出来是一片插值虚影（用户反馈「徽标似乎被压缩了」）。
+    #   放大本身不添细节，但**先把照片用 Lanczos 放大 + 轻度锐化**再交给浏览器，
+    #   比让浏览器在 13 倍缩放下现场插值干净得多（少了块状过渡与环状振铃）。
+    #   默认 --photo 640 仍走降采样，输出与之前**逐字节一致**。
     m = re.search(r'href="data:image/png;base64,([^"]+)"', s)
     if not m:
         sys.exit("源文件里找不到内嵌照片（data:image/png;base64）")
     raw = base64.b64decode(m.group(1))
     im = Image.open(io.BytesIO(raw)).convert("RGB")
-    if max(im.size) > a.photo:
+    _src_px = max(im.size)
+    if _src_px != a.photo:
         im = im.resize((a.photo, a.photo), Image.LANCZOS)
+        if a.photo > _src_px:                      # 放大才锐化，降采样后锐化会出白边
+            im = im.filter(ImageFilter.UnsharpMask(radius=1.1, percent=55, threshold=2))
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=88, optimize=True, progressive=True)
     s = s[:m.start(1)] + base64.b64encode(buf.getvalue()).decode("ascii") + s[m.end(1):]
