@@ -976,13 +976,32 @@ def t_label_knobs():
     check("right_only 分支不含左侧候选", "(-r" not in seg)
 
 
+def t_pbf_nepal():
+    """尼泊尔本地合成切片 + 下载不再产生 part 文件（2026-11-07）。"""
+    fo = (HERE / "fetch_osm.py").read_text(encoding="utf-8")
+    check("PROVINCE_BBOX 含 nepal", '"nepal":' in fo)
+    check("nepal 声明为本地合成切片", 'LOCAL_ONLY_PBF = {"nepal"}' in fo)
+    seg = fo.split("def _pbf_download", 1)[-1].split("def _pbf_ensure", 1)[0]
+    check("下载不再逐片删 part 文件", "p.unlink(missing_ok=True)" not in seg)
+    check("下载改用单临时文件按偏移写", "w.truncate(total)" in seg and "f.seek(s)" in seg)
+    try:
+        import fetch_osm as F                                    # noqa
+    except _IMPORT_ERR as e:                                      # noqa
+        check("fetch_osm 可导入", False, f"{type(e).__name__}: {e}")
+        return
+    cands = F._candidate_provinces((86.551, 27.507, 86.964, 28.113))   # EBC
+    check("EBC 窗口候选含 nepal", "nepal" in cands, str(cands))
+    check("nepal 排在虚覆盖的西藏前面", bool(cands) and cands[0] == "nepal", str(cands))
+    check("nepal 不联网下载", "nepal" in getattr(F, "LOCAL_ONLY_PBF", set()))
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
-               t_osm_reuse, t_labels_vector, t_label_knobs):
+               t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal):
         try:
             fn()
         except Exception as e:                                      # noqa

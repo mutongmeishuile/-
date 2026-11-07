@@ -6,6 +6,9 @@
     标签/坐标与 Overpass 一致（差别只在环起点）；**不可能返回半截数据**，
     且一次下载可被同省几十条线路共用。代价：首次下载 90–112 MB（约 14 min，分块并发），
     之后每抽一个窗口约 5–6 分钟，命中缓存秒级。
+  · 尼泊尔：`nepal-latest.osm.pbf` 是**本地合成的窗口级切片**（项目已有
+    Overpass 数据经 `_pbf_from_overpass.py` 重建，元数据在 `nepal-latest.json`），
+    无远程源；候选省命中它时优先于虚覆盖整个南亚的西藏粗矩形。
   · Overpass：429 / 504 / **200+半截数据无 remark** 三连的源头。
     仅在「境外或未覆盖省份」「切片拿不到」「抽出来要素数过少」时兜底。
 
@@ -900,6 +903,9 @@ PBF_CACHE_DIR = Path(os.environ.get("HIKING_OSM_PBF_CACHE") or
 # ⚠ 实测本机 geofabrik 直接超时（15 s 无响应），openstreetmap.fr 可通但要分块并发
 #   （单连接被限到 ~17 KB/s，12 路并发能到 150–200 KB/s）。
 PBF_URL = "https://download.openstreetmap.fr/extracts/asia/china/{p}-latest.osm.pbf"
+# 本地合成 / 手工放置的切片：没有远程 URL。缺文件时**不要**拿 PBF_URL 去请求
+# china/{p}-latest（404 → 静默回落 Overpass，等于这条通道不存在）。
+LOCAL_ONLY_PBF = {"nepal"}
 
 # 省份粗包围盒（lon0, lat0, lon1, lat1）。只用于判断"窗口落在哪个省"，
 # **故意放宽到互相重叠**：选错的代价是抓回 0 个要素（下面的闸门会回落到 Overpass），
@@ -916,6 +922,12 @@ PROVINCE_BBOX = {
     "gansu":     (92.30, 32.50, 108.80, 42.90),
     "shaanxi":   (105.40, 31.70, 111.30, 39.60),
     "shanxi":    (110.20, 34.50, 114.60, 40.80),
+    # 尼泊尔：**本地合成的窗口级切片**（`_pbf_from_overpass.py` 从项目已有的
+    # Overpass out geom 数据重建，见缓存目录里的 nepal-latest.json）。
+    # openstreetmap.fr 无尼泊尔切片、Geofabrik 本机不可达，所以它是 LOCAL_ONLY。
+    # 矩形写的是合成数据的真实覆盖范围，不是国界 —— 让 `_candidate_provinces`
+    # 能把它排在虚覆盖整个南亚的西藏粗矩形前面。
+    "nepal":     (83.45, 26.85, 88.45, 29.10),
     "hebei":     (113.40, 36.00, 119.90, 42.70),
     "henan":     (110.30, 31.30, 116.70, 36.40),
     "hubei":     (108.30, 29.00, 116.20, 33.30),
@@ -940,6 +952,11 @@ PROVINCE_BBOX = {
     "shanghai":  (120.80, 30.60, 122.10, 31.90),
     "hainan":    (108.60, 18.10, 111.10, 20.20),
 }
+
+# 矩形贴合**真实数据范围**的窗口级合成切片（不是按行政边界裁的省级片）。
+# 与粗省矩形重叠比例打平时要优先它：西藏粗矩形 78–99°E 会虚覆盖整个尼泊尔，
+# 不加权就会先白扫一遍 49 MB 的西藏片。
+_EXACT_SLICES = {"nepal"}
 
 _HIGHWAY = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
             "residential", "living_street", "service", "track", "path", "footway",
@@ -989,7 +1006,9 @@ def _candidate_provinces(bbox, min_frac=0.02):
         oh = max(0.0, min(lat1, y1) - max(lat0, y0))
         frac = ow * oh / area
         if frac >= min_frac:
-            hit.append((frac, p))
+            # 只用于排序：窗口级切片 +0.001，压过同 frac 的粗省矩形。
+            # 判据 `frac >= min_frac` 仍用真实重叠比例，不受这个偏移影响。
+            hit.append((frac + (0.001 if p in _EXACT_SLICES else 0.0), p))
     hit.sort(reverse=True)
     return [p for _f, p in hit]
 
@@ -1024,7 +1043,13 @@ def _pbf_node_hits(pbf, bbox):
 
 
 def _pbf_download(prov, jobs=12, total=None):
-    """分块并发下载省级切片（单连接 ~17 KB/s，必须并发）。返回本地路径。"""
+    """Range 分块并发下载切片（单连接 ~17 KB/s，必须并发）。返回本地路径。
+
+    ⚠ 2026-11-07 起**不再产生 .part 分块文件**：每个线程 seek 到同一个临时
+      文件的不同偏移直接写。旧版每片下载要删 12 个 part 文件，批量补 33 片
+      就是 396 次 unlink —— 会撞上 SAFE_DELETE 钩子（单轮累计 50 次即
+      FAIL_CLOSED），症状是「下载跑完但成品没落盘」+ 几百个 part 残留。
+    """
     import threading
     PBF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dst = PBF_CACHE_DIR / f"{prov}-latest.osm.pbf"
@@ -1041,13 +1066,17 @@ def _pbf_download(prov, jobs=12, total=None):
         return None
     print(f"   下载 {prov} 切片 {total / 1048576:.0f} MB（{jobs} 路并发）→ {dst.name}")
     step = (total + jobs - 1) // jobs
-    parts = [PBF_CACHE_DIR / f".{prov}.part{i:02d}" for i in range(jobs)]
+    tmp = dst.with_name(dst.name + ".tmp")
+    with open(tmp, "wb") as w:
+        w.truncate(total)                 # 预分配，让各线程按偏移随机写
+    done = [False] * jobs
     errs = []
 
     def one(i):
         s = i * step
         e = min(s + step - 1, total - 1)
         if s >= total:
+            done[i] = True
             return
         for att in range(4):
             try:
@@ -1055,10 +1084,13 @@ def _pbf_download(prov, jobs=12, total=None):
                                                            "Range": f"bytes={s}-{e}"})
                 with urllib.request.urlopen(req, timeout=300) as r:
                     data = r.read()
-                if len(data) == e - s + 1:
-                    parts[i].write_bytes(data)
-                    return
-                raise RuntimeError(f"长度不符 {len(data)} != {e - s + 1}")
+                if len(data) != e - s + 1:
+                    raise RuntimeError(f"长度不符 {len(data)} != {e - s + 1}")
+                with open(tmp, "r+b") as f:
+                    f.seek(s)
+                    f.write(data)
+                done[i] = True
+                return
             except Exception as ex:                               # noqa
                 errs.append(repr(ex)[:80])
                 time.sleep(2 + 3 * att)
@@ -1066,16 +1098,10 @@ def _pbf_download(prov, jobs=12, total=None):
     ts = [threading.Thread(target=one, args=(i,)) for i in range(jobs)]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    if any(not p.exists() for p in parts):
+    if not all(done):
         print(f"   ✗ 分块下载失败：{errs[-1] if errs else '未知'}")
-        for p in parts:
-            p.unlink(missing_ok=True)
+        # 故意不删 tmp：删文件会撞 SAFE_DELETE 钩子，下次 open("wb") 会覆盖它。
         return None
-    tmp = dst.with_suffix(".pbf.tmp")
-    with open(tmp, "wb") as w:
-        for p in parts:
-            w.write(p.read_bytes())
-            p.unlink(missing_ok=True)
     tmp.replace(dst)
     print(f"   ✓ {dst.name}（{dst.stat().st_size // 1048576} MB）")
     return dst
@@ -1087,6 +1113,9 @@ def _pbf_ensure(prov, allow_download=True):
         print(f"   用本地切片 {dst.name}（{dst.stat().st_size // 1048576} MB）")
         return dst
     if not allow_download:
+        return None
+    if prov in LOCAL_ONLY_PBF:
+        print(f"   {prov} 是本地合成切片（无远程源），{dst.name} 不存在 → 不联网下载")
         return None
     if os.environ.get("HIKING_OSM_PBF_AUTODL", "1") in ("0", "false", "no"):
         print(f"   切片 {dst.name} 不存在，且 HIKING_OSM_PBF_AUTODL=0 → 不自动下载")
