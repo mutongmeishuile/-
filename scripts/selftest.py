@@ -1206,9 +1206,18 @@ def t_contour_width_absolute():
     check("absolute 口径：出图放大 4× 后覆盖率约降为 1/4（输出 px 固定）",
           0.17 * cov0 < cov_b < 0.36 * cov0,
           f"{cov0 * 100:.2f}% → {cov_b * 100:.2f}%（期望 ≈{cov0 * 100 / 4:.2f}%）")
-    check("contour_width_absolute 默认关闭（既有线路不受影响）",
-          MT._route_cfg("contour_width_absolute", False) is False,
-          f"实际 {MT._route_cfg('contour_width_absolute', False)!r}")
+    # ⚠ 别直接读当前项目 CFG：项目按用户口径显式打开这个开关时（输出 px 固定），
+    #   读到的会是 True，把「技能缺省关闭」误判成失败（2026-11-07 尼泊尔四线实测）。
+    #   临时摘掉该键，测的才是「缺键 → 默认 False」这条不变量。
+    import route_def as _RD
+    _saved = _RD.CFG.pop("contour_width_absolute", None)
+    try:
+        check("contour_width_absolute 缺省时关闭（项目可显式启用）",
+              MT._route_cfg("contour_width_absolute", False) is False,
+              f"实际 {MT._route_cfg('contour_width_absolute', False)!r}")
+    finally:
+        if _saved is not None:
+            _RD.CFG["contour_width_absolute"] = _saved
     check("CONTOUR_WIDTH 设计值仍是 首1/计2 px", tuple(MT.CONTOUR_WIDTH) == (1, 2),
           str(MT.CONTOUR_WIDTH))
 
