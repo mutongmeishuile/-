@@ -68,8 +68,8 @@ SLACK_W, SLACK_H = 60, 260          # 给浏览器 chrome 留的余量（只用�
 # ⚠ 上限可按线路调低：`CFG["shot_max_mp"]`（默认 45）。map_ss 调大后每带面积跟着涨，
 #   超过 ~31 MP 就会截出白带（2026-10-27 梅里转山 map_ss=6 实测：每带 42 MP → 连续 4 次白带）。
 _MAX_SHOT_MP = int(CFG.get("shot_max_mp", 45) or 45) * 1_000_000
-# 每带的**逻辑**高度下限：SS 很大时按面积算出来的带高会小于这个值（带太碎、拼缝变多），
-#   所以下限也要能按线路调小（`CFG["shot_band_min_logical"]`，默认 600）。
+# 历史旋钮（`CFG["shot_band_min_logical"]`）：**已不参与分带计算**，保留只为旧配置不报错。
+#   它当年想解决"带太碎"，但一抬就会突破 `shot_max_mp`（见 _shot_bands 注释）。
 _BAND_MIN_LOGICAL = int(CFG.get("shot_band_min_logical", 600) or 600)
 
 
@@ -83,7 +83,13 @@ def _shot_bands():
     if W * (H + SLACK_H) <= _MAX_SHOT_MP:
         return [(0, _IH)]
     band_px = (_MAX_SHOT_MP // W) - SLACK_H          # 每带窗口面积 ≤ 上限
-    band_logical = max(_BAND_MIN_LOGICAL, int(band_px // _SS))
+    # ⚠ 带高只能由**像素预算**决定。旧写法 `max(_BAND_MIN_LOGICAL, band_px//_SS)` 里，
+    #   下限在 SS≈3 时永远小于预算（600 逻辑 ≈ 2400 px），等于没写；可一旦 SS 大
+    #   （SS=13 / 20000 px 长边），预算只够 157 逻辑 px，下限却硬抬到 600 →
+    #   **7800 px/带 = 152 MP**，把 45 MP 预算彻底废掉 → 无头浏览器软件光栅截白、
+    #   重截 4 次后报错（2026-11-07 珠峰东坡 19552×10114 实测）。
+    #   → 预算优先。想减少拼缝请调 `shot_max_mp`，别抬逻辑下限。
+    band_logical = max(1, int(band_px // _SS))
     bands, y = [], 0
     while y < _IH:
         bands.append((y, min(band_logical, _IH - y)))
@@ -150,7 +156,15 @@ def _white_ratio(a):
 # 连续白行/白列达到这么多条才算"白带"。Chromium 丢瓦片是**成块**丢（几百行），
 # 而 1–2 px 的发丝缝是**渲染接缝**（标题带与地图之间、图元缩放取整留下的 1 px），
 # 2026-10-27 梅里转山 map_ss=6 实测：接缝整行 100% 白，被旧判据当成"内容被裁"而误杀。
+# ⚠ 绝对条数不够：2026-11-07 珠峰东坡 19552×10114（SS=13）里，雪原是一整片纯白地形，
+#   有 **3 行连续 100% ≥246**（全图纯白只占 0.3%）—— 恰好等于 3，被判成截白、连截 4 次报错。
+#   → 阈值改成 max(3, 画幅的 0.5%)：真截断是整块（通常 40–60%），雪原只有零星几行。
 _WHITE_MIN_RUN = 3
+
+
+def _white_min_run(n):
+    """该轴上的"白带"判据条数：至少 3 条，且不小于画幅的 0.5%。"""
+    return max(_WHITE_MIN_RUN, int(round(n * 0.005)))
 
 
 def _white_runs(a):
@@ -179,12 +193,13 @@ def _assert_full_frame(a, tag):
     """断言：没有**成片**整行/整列近乎纯白（白带 = 内容被裁，页面白底露出来了）。"""
     worst_row, worst_col = _white_ratio(a)
     r, c = _white_runs(a)
-    if r >= _WHITE_MIN_RUN or c >= _WHITE_MIN_RUN:
+    if r >= _white_min_run(a.shape[0]) or c >= _white_min_run(a.shape[1]):
         raise RuntimeError(f"{tag}：有整行/整列近乎全白（连续 {r} 行 / {c} 列，"
                            f"占宽 {worst_row:.0%} / 占高 {worst_col:.0%}）"
                            f"—— 内容被裁了，别交付")
-    print(f"  满幅校验：最白行 {worst_row:.0%} · 最白列 {worst_col:.0%}（均应 < 60%，"
-          f"外圈 {_EDGE_IGNORE}px 不计）")
+    print(f"  满幅校验：连续白行 {r} 条 / 连续白列 {c} 条"
+          f"（阈值 {_white_min_run(a.shape[0])}/{_white_min_run(a.shape[1])}；"
+          f"单行最白 {worst_row:.0%} · 单列最白 {worst_col:.0%}，外圈 {_EDGE_IGNORE}px 不计）")
 
 
 def _has_white_band(im):
@@ -193,7 +208,7 @@ def _has_white_band(im):
     只返回布尔值供 main() 重试。"""
     a = np.asarray(im).astype(np.int16)
     r, c = _white_runs(a)
-    return bool(r >= _WHITE_MIN_RUN or c >= _WHITE_MIN_RUN)
+    return bool(r >= _white_min_run(a.shape[0]) or c >= _white_min_run(a.shape[1]))
 
 
 def _assert_seams(im, parts):
