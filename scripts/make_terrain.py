@@ -19,7 +19,7 @@
 输出 `out/base_map.jpg` + `out/base_meta.json`，投影与窗口信息全部落在 meta 里，
 下游（map_svg / render_map_hi）一律从 meta 读，不各自硬编码 z 或 bbox。
 """
-import io, json, math, queue, sys, threading, time, urllib.request
+import io, json, math, os, queue, sys, threading, time, urllib.request
 from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -138,6 +138,13 @@ try:
     SS = max(2, int(GC.cfg("map_ss", SS) or SS))
 except Exception:                                              # noqa
     pass
+# 一次性倍率覆盖（`HIKING_MAP_SS=13 python make_terrain.py`）：只为"这一次出超大图"，
+# 不写进项目 CFG —— 否则以后每次重建都要按这个倍率跑（耗时/内存按像素数走）。
+# ⚠ `render_map_hi.py` 必须读**同一个**环境变量：它的 W = IW×SS，两边不一致就会
+#   把 19552 px 的底图塞进 4512 px 的画布（等于白升）。
+_env_ss = os.environ.get("HIKING_MAP_SS", "").strip()
+if _env_ss:
+    SS = max(2, int(_env_ss))
 RASTER_W = LOGICAL_W * SS
 
 # ---- 等高距：**按窗口自适应**，不写死 ----

@@ -1054,6 +1054,33 @@ def t_pbf_registry():
             F.PBF_CACHE_DIR = old
 
 
+def t_map_ss_env():
+    """一次性超采样倍率 `HIKING_MAP_SS`（2026-11-07）。
+
+    用途：只跑"这一次"超大图（如 z14 / 20000 px 长边），不把倍率写进项目 CFG
+    —— 否则以后每次 make_terrain 都要按这个像素数跑。
+    ⚠ 两个脚本必须读**同一个**变量：高清图画布 W = IW×SS，只改一边等于白升。
+    """
+    import os as _os
+    import subprocess
+    mt = (HERE / "make_terrain.py").read_text(encoding="utf-8")
+    hi = (HERE / "render_map_hi.py").read_text(encoding="utf-8")
+    check("make_terrain 读 HIKING_MAP_SS", 'os.environ.get("HIKING_MAP_SS"' in mt)
+    check("render_map_hi 读同一变量", 'os.environ.get("HIKING_MAP_SS"' in hi)
+    check("make_terrain 已 import os", "import io, json, math, os," in mt)
+    try:
+        r = subprocess.run([sys.executable, "-c",
+                            "import make_terrain as m; print(m.SS, m.RASTER_W)"],
+                           cwd=str(HERE), env=dict(_os.environ, HIKING_MAP_SS="13"),
+                           capture_output=True, text=True, timeout=180)
+        got = (r.stdout or "").split()
+        ok = r.returncode == 0 and got[:1] == ["13"]
+        check("env=13 生效且 RASTER_W 同步", ok,
+              (r.stdout or "").strip() or (r.stderr or "")[-160:])
+    except Exception as e:                                        # noqa
+        check("env=13 生效且 RASTER_W 同步", False, f"{type(e).__name__}: {e}")
+
+
 def t_logging():
     """日志分级：自检默认静默、fetch_osm 细节走 -v（2026-11-07）。
 
@@ -1087,7 +1114,7 @@ def main():
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal,
-               t_pbf_registry, t_logging):
+               t_pbf_registry, t_map_ss_env, t_logging):
         try:
             if VERBOSE:
                 fn()

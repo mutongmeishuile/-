@@ -46,6 +46,11 @@ STEM = CFG.get("file_stem", "线路")
 OUT_JPG = GC.ROOT / f"{STEM}-全线地图.jpg"
 
 _SS = max(2, int(CFG.get("map_ss", 3) or 3))
+# 与 make_terrain.py 同一个一次性倍率开关：只跑这一次超大图时用，
+# 不改项目 CFG。两边必须一致，否则高清图画布与底图像素对不上。
+_env_ss = os.environ.get("HIKING_MAP_SS", "").strip()
+if _env_ss:
+    _SS = max(2, int(_env_ss))
 W = MS.IW * _SS                     # 与 make_terrain 的超采样一致（逻辑宽 × SS = 栅格宽）
 # ⚠ 独立高清图**要带名称带**（map_svg.TITLE_H = 132 逻辑 px）：这张图是单独发出去的，
 #   没有标题就只剩一片地形与几根彩色线，收到的人不知道这是哪条线、几天、多长。
