@@ -995,13 +995,66 @@ def t_pbf_nepal():
     check("nepal 不联网下载", "nepal" in getattr(F, "LOCAL_ONLY_PBF", set()))
 
 
+def t_pbf_registry():
+    """境外切片注册表 + 窗口级裁片自动发现（2026-11-07）。
+
+    只改通用代码那一轮：不下任何切片，但要保证
+      ① 中国 33 省的 URL / 候选行为逐位不变；
+      ② 境外窗口能选出正确切片；
+      ③ 裁片落盘即被认到，且不会被误联网下载。
+    """
+    fo = (HERE / "fetch_osm.py").read_text(encoding="utf-8")
+    check("境外区域粗包围盒已登记", "PBF_REGION_BBOX = {" in fo)
+    check("下载改走 _pbf_url 分派", "url = _pbf_url(prov)" in fo)
+    check("境外片默认不自动下载", "HIKING_OSM_PBF_FOREIGN_DL" in fo)
+    check("裁片工具 _pbf_clip.py 存在", (HERE / "_pbf_clip.py").exists())
+    try:
+        import fetch_osm as F                                    # noqa
+    except _IMPORT_ERR as e:                                      # noqa
+        check("fetch_osm 可导入", False, f"{type(e).__name__}: {e}")
+        return
+    check("中国省级片 URL 保持不变",
+          F._pbf_url("guangdong") ==
+          "https://download.openstreetmap.fr/extracts/asia/china/"
+          "guangdong-latest.osm.pbf")
+    check("日本分区片走 japan 子目录",
+          F._pbf_url("kansai").endswith("/asia/japan/kansai-latest.osm.pbf"))
+    check("小国整片走 asia 根",
+          F._pbf_url("bhutan").endswith("/asia/bhutan-latest.osm.pbf"))
+    c = F._candidate_provinces((135.475, 33.478, 136.012, 34.403))  # 熊野古道
+    check("熊野窗口候选含 kansai", "kansai" in c, str(c))
+    check("熊野窗口 kansai 排第一", bool(c) and c[0] == "kansai", str(c))
+    c2 = F._candidate_provinces((100.25, 28.26, 100.55, 28.50))     # 亚丁
+    check("中国窗口不被境外注册表污染",
+          not any(x in ("kansai", "bhutan", "laos") for x in c2), str(c2))
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        (d / "dummy-latest.osm.pbf").write_bytes(b"x" * 1024)
+        (d / "dummy-latest.json").write_text(
+            json.dumps({"_bbox": [1.0, 2.0, 3.0, 4.0]}), encoding="utf-8")
+        (d / "ghost-latest.json").write_text(
+            json.dumps({"_bbox": [1.0, 2.0, 3.0, 4.0]}), encoding="utf-8")
+        old = F.PBF_CACHE_DIR
+        F.PBF_CACHE_DIR = d
+        try:
+            check("窗口级裁片自动发现", "dummy" in F._local_slices())
+            check("裁片缺 .pbf 时不联网下载",
+                  F._pbf_ensure("ghost", allow_download=True) is None)
+            c3 = F._candidate_provinces((1.5, 2.5, 2.5, 3.5))
+            check("裁片按精确切片优先", bool(c3) and c3[0] == "dummy", str(c3))
+        finally:
+            F.PBF_CACHE_DIR = old
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
-               t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal):
+               t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal,
+               t_pbf_registry):
         try:
             fn()
         except Exception as e:                                      # noqa

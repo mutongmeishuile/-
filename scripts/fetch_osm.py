@@ -903,8 +903,16 @@ PBF_CACHE_DIR = Path(os.environ.get("HIKING_OSM_PBF_CACHE") or
 # ⚠ 实测本机 geofabrik 直接超时（15 s 无响应），openstreetmap.fr 可通但要分块并发
 #   （单连接被限到 ~17 KB/s，12 路并发能到 150–200 KB/s）。
 PBF_URL = "https://download.openstreetmap.fr/extracts/asia/china/{p}-latest.osm.pbf"
+# openstreetmap.fr 的三层目录：中国省级片在 china/，日本分区片在 japan/，
+# 其余国家级片直接落在 asia/ 根。境外线路按 slug 由 `_pbf_url()` 分派。
+_PBF_URL_ASIA = "https://download.openstreetmap.fr/extracts/asia/{p}-latest.osm.pbf"
+_PBF_URL_JAPAN = "https://download.openstreetmap.fr/extracts/asia/japan/{p}-latest.osm.pbf"
+JAPAN_REGION_SLUGS = {"kansai", "chubu", "chugoku", "hokkaido", "kanto",
+                      "kyushu", "shikoku", "tohoku"}
 # 本地合成 / 手工放置的切片：没有远程 URL。缺文件时**不要**拿 PBF_URL 去请求
 # china/{p}-latest（404 → 静默回落 Overpass，等于这条通道不存在）。
+# 窗口级裁片（`<slug>-latest.json` 带 `_bbox`）由 `_local_slices()` 动态认到，
+# 不必写进这个集合。
 LOCAL_ONLY_PBF = {"nepal"}
 
 # 省份粗包围盒（lon0, lat0, lon1, lat1）。只用于判断"窗口落在哪个省"，
@@ -958,6 +966,94 @@ PROVINCE_BBOX = {
 # 不加权就会先白扫一遍 49 MB 的西藏片。
 _EXACT_SLICES = {"nepal"}
 
+# ── 境外 / 非中国省级切片（2026-11-07） ────────────────────────────────
+# ⚠ 这些是**粗包围盒**，只用来产生候选；谁真有数据靠 `_pbf_node_hits()`
+#   探片定。选错至多白扫一遍再回落 Overpass，不会出坏图。
+# ⚠ 日本文 `.poly` / `.state.txt` 是 404（只有中国省级片带 state.txt），
+#   所以没法用官方边界文件精确判定覆盖，矩形按地理常识放宽。
+# 更多区域**不用改代码**：往缓存目录 `regions.json` 加一行
+#   {"<slug>": {"bbox": [lon0, lat0, lon1, lat1]}}
+# 即可；`_pbf_clip.py` 裁出的窗口级小片更是落盘即自动认到。
+PBF_REGION_BBOX = {
+    "kansai":   (134.40, 33.20, 136.40, 35.90),
+    "chubu":    (136.40, 34.40, 139.20, 37.40),
+    "chugoku":  (130.70, 33.80, 135.00, 35.70),
+    "kanto":    (138.70, 34.70, 141.10, 37.30),
+    "tohoku":   (139.40, 36.70, 142.10, 41.70),
+    "hokkaido": (139.30, 41.20, 146.10, 45.70),
+    "shikoku":  (132.30, 32.60, 135.00, 34.50),
+    "kyushu":   (129.40, 30.80, 132.20, 34.10),
+    "bhutan":   (88.70, 26.60, 92.20, 28.40),
+    "laos":     (100.00, 13.90, 107.70, 22.60),
+    "armenia":  (43.40, 38.80, 46.70, 41.40),
+    "georgia":  (40.00, 41.00, 46.80, 43.60),
+    "myanmar":  (92.10, 9.50, 101.20, 28.60),
+}
+
+
+def _pbf_url(prov):
+    """切片 slug → 下载 URL。中国省级片保持原路径不变。
+
+    分派规则：在 PROVINCE_BBOX 里 → china/；日本 8 个分区 → japan/；
+    其余（国家整片 / regions.json 自定义区）→ asia/ 根。
+    """
+    if prov in PROVINCE_BBOX:
+        return PBF_URL.format(p=prov)
+    if prov in JAPAN_REGION_SLUGS:
+        return _PBF_URL_JAPAN.format(p=prov)
+    return _PBF_URL_ASIA.format(p=prov)
+
+
+def _local_slices():
+    """缓存目录里的窗口级切片 → {slug: bbox}。
+
+    约定：`<slug>-latest.osm.pbf` 旁边有同名 `-latest.json` 且带 `_bbox`，
+    就视为窗口级切片 —— 自动并入候选、自动 LOCAL_ONLY（不联网下载）、
+    自动按精确切片优先排序。`_pbf_clip.py` 裁完落盘即生效，零配置。
+    """
+    out = {}
+    try:
+        for f in PBF_CACHE_DIR.glob("*-latest.json"):
+            slug = f.name[: -len("-latest.json")]
+            if not (PBF_CACHE_DIR / (slug + "-latest.osm.pbf")).exists():
+                continue
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                bb = d.get("_bbox") or d.get("bbox")
+                if bb and len(bb) == 4:
+                    out[slug] = tuple(float(v) for v in bb)
+            except Exception:                                     # noqa
+                continue
+    except Exception:                                             # noqa
+        pass
+    return out
+
+
+def _extra_region_boxes():
+    """`regions.json` 自定义区域 → {slug: bbox}。文件格式见 PBF_REGION_BBOX 注释。"""
+    out = {}
+    try:
+        f = PBF_CACHE_DIR / "regions.json"
+        if f.exists():
+            d = json.loads(f.read_text(encoding="utf-8"))
+            for slug, v in d.items():
+                bb = (v or {}).get("bbox") if isinstance(v, dict) else None
+                if bb and len(bb) == 4:
+                    out[slug] = tuple(float(x) for x in bb)
+    except Exception:                                             # noqa
+        pass
+    return out
+
+
+def _slice_boxes():
+    """本次候选的全部粗包围盒：中国省 + 内置境外区 + 自定义区 + 本地窗口片。"""
+    b = dict(PROVINCE_BBOX)
+    b.update(PBF_REGION_BBOX)
+    b.update(_extra_region_boxes())
+    b.update(_local_slices())
+    return b
+
+
 _HIGHWAY = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
             "residential", "living_street", "service", "track", "path", "footway",
             "steps", "bridleway"}
@@ -1001,14 +1097,17 @@ def _candidate_provinces(bbox, min_frac=0.02):
     w, h = lon1 - lon0, lat1 - lat0
     area = max(1e-12, w * h)
     hit = []
-    for p, (x0, y0, x1, y1) in PROVINCE_BBOX.items():
+    local = set(_local_slices())
+    for p, (x0, y0, x1, y1) in _slice_boxes().items():
         ow = max(0.0, min(lon1, x1) - max(lon0, x0))
         oh = max(0.0, min(lat1, y1) - max(lat0, y0))
         frac = ow * oh / area
         if frac >= min_frac:
-            # 只用于排序：窗口级切片 +0.001，压过同 frac 的粗省矩形。
+            # 只用于排序：窗口级切片压过同 frac 的粗矩形。裁片（动态发现）
+            # +0.002 优先于硬编码的精确片 +0.001 —— 裁出来就是为了替代大片。
             # 判据 `frac >= min_frac` 仍用真实重叠比例，不受这个偏移影响。
-            hit.append((frac + (0.001 if p in _EXACT_SLICES else 0.0), p))
+            bonus = 0.002 if p in local else (0.001 if p in _EXACT_SLICES else 0.0)
+            hit.append((frac + bonus, p))
     hit.sort(reverse=True)
     return [p for _f, p in hit]
 
@@ -1053,7 +1152,7 @@ def _pbf_download(prov, jobs=12, total=None):
     import threading
     PBF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dst = PBF_CACHE_DIR / f"{prov}-latest.osm.pbf"
-    url = PBF_URL.format(p=prov)
+    url = _pbf_url(prov)
     if total is None:
         try:
             req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
@@ -1114,11 +1213,22 @@ def _pbf_ensure(prov, allow_download=True):
         return dst
     if not allow_download:
         return None
-    if prov in LOCAL_ONLY_PBF:
-        print(f"   {prov} 是本地合成切片（无远程源），{dst.name} 不存在 → 不联网下载")
+    # 本地合成片 / 窗口级裁片：认同目录的 `-latest.json` 元数据即可，
+    # 不要求 .pbf 还在 —— 片被清掉时该重建，而不是拿 _pbf_url 去请求 404。
+    if prov in LOCAL_ONLY_PBF or (PBF_CACHE_DIR / f"{prov}-latest.json").exists():
+        print(f"   {prov} 是本地合成/裁片（无远程源），{dst.name} 不存在 → 不联网下载")
         return None
     if os.environ.get("HIKING_OSM_PBF_AUTODL", "1") in ("0", "false", "no"):
         print(f"   切片 {dst.name} 不存在，且 HIKING_OSM_PBF_AUTODL=0 → 不自动下载")
+        return None
+    # 境外片默认**不自动下载**：粗矩形会误命中（西藏粗框与不丹/尼泊尔重叠），
+    # 静默拉回几百 MB 不是想要的行为。真正要用时：先把片放进缓存目录，
+    # 或 `HIKING_OSM_PBF_FOREIGN_DL=1`，或 `_pbf_clip.py --download` 显式下载。
+    if (prov not in PROVINCE_BBOX
+            and os.environ.get("HIKING_OSM_PBF_FOREIGN_DL", "0")
+            not in ("1", "true", "yes")):
+        print(f"   {prov} 是境外切片且本地无片 → 默认不自动下载（回落 Overpass）；"
+              f"需要时设 HIKING_OSM_PBF_FOREIGN_DL=1 或先手工放片")
         return None
     return _pbf_download(prov)
 
