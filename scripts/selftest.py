@@ -27,6 +27,8 @@
 
 退出码 0 = 全部通过；1 = 有失败。
 """
+import contextlib
+import io
 import json
 import math
 import sys
@@ -39,12 +41,17 @@ if str(HERE) not in sys.path:
 VERBOSE = "-v" in sys.argv or "--verbose" in sys.argv
 
 _PASS, _FAIL = [], []
+# 断言输出绑到**原始 stdout**：默认模式会把被测脚本的 stdout 重定向进缓冲
+# （它们的进度日志对判据没意义，却能把一次自检从 5 行撑到 190 行）。
+_OUT = sys.stdout
 
 
 def check(name, ok, detail=""):
     (_PASS if ok else _FAIL).append(name)
-    mark = "[PASS]" if ok else "[FAIL]"
-    print(f"  {mark} {name}" + (f"\n         {detail}" if detail and (VERBOSE or not ok) else ""))
+    if ok and not VERBOSE:
+        return True                       # 默认只报失败；-v 才逐条列 PASS
+    print(f"  {'[PASS]' if ok else '[FAIL]'} {name}"
+          + (f"\n         {detail}" if detail else ""), file=_OUT)
     return ok
 
 
@@ -1047,19 +1054,57 @@ def t_pbf_registry():
             F.PBF_CACHE_DIR = old
 
 
+def t_logging():
+    """日志分级：自检默认静默、fetch_osm 细节走 -v（2026-11-07）。
+
+    动机：一次自检 189 行 PASS、一次抓取几十行细节，对"过没过"没有信息量，
+    却会把终端日志和 AI 上下文一起撑满 —— 默认只留里程碑，`-v` 复原。
+    """
+    st = (HERE / "selftest.py").read_text(encoding="utf-8")
+    check("自检默认只报失败", "if ok and not VERBOSE" in st)
+    check("自检重定向被测脚本输出", "redirect_stdout" in st)
+    fo = (HERE / "fetch_osm.py").read_text(encoding="utf-8")
+    check("fetch_osm 有 vprint", "def vprint(" in fo)
+    check("fetch_osm 注册了 -v", '"-v", "--verbose"' in fo)
+    n = sum(1 for ln in fo.splitlines() if "vprint(" in ln)
+    check("细节日志已批量降级", n >= 30, f"vprint 调用 {n} 处")
+    try:
+        import fetch_osm as F                                    # noqa
+    except _IMPORT_ERR as e:                                      # noqa
+        check("fetch_osm 可导入", False, f"{type(e).__name__}: {e}")
+        return
+    check("默认不打印细节", not F._VERBOSE, str(F._VERBOSE))
+
+
 def main():
-    print("离线自检（不联网 / 不下 DEM / 不启浏览器）\n")
+    print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
+    if not VERBOSE:
+        print("默认只报失败项；加 -v 逐条列出全部判据")
+    print()
+    buf = io.StringIO()
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal,
-               t_pbf_registry):
+               t_pbf_registry, t_logging):
         try:
-            fn()
+            if VERBOSE:
+                fn()
+            else:
+                with contextlib.redirect_stdout(buf):
+                    fn()
         except Exception as e:                                      # noqa
             check(f"{fn.__name__} 执行异常", False, f"{type(e).__name__}: {e}")
-        print()
+            tail = [ln for ln in buf.getvalue().splitlines() if ln.strip()][-12:]
+            if tail:
+                print("         最近输出：", file=_OUT)
+                for ln in tail:
+                    print("         " + ln, file=_OUT)
+        if VERBOSE:
+            print()
+        buf.seek(0)
+        buf.truncate()
 
     print(f"通过 {len(_PASS)} 项，失败 {len(_FAIL)} 项")
     if _FAIL:

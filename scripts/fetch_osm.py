@@ -45,6 +45,19 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 import guide_common as GC                                           # noqa: E402
 
+# ── 日志分级（2026-11-07）─────────────────────────────────────────────
+# 默认只打**里程碑**（✓ / ✗ / ⚠ / 结果统计），细节走 `-v`。
+# 理由：一次出图的细节有几十上百行（分片逐块、复用逐条、具名要素清单），
+# 对判断成败没有信息量，却会把终端日志和 AI 上下文一起撑满。
+_VERBOSE = os.environ.get("HIKING_OSM_VERBOSE", "") in ("1", "true", "yes")
+
+
+def vprint(*a, **k):
+    """细节日志：默认静默，`-v` / `HIKING_OSM_VERBOSE=1` 才打。"""
+    if _VERBOSE:
+        print(*a, **k)
+
+
 # 窗口与 make_terrain.py 完全同源（同一个 resolve_bbox()）——
 # 旧版这里写死了一份常量，改线路时极易只改一处，导致矢量与地形整体错位。
 # 窗口来自当前项目的轨迹。**不在项目目录里 import 也算合法**（批量工具 `cluster_osm.py`
@@ -213,12 +226,12 @@ def fetch(force=False, soft=False, rounds=2):
     if CACHE.exists() and not force:
         d = json.loads(CACHE.read_text(encoding="utf-8"))
         if _cache_covers(d):
-            print(f"命中缓存 {CACHE.name}：{len(d['elements'])} 个要素")
+            vprint(f"命中缓存 {CACHE.name}：{len(d['elements'])} 个要素")
             return d
-        print(f"缓存未覆盖当前窗口（{len(d.get('elements') or [])} 个要素）→ 重抓 "
+        vprint(f"缓存未覆盖当前窗口（{len(d.get('elements') or [])} 个要素）→ 重抓 "
               f"{LON0:.4f}, {LAT0:.4f} → {LON1:.4f}, {LAT1:.4f}")
 
-    print(f"窗口 {LON0}, {LAT0} → {LON1}, {LAT1}")
+    vprint(f"窗口 {LON0}, {LAT0} → {LON1}, {LAT1}")
     last = None
     import time as _time
     _t0 = _time.time()
@@ -464,7 +477,7 @@ def _walk_shard(bbox, depth=0):
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"_ok": True, "bbox": list(bbox), "n": len(els),
                              "elements": els}, ensure_ascii=False), encoding="utf-8")
-    print(f"{ind}✓ {lon0:.3f},{lat0:.3f} {len(els)} 要素")
+    vprint(f"{ind}✓ {lon0:.3f},{lat0:.3f} {len(els)} 要素")
     return els
 
 
@@ -474,9 +487,9 @@ def fetch_sharded(force=False, tile=None, soft=False, jobs=3):
     if CACHE.exists() and not force:
         d = json.loads(CACHE.read_text(encoding="utf-8"))
         if d.get("_sharded") and d.get("elements"):
-            print(f"命中分片缓存 {CACHE.name}：{len(d['elements'])} 个要素")
+            vprint(f"命中分片缓存 {CACHE.name}：{len(d['elements'])} 个要素")
             return d
-    print(f"分片抓取窗口 {LON0}, {LAT0} → {LON1}, {LAT1}（块 ≤ {tile}°）")
+    vprint(f"分片抓取窗口 {LON0}, {LAT0} → {LON1}, {LAT1}（块 ≤ {tile}°）")
     grid, y = [], LAT0
     while y < LAT1 - 1e-9:
         y2 = min(y + tile, LAT1)
@@ -487,7 +500,7 @@ def fetch_sharded(force=False, tile=None, soft=False, jobs=3):
             x = x2
         y = y2
     done = sum(1 for b in grid if _shard_file(b).exists())
-    print(f"  共 {len(grid)} 块，已完成 {done} 块（断点续跑，重跑会跳过）")
+    vprint(f"  共 {len(grid)} 块，已完成 {done} 块（断点续跑，重跑会跳过）")
     els, seen = [], set()
     t0 = time.time()
     # 并发：公共实例对同一 IP 的并发不做硬限制，但 3 路以上会开始 429，
@@ -511,7 +524,7 @@ def fetch_sharded(force=False, tile=None, soft=False, jobs=3):
                 continue
             seen.add(k)
             els.append(e)
-    print(f"  合并 {len(grid)} 块（{jobs} 路并发）")
+    vprint(f"  合并 {len(grid)} 块（{jobs} 路并发）")
     dt = time.time() - t0
     print(f"  合并完成：{len(els)} 个要素（本轮 {dt:.0f}s）")
     out = {"elements": els, "_sharded": True,
@@ -648,7 +661,7 @@ def _donors(spec, min_elems):
             continue
         n = len(d.get("elements") or [])
         if n < min_elems:
-            print(f"   跳过 {p.parent.parent.parent.name}：只有 {n} 个要素"
+            vprint(f"   跳过 {p.parent.parent.parent.name}：只有 {n} 个要素"
                   f"（< {min_elems}，疑似残缺缓存）")
             continue
         out.append((p.parent.parent.parent.name, p.parent.parent.parent, d, n))
@@ -736,10 +749,10 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
         except Exception:                                         # noqa
             d0 = {"elements": []}
         if _cache_covers(d0):
-            print(f"本线路缓存已覆盖当前窗口：{len(d0['elements'])} 个要素 → 无需复用")
+            vprint(f"本线路缓存已覆盖当前窗口：{len(d0['elements'])} 个要素 → 无需复用")
             return d0
 
-    print(f"邻项目复用：窗口 {LON0:.4f}, {LAT0:.4f} → {LON1:.4f}, {LAT1:.4f}")
+    vprint(f"邻项目复用：窗口 {LON0:.4f}, {LAT0:.4f} → {LON1:.4f}, {LAT1:.4f}")
     _t0 = time.time()
     best = None
     for name, proj, d, n in _donors(spec, min_elems):
@@ -748,20 +761,20 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
         #   子进程要 import 它自己的 route_def + guide_common，单个 0.5 s；
         #   54 个项目全跑一遍就是 20+ 秒，而其中真正相交的通常只有 2–4 个。
         if not _intersect(ext, mine):
-            print(f"   跳过 {name}：窗口不相交")
+            vprint(f"   跳过 {name}：窗口不相交")
             continue
         claim = _claim_of(proj)
         covered = _intersect(claim, ext) if claim else None
         if not covered:
-            print(f"   跳过 {name}：拿不到它自己的窗口，或要素范围为空")
+            vprint(f"   跳过 {name}：拿不到它自己的窗口，或要素范围为空")
             continue
         inter = _intersect(covered, mine)
         if not inter:
-            print(f"   跳过 {name}：窗口不相交")
+            vprint(f"   跳过 {name}：窗口不相交")
             continue
         full = _covers(covered, mine)
         gain = _area(inter) / max(1e-12, _area(mine))
-        print(f"   {name}：{n} 个要素 · 覆盖本窗口 {gain * 100:.0f}%"
+        vprint(f"   {name}：{n} 个要素 · 覆盖本窗口 {gain * 100:.0f}%"
               + ("（完整覆盖 → 零请求）" if full else ""))
         if best is None or _area(inter) > best[3]:
             best = (name, proj, d, _area(inter), covered, full)
@@ -772,7 +785,7 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
     if not best:
         return _keep_old(soft, "没有可复用的邻项目缓存（同级目录里没有要素数达标的 osm.json）")
 
-    print(f"   扫描 {time.time() - _t0:.1f}s")
+    vprint(f"   扫描 {time.time() - _t0:.1f}s")
     name, proj, d, _best_area, covered, full = best
     _cov = _area(_intersect(covered, mine)) / max(1e-12, _area(mine))
     if not full and _cov < float(cover_hard):
@@ -785,10 +798,10 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
             return {"elements": [], "_reuse_skipped": msg}
         return fetch(force=True, soft=soft)
     if not full and _cov < float(min_cover):
-        print(f"   覆盖率 {_cov * 100:.0f}%（{float(min_cover) * 100:.0f}% 门槛以下）"
+        vprint(f"   覆盖率 {_cov * 100:.0f}%（{float(min_cover) * 100:.0f}% 门槛以下）"
               f"→ 仍复用，但差额要补抓，预计比整盘省 0.5–2 min")
     els = _clip(d.get("elements") or [], mine)
-    print(f"   取 {name} 的 {len(els)} 个要素（已裁到本窗口）")
+    vprint(f"   取 {name} 的 {len(els)} 个要素（已裁到本窗口）")
     if not els:
         return _keep_old(soft, f"{name} 裁到本窗口后一个要素都不剩 → 不复用")
 
@@ -798,26 +811,26 @@ def reuse(spec="auto", force=False, dry=False, soft=False, min_elems=REUSE_MIN_E
         # 差额占比直接决定复用值不值：Overpass 的耗时主要由**每次查询的开销**决定
         # （排队 + 建连），不是按面积算。实测金银山（差额 21.6%、2 个矩形）2m31s，
         # 与整盘抓取 3m09s 几乎同量级 —— 差额一过 ~20% 就基本白忙。
-        print(f"   差额合计占窗口 {_need * 100:.1f}%（{len(todo)} 个矩形）"
+        vprint(f"   差额合计占窗口 {_need * 100:.1f}%（{len(todo)} 个矩形）"
               + ("，预计与整盘抓取同量级" if _need > 0.2 else "，很快"))
     _t1 = time.time()
     got = []
     for r in todo:
         ra = _area(r) / max(1e-12, _area(mine))
-        print(f"   补抓差额 {r[0]:.4f},{r[1]:.4f} → {r[2]:.4f},{r[3]:.4f}"
+        vprint(f"   补抓差额 {r[0]:.4f},{r[1]:.4f} → {r[2]:.4f},{r[3]:.4f}"
               f"（占窗口 {ra * 100:.1f}%）…", flush=True)
         try:
             part = _fetch_rect(r)
         except Exception as e:                                    # noqa
             return _keep_old(soft, f"差额矩形补抓失败：{e} → 放弃复用")
-        print(f"     ✓ {len(part)} 个要素")
+        vprint(f"     ✓ {len(part)} 个要素")
         if ra >= 0.02 and not part:
             return _keep_old(soft, f"差额矩形占 {ra * 100:.0f}% 窗口却返回 0 个要素 —— "
                                    f"镜像超时给半截数据的典型症状，拒绝落盘")
         got += part
 
     if todo:
-        print(f"   差额补抓 {time.time() - _t1:.1f}s")
+        vprint(f"   差额补抓 {time.time() - _t1:.1f}s")
     keep = {}
     for e in els + got:                    # 补抓的在后 → 同 (type,id) 以新抓为准
         keep[(e.get("type"), e.get("id"))] = e
@@ -879,7 +892,7 @@ def summarize(d):
             names.append(("寺", t.get("name", "?"), t.get("amenity")))
     print(f"\n共 {len(d['elements'])} 个要素：")
     for k, v in sorted(kind.items(), key=lambda x: -x[1]):
-        print(f"  {k:<18} {v}")
+        vprint(f"  {k:<18} {v}")
     return kind, names
 
 
@@ -1137,7 +1150,7 @@ def _pbf_node_hits(pbf, bbox):
             continue
         if lon0 <= lo <= lon1 and lat0 <= la <= lat1:
             n += 1
-    print(f"   探片 {Path(pbf).name}：窗口内节点 {n} 个（{time.time() - t0:.0f}s）")
+    vprint(f"   探片 {Path(pbf).name}：窗口内节点 {n} 个（{time.time() - t0:.0f}s）")
     return n
 
 
@@ -1209,7 +1222,7 @@ def _pbf_download(prov, jobs=12, total=None):
 def _pbf_ensure(prov, allow_download=True):
     dst = PBF_CACHE_DIR / f"{prov}-latest.osm.pbf"
     if dst.exists() and dst.stat().st_size > 1048576:
-        print(f"   用本地切片 {dst.name}（{dst.stat().st_size // 1048576} MB）")
+        vprint(f"   用本地切片 {dst.name}（{dst.stat().st_size // 1048576} MB）")
         return dst
     if not allow_download:
         return None
@@ -1365,7 +1378,7 @@ def pbf_extract(pbf, bbox, verbose=True):
                     bnd[o.id] = (t, ids)
     _rm_tmp(tmp)
     if verbose:
-        print(f"   切片扫描 {time.time() - t0:.1f}s：{len(els)} 个要素"
+        vprint(f"   切片扫描 {time.time() - t0:.1f}s：{len(els)} 个要素"
               f"（面 {n_area}）；国界 relation {len(bnd)} 个")
 
     # 国界：relation 的成员是**整条边界**（中国 relation 1663 个 member，全国 2.2 万 km），
@@ -1405,7 +1418,7 @@ def pbf_extract(pbf, bbox, verbose=True):
             _nb = sum(1 for k in els
                       if k[0] == "relation"
                       and (els[k].get("tags") or {}).get("admin_level") == "2")
-            print(f"   国界成员 {sum(1 for x in need.values() if x)} 段，"
+            vprint(f"   国界成员 {sum(1 for x in need.values() if x)} 段，"
                   f"裁到窗口后入册 {_nb} 条（{time.time() - t1:.1f}s）")
     return list(els.values())
 
@@ -1457,12 +1470,12 @@ def cluster_extract(prov, bbox, force=False, pbf=None):
             d = {}
         if (d.get("_source") == "pbf-cluster" and d.get("_province") == prov
                 and _bbox_eq(d.get("_bbox"), bbox)):
-            print(f"   命中簇缓存 {dst.name}：{len(d['elements'])} 个要素")
+            vprint(f"   命中簇缓存 {dst.name}：{len(d['elements'])} 个要素")
             return dst
     pbf = pbf or _pbf_ensure(prov)
     if not pbf:
         return None
-    print(f"   簇扫描 {prov}：{bbox[0]:.3f},{bbox[1]:.3f} → {bbox[2]:.3f},{bbox[3]:.3f}")
+    vprint(f"   簇扫描 {prov}：{bbox[0]:.3f},{bbox[1]:.3f} → {bbox[2]:.3f},{bbox[3]:.3f}")
     els = pbf_extract(pbf, bbox)
     d = {"elements": els, "_source": "pbf-cluster", "_province": prov,
          "_pbf": pbf.name, "_bbox": list(bbox),
@@ -1516,7 +1529,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
         except Exception:                                         # noqa
             d0 = {}
         if _pbf_cache_valid(d0, bbox):
-            print(f"命中 PBF 缓存 {dst.name}：{len(d0['elements'])} 个要素")
+            vprint(f"命中 PBF 缓存 {dst.name}：{len(d0['elements'])} 个要素")
             return d0
         # 已有 **Overpass 来源** 的可用缓存：不为了"换成 PBF"白抽 5–6 分钟。
         # 默认路径既然改成了 PBF，这里必须显式说清楚"没升级、要升级怎么办"，
@@ -1528,7 +1541,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
                     _when = time.strftime("%Y-%m-%d", time.localtime(dst.stat().st_mtime))
                 except Exception:                      # noqa
                     _when = "日期未知"
-            print(f"现有缓存可用（{len(d0['elements'])} 个要素，来源 "
+            vprint(f"现有缓存可用（{len(d0['elements'])} 个要素，来源 "
                   f"{d0.get('_source') or 'overpass'}，{_when}）"
                   f"→ 直接沿用；要换成 PBF 抽的版本加 --force")
             return d0
@@ -1546,7 +1559,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
         els = clip_els(_all, bbox)
         prov = dc.get("_province") or "cluster"
         pbf = Path(dc.get("_pbf") or "cluster")
-        print(f"   簇缓存 {cp.name}：{len(_all)} → 裁到本窗口 {len(els)} 个要素")
+        vprint(f"   簇缓存 {cp.name}：{len(_all)} → 裁到本窗口 {len(els)} 个要素")
 
     if els is None:
         cands = [province] if province else _candidate_provinces(bbox)
@@ -1556,7 +1569,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
                 print(f"   {msg}，回落 Overpass")
                 return fetch(force=force, soft=soft)
             raise SystemExit(msg)
-        print(f"PBF 通道：窗口 {LON0:.4f},{LAT0:.4f} → {LON1:.4f},{LAT1:.4f}，"
+        vprint(f"PBF 通道：窗口 {LON0:.4f},{LAT0:.4f} → {LON1:.4f},{LAT1:.4f}，"
               f"候选省 {cands}")
         # 候选省逐个探片（只数节点）。**跨省线路要合片**：梅里外转 云南↔西藏、
         # 大五朝台 山西↔河北、腾格里 甘肃↔内蒙古 —— 只取节点最多的那一片，
@@ -1568,7 +1581,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
             p = _pbf_ensure(cands[0])
             if p:
                 probe = [(1, cands[0], p)]
-                print(f"   单候选省 {cands[0]} → 跳过探片")
+                vprint(f"   单候选省 {cands[0]} → 跳过探片")
             else:
                 missing = list(cands)
         else:
@@ -1596,7 +1609,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
         else:
             picks = [x for x in probe if x[0] >= max(60, 0.06 * _best)][:3]
         if len(probe) > 1:
-            print("   选片：" + "、".join(f"{c}={n}" for n, c, _p in probe)
+            vprint("   选片：" + "、".join(f"{c}={n}" for n, c, _p in probe)
                   + (" → 合并 " + "+".join(c for _n, c, _p in picks) if len(picks) > 1 else ""))
         if missing and len(picks) == 1 and len(probe) == 1:
             print(f"   ⚠ 另有切片未取到（{','.join(missing)}）→ 窗口可能有一部分不在这片里，"
@@ -1604,7 +1617,7 @@ def fetch_pbf(out=None, force=False, soft=False, province=None, min_elems=40,
 
         els_map, per = {}, []
         for hits, prov_i, pbf_i in picks:
-            print(f"   ── 抽取 {prov_i}")
+            vprint(f"   ── 抽取 {prov_i}")
             part = pbf_extract(pbf_i, bbox)
             for e in part:
                 k = (e["type"], e["id"])
@@ -1692,7 +1705,11 @@ if __name__ == "__main__":
                     help="【批量用】扫这个并集窗口 → 写簇缓存；不需要在本项目目录下运行")
     ap.add_argument("--cluster-out", default=None, metavar="路径",
                     help="簇缓存输出路径；默认 ~/.workbuddy/cache/hiking-osm/clusters/")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="打印每步细节（默认只报里程碑与结果）")
     a = ap.parse_args()
+    if a.verbose:
+        _VERBOSE = True          # 入口是模块级代码，直接赋值即改模块全局
     if a.border:
         els = fetch_borders(soft=True)
         print(f"\n国界要素 {len(els)} 个：")
@@ -1722,7 +1739,7 @@ if __name__ == "__main__":
                 print(f"   ✗ {prov} 切片拿不到，跳过")
                 continue
             if len(provs) > 1 and _pbf_node_hits(p, bb) < 60:
-                print(f"   {prov} 在簇窗口内几乎没有节点 → 跳过")
+                vprint(f"   {prov} 在簇窗口内几乎没有节点 → 跳过")
                 continue
             dst = Path(a.cluster_out) if (a.cluster_out and len(provs) == 1) \
                 else _cluster_path(prov, bb)
@@ -1731,10 +1748,10 @@ if __name__ == "__main__":
                 cur = json.loads(dst.read_text(encoding="utf-8"))
                 if (cur.get("_source") == "pbf-cluster" and cur.get("_province") == prov
                         and _bbox_eq(cur.get("_bbox"), bb)):
-                    print(f"   ✓ 已有簇缓存 {dst}（{len(cur['elements'])} 个要素）")
+                    vprint(f"   ✓ 已有簇缓存 {dst}（{len(cur['elements'])} 个要素）")
                     ok += 1
                     continue
-            print(f"   簇扫描 {prov}：{bb[0]:.3f},{bb[1]:.3f} → {bb[2]:.3f},{bb[3]:.3f}")
+            vprint(f"   簇扫描 {prov}：{bb[0]:.3f},{bb[1]:.3f} → {bb[2]:.3f},{bb[3]:.3f}")
             els = pbf_extract(p, bb)
             cur = {"elements": els, "_source": "pbf-cluster", "_province": prov,
                    "_pbf": p.name, "_bbox": list(bb),
@@ -1760,12 +1777,12 @@ if __name__ == "__main__":
     if data.get("_reused_from"):
         print(f"\n（本篇来自邻项目复用：{data['_reused_from']} + {data.get('_rects', 0)} 个差额矩形）")
     _, names = summarize(data)
-    print("\n具名要素（前 40）：")
+    vprint("\n具名要素（前 40）：")
     seen = set()
     for k, n, extra in names:
         if n in seen:
             continue
         seen.add(n)
-        print(f"  {k:<4} {n}  {extra}")
+        vprint(f"  {k:<4} {n}  {extra}")
         if len(seen) >= 40:
             break
