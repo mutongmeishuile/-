@@ -591,6 +591,11 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
    （多线总览 / 海报 / 拼版）必须在 `route_def.CFG` 写 `"labels_vector": False`，
    否则图上只剩三角和点、**一个地名都没有**（`pitfalls-terrain §30`）。
    ⚠ 日志里「山峰名 86/117」照样打成功数，**别信日志** —— 唯一可信的核对是裁 1:1 原图看。
+   **矢量注记 + 自定义出图**（文字另画、底图符号仍要）：写 `"labels_symbol_on_raster": True`。
+   峰三角 / 冰菱形 / 垭口倒三角默认跟文字一起交给 `map_svg` 在落位锚点补画；不走 `map_svg`
+   的通道若只开 `labels_vector`，符号同样没人补 —— 图上**连一个山峰三角都没有**
+   （2026-11-09 用户实测「osm 的标记符号怎么没有啦」）。两种写法二选一，别混：
+   全烤位图 → `labels_vector=False`；文字矢量 + 符号位图 → `labels_vector` 默认 + `labels_symbol_on_raster=True`。
    别用固定四角坐标硬摆，轨迹一变就会压住。
 9. **图例三种放法，用 `CFG["legend_place"]` 选**（**不写 = `"title"`，2026-10-23 起的默认**）：
    - `"title"`（**默认**）：塞进独立高清图的标题带空白区，**图面完全不被遮挡**。左簇符号说明（3×n）、

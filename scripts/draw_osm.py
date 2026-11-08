@@ -494,6 +494,12 @@ class Labeller:
         self.n_overlap = 0     # 「实在放不下也要放」的强制落位数（= 会与已有注记挤在一起的个数）
         self.boxes = []          # 已落位注记的矩形（栅格 px），导出给 map_svg 避让
         self.draw_pixels = True  # False = 只记录不画（矢量注记模式）
+        # 符号（峰三角 / 冰菱形 / 垭口倒三角）画不画进栅格。默认跟 draw_pixels 走：
+        # 矢量模式下由 map_svg 在**落位成功**的地名锚点补画，符号与字同生同灭。
+        # 但总览通道（多线大图）不走 map_svg —— 文字由上层重排，没人补画符号，
+        # 结果全图只剩地名、连一个山峰三角都没有（2026-11-09 用户实测）。
+        # 这种通道写 CFG["labels_symbol_on_raster"] = True。
+        self.draw_symbols = True
         self.records = []        # 矢量注记：文本 / 左上角 / 基线 / 字号 / 颜色
 
     def _mark(self, bb):
@@ -927,6 +933,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # ---------------- 注记 ----------------
     lab = Labeller(size, cell=14 * S)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
+    # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
+    lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", False)
     if seed_cells:
         lab.grid |= set(seed_cells)
 
@@ -1153,7 +1161,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 if lab.place(d, f"{ev0:.0f}", (x, y), f_peak_lo, (120, 106, 88),
                              anchor_right=True, stroke_w=1.8 * S, pad=LBL_PAD * S,
                              fallback=False, kind="peak"):
-                    if lab.draw_pixels:
+                    if lab.draw_symbols:
                         d.polygon([(x, y - 6 * S * k), (x - 5.4 * S * k, y + 3.6 * S * k),
                                    (x + 5.4 * S * k, y + 3.6 * S * k)],
                                   fill=(150, 140, 124), outline=(255, 255, 255))
@@ -1196,7 +1204,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
                      gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0,
                      right_only=_peak_right):
-            if lab.draw_pixels:
+            if lab.draw_symbols:
                 d.polygon(tri, fill=col, outline=(255, 255, 255))
             n_peak += 1
             n_named_done += 1
@@ -1230,7 +1238,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # 锚点补小圆，栅格这边再画就成了"没有名字的倒三角"。
         if lab.place(d, txt, (x, y), f_water, (150, 78, 24), anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
-            if lab.draw_pixels:
+            if lab.draw_symbols:
                 d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
                           fill=(255, 244, 232), outline=(176, 96, 32))
             n_saddle += 1
@@ -1254,7 +1262,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             #   重排，拥挤的直接丢弃（本窗口 721 → 92），于是几百个点没有名字留在图上
             #   （2026-11-04 郭喀拉29天用户投诉）。map_svg 会在每个成功落位的地名锚点
             #   画 r=1.3 的小圆，点与字天然同生同灭。
-            if lab.draw_pixels:
+            if lab.draw_symbols:
                 d.ellipse([x - r, y - r, x + r, y + r], fill=(70, 70, 70),
                           outline=(255, 255, 255))
             n_place += 1
