@@ -1892,7 +1892,11 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     every = float(every if every else LABEL_EVERY)
     sx, sy = scale
     S = SS
-    f = _label_font(max(9, int(round(LABEL_FONT * S))))
+    # 计曲线数字字号：默认 LABEL_FONT（8.2 逻辑 px）。CFG["contour_label_font"]
+    # 可按线路覆写（逻辑 px）—— 大等高距合幅（500 m 档）里 8.2 会与峰名同大、
+    # 比 OSM 地名还抢眼，全线实测收到 6.4 后层次恢复（2026-11-08）。
+    _lf = _route_cfg("contour_label_font", None)
+    f = _label_font(max(7, int(round((float(_lf) if _lf else LABEL_FONT) * S))))
     # 白描边收细：2.0*S（≈字号 18%）在浅色地形上会糊成"白阴影"（用户反馈），
     # 收到 1.7*S ≈ 14%，读起来是干净的描边；再细就会在深色晕渲上失去可读性。
     stroke = max(2, int(round(1.7 * S)))
