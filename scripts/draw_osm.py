@@ -717,6 +717,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         print(f"   跳过 OSM 叠加（未找到 {osm_path.name}，先跑 fetch_osm.py）")
         return pil
     skip_names = set(skip_names or ())
+
+    # ⚠ OSM 里的**数据噪声名**：单个/两个纯拉丁字母（本窗口实测 c / ky / vq / KY 四条），
+    #   落在没有任何地物的位置，画出来就是一个莫名其妙的孤立小字（2026-11-08 用户截图指出）。
+    #   判据收得很窄 —— 只打"纯字母 1–2 位"，K2 / A1 这种含数字的真地名不受影响。
+    _JUNK = re.compile(r"[A-Za-z]{1,2}\Z")
+
+    def _skip(nm):
+        return (not nm) or (nm in skip_names) or bool(_JUNK.match(nm))
     S = float(px_scale)
     # 道路线宽缩放（CFG["road_scale"]）：大窗口线路要压细，见 road 分支说明。
     _rs_scale = float(GC.cfg("road_scale", 1.0) or 1.0)
@@ -1151,7 +1159,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                                   fill=(150, 140, 124), outline=(255, 255, 255))
                     n_peak += 1
             continue
-        if name in skip_names:
+        if _skip(name):
             n_skip += 1
             continue
         ev = _ele_of(ele)
@@ -1199,7 +1207,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     if draw_glacier:
         glaciers.sort(key=lambda g: g[3], reverse=True)
         for x, y, name, _a in glaciers:
-            if name in skip_names:
+            if _skip(name):
                 continue
             r = 4.6 * S
             d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
@@ -1214,7 +1222,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 后者是循环内变量，且念青东这类 peak=1 的窗口压根不进分级逻辑。
     n_saddle = 0
     for x, y, name, ele in saddles:
-        if not name or name in skip_names:
+        if _skip(name):
             continue
         r = 4.2 * S
         txt = f"{name} {ele}m" if ele else name
@@ -1231,7 +1239,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     places.sort(key=lambda p: prio.get(p[0], 9))
     n_place = 0
     for kind, x, y, name in places:
-        if not name or name in skip_names:
+        if _skip(name):
             continue
         f = f_town if kind in ("city", "town") else (f_vil if kind == "village" else f_ham)
         col = (40, 40, 40) if kind in ("city", "town") else (62, 62, 62)
@@ -1253,7 +1261,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     n_poi = 0
     for x, y, name, kind in pois:
-        if not name or name in skip_names:
+        if _skip(name):
             continue
         # 兴趣点名（观景点/民宿/寺庙）优先级最低：**不放 fallback** ——
         # 它们的价值远低于"被压住"的代价，而峰名/湖名/地名宁可轻微重叠也要显示。
@@ -1280,7 +1288,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if t.get("natural") not in ("valley", "ridge"):
             continue
         nmv = _pick_name(t)
-        if not nmv or nmv in skip_names:
+        if _skip(nmv):
             continue
         # ⚠ 同一要素常同时有 natural=valley + waterway=stream（贡嘎的巴王沟/大沟都是），
         #   两个通道各画一遍 → 名字同屏重复。约定：**带 waterway 的归水系通道**（蓝色斜体，
@@ -1320,7 +1328,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if kind in ("spring", "water"):
             r = 2.0 * S
             d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168), outline=(255, 255, 255))
-            if name and name not in skip_names:
+            if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (26, 84, 138), anchor_right=True,
                              stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
@@ -1330,14 +1338,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             r = 3.4 * S
             d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8), (x + r * 1.15, y + r * 0.8)],
                       fill=(226, 238, 224), outline=(74, 118, 74))
-            if name and name not in skip_names:
+            if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (60, 92, 60), anchor_right=True,
                              stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
         else:                                   # supply：小卖部 / 补给 / 餐饮
             r = 2.6 * S
             d.rectangle([x - r, y - r, x + r, y + r], fill=(206, 168, 96), outline=(255, 255, 255))
-            if name and name not in skip_names:
+            if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (122, 92, 40), anchor_right=True,
                              stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
@@ -1345,7 +1353,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # ---- 海子 / 水系名：蓝色斜体感（用深青蓝 + 白描边），动态避让已有注记 ----
     n_water = 0
     for x, y, name in waters:
-        if not name or name in skip_names:
+        if _skip(name):
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_right=True,
                      stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
