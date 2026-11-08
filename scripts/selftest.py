@@ -228,6 +228,33 @@ def t_cfg():
         lazy = MS._CFG.get("_probe") == "x"
         RD.CFG.pop("_probe", None)
         check("map_svg 配置已改为惰性（不再是 import 期快照）", lazy)
+
+        # 标题带占高上限（2026-11-08 用户："强制控制在 10% 以内，动态调字号/布局"）。
+        # 判据要看**比例**，不能只看"带高是个常数"——132/158 px 在矮画幅上就是 12–13%。
+        _ih0 = MS.IH
+        try:
+            r0 = MS._band_max_ratio()
+            check("band_max_ratio 默认 0.10", abs(r0 - 0.10) < 1e-9, f"→ {r0}")
+
+            MS.IH = 900                                    # 竖幅矮画幅：固定 132 px 会占 12.8%
+            _th = MS._title_h()
+            check("矮画幅：标题带占高 ≤ band_max_ratio",
+                  _th / (MS.IH + _th) <= r0 + 1e-6, f"→ {_th}/(900+{_th}) = {_th / (900 + _th):.3%}")
+            check("矮画幅：确实是缩字号换来的（k<1）", MS._title_scale() < 1.0,
+                  f"→ k={MS._title_scale():.3f}")
+
+            MS.IH = 4000                                   # 高画幅：不该白缩
+            check("高画幅：不带缩（k=1，带高仍是内容高度）",
+                  MS._title_scale() == 1.0 and MS._title_h() == MS._title_h_base())
+
+            RD.CFG["band_max_ratio"] = 0.05                # 改配置要能立刻生效并压得更狠
+            MS.IH = 1200
+            _th5 = MS._title_h()
+            check("band_max_ratio 改 0.05 后仍满足（配置即时生效）",
+                  _th5 / (MS.IH + _th5) <= 0.05 + 1e-6, f"→ {_th5 / (1200 + _th5):.3%}")
+        finally:
+            MS.IH = _ih0
+            RD.CFG.pop("band_max_ratio", None)
     except _IMPORT_ERR as e:                                        # noqa
         print(f"         （跳过 map_svg：{type(e).__name__} —— 它需要完整数据链才能 import）")
 

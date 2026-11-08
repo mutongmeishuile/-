@@ -1430,6 +1430,9 @@ TITLE_H = 132               # 名称带高度（逻辑像素），仅独立高�
 # （2026-10-23 用户实测"融在一起了"）。加高 16 px 只影响用 legend_place="title" 的线，
 # 其他模式的画布高一个字都不变。地图本身大小不变，只是它在画布里的 y 起点下移。
 TITLE_H_LEGEND = 158
+# ⚠ 上面两个值是「内容自然高度」，**不再是最终带高**：2026-11-08 起带高受
+#   `CFG["band_max_ratio"]`（默认 0.10）硬约束 —— 矮画幅（IH 小）时带子会等比缩字号，
+#   保证 `带高/(地图高+带高) ≤ r`。见 `_title_scale()`。
 
 # ---- 标题带 / 图例带配色 ----
 # 原来用暖纸色 #F6F0E3，和底图（冷调植被带，采样中位 (125,139,109)）放一起发闷、发"脏"。
@@ -1477,7 +1480,7 @@ def _legend_place():
     return "band" if _legend_outside() else "title"
 
 
-def _title_legend(x_right, y_bottom):
+def _title_legend(x_right, y_bottom, outer_k=1.0):
     """标题带里的紧凑图例（`CFG["legend_place"]="title"`）。
 
     为什么要有（2026-10-23 用户指着截图问「能不能放这片区域」）
@@ -1517,7 +1520,7 @@ def _title_legend(x_right, y_bottom):
     # 5 天按 4 列排 → 第二行只剩 D5，右边 3 格全空（博格达实测一大片空白）；
     # 按 3 列排 → 3 + 2，只空 1 格，且整块窄了、右对齐后自然整体右移。
     # 判据：先在**行数预算**内（多了会顶到数据行）挑"空格最少"的列数，同分再挑列多的（更矮）。
-    _avail_h = y_bottom - 68                       # 68 = 数据行基线 52 + 下缘 16
+    _avail_h = y_bottom - 68 * outer_k           # 68 = 数据行基线 52 + 下缘 16（随带子同步缩）
     _max_rows = max(1, int(_avail_h // PITCH))
     best = None
     for _c in range(1, 5):
@@ -1561,10 +1564,13 @@ def _title_legend(x_right, y_bottom):
     x_left = 40
     t = _CFG.get("title") or _CFG.get("file_stem") or ""
     sub = _CFG.get("title_lite") or ""
-    _right = x_left + max(GC.text_w(t, 44) + 2, GC.text_w(sub, 16))
+    # 标题块宽度要按**缩后**的字号量（outer_k 是带高被 band_max_ratio 压出来的系数），
+    # 否则带子缩小时会误判"没地方"，把图例多缩一档。
+    _right = x_left + max(GC.text_w(t, 44 * outer_k) + 2, GC.text_w(sub, 16 * outer_k))
     avail = x_right - (_right + 26)
     # 宽度和高度都要过：行数多到顶住数据行时，也等比缩下去（别只按宽度算）
-    k = max(0.62, min(1.0, avail / total, _avail_h / h)) if total else 1.0
+    # 下限 0.62 → 0.45（2026-11-08）：带高被硬压到 0.6 档时，0.62 的下限会让图例溢出带子。
+    k = max(0.45, min(1.0, avail / total, _avail_h / h)) if total else 1.0
 
     # 本地坐标原点 = 块左上角；整块 translate 到右下角落点再 scale
     ox = x_right - total * k
@@ -1613,9 +1619,54 @@ def _title_legend(x_right, y_bottom):
     return "".join(o)
 
 
-def _title_h():
-    """名称带当前高度：图例搬进带子里时要更高一点（见 TITLE_H_LEGEND 的注释）。"""
+def _title_h_base():
+    """标题带的**内容自然高度**：图例搬进带子里时要更高一点（见 TITLE_H_LEGEND）。"""
     return TITLE_H_LEGEND if _legend_place() == "title" else TITLE_H
+
+
+def _band_max_ratio():
+    """标题带占高上限 r：`带高 / (地图高 + 带高) ≤ r`。
+
+    `CFG["band_max_ratio"]`，默认 **0.10**（2026-11-08 用户定：海报上标题带不许吃超过
+    一成面积）。设 0 或负数 = 关掉约束、回到固定的 132/158 px。
+    """
+    try:
+        r = float(GC.cfg("band_max_ratio", 0.10) or 0.0)
+    except (TypeError, ValueError):
+        r = 0.10
+    return min(max(r, 0.0), 0.45)
+
+
+def _title_scale():
+    """标题带的等比缩放系数 k（字号 × 纵向节奏 × k）。
+
+    为什么要缩：带高是按**内容**定的（三行字 15/44/16 + 右侧统计），一旦画幅偏矮
+    （IH 小，比如竖幅 900 px），132 px 的带子就占 12.8% —— 与「≤10%」冲突。
+    两条路可选：①压字号 ②改布局（把统计挪进带内其他地方）。三行字已经是最紧凑布局，
+    没有可挪的，所以走 ①：整块等比缩（字**不发生形变**，是缩字号，不是纵向压扁）。
+    判据：`_title_h()/(IH + _title_h()) ≤ r + 1e-6`。
+    """
+    r = _band_max_ratio()
+    base = _title_h_base()
+    if r <= 0 or IH <= 0 or base <= 0:
+        return 1.0
+    cap = IH * r / (1.0 - r)          # 带高上限（逻辑 px）
+    if base <= cap:
+        return 1.0
+    k = cap / base
+    if k < 0.55:
+        print(f"   ⚠ 标题带被压到 {k:.2f}×（画幅 IH={IH}，上限 {r:.0%}）"
+              f"—— 字会偏小，考虑加高画幅或改用 legend_place=\"band\"")
+    return k
+
+
+def _title_h():
+    """名称带**最终**高度（逻辑 px）：已按 `CFG["band_max_ratio"]` 压过。
+
+    ⚠ `out_size()` 与 `render_map_hi()` 都取自这里 —— 只要这一处一致，
+    画布高与 viewBox 高就不会分叉（分叉会被 letterbox）。
+    """
+    return max(1, int(round(_title_h_base() * _title_scale())))
 
 
 def _title_band():
@@ -1633,6 +1684,7 @@ def _title_band():
     # ⚠ 名称带底色不能用近白（#FFFDF8）：render_map_hi 的满幅校验把"整行全白"判为裁切，
     #   一条纯白的带会直接让 16 条线路全部报错。用暖纸色，既过校验也更像地图边框。
     _th = _title_h()
+    _k = _title_scale()          # 带高被 band_max_ratio 压过时 <1：字号与纵向节奏一起缩
     # 三行文字的纵向节奏（2026-10-23 用户要求"最美观 + 动态随带高"）：
     #   badge(15px) → title(44px) → subtitle(16px)
     #   视觉净空比 = badge→title : title→subtitle ≈ 1.55 : 1（疏→密，标题组更紧凑）
@@ -1642,12 +1694,12 @@ def _title_band():
     _y_title = round(_th * 0.58)
     _y_sub   = round(_th * 0.84)
     o = [f'<rect x="0" y="0" width="{IW}" height="{_th}" fill="{TITLE_BG}"/>',
-         f'<text x="{x0}" y="{_y_badge}" font-size="15" font-weight="700" fill="{TITLE_INK_MUTED}" '
-         f'letter-spacing="2.5">全线地图 · {tag}</text>',
-         f'<text x="{x0 - 2}" y="{_y_title}" font-size="44" font-weight="900" fill="#1F2430" '
-         f'letter-spacing="1">{_esc(t)}</text>']
+         f'<text x="{x0}" y="{_y_badge}" font-size="{15 * _k:.1f}" font-weight="700" fill="{TITLE_INK_MUTED}" '
+         f'letter-spacing="{2.5 * _k:.2f}">全线地图 · {tag}</text>',
+         f'<text x="{x0 - 2}" y="{_y_title}" font-size="{44 * _k:.1f}" font-weight="900" fill="#1F2430" '
+         f'letter-spacing="{1 * _k:.2f}">{_esc(t)}</text>']
     if sub:
-        o.append(f'<text x="{x0}" y="{_y_sub}" font-size="16" font-weight="600" fill="#55605A">'
+        o.append(f'<text x="{x0}" y="{_y_sub}" font-size="{16 * _k:.1f}" font-weight="600" fill="#55605A">'
                  f'{_esc(sub)}</text>')
     # 数据口径（可选）：CFG["title_stats"] 一行右对齐 —— 这张图会被单独发出去，
     # 光有名字没有里程/爬升，读者还是要回头问"多长、多高"。
@@ -1659,21 +1711,21 @@ def _title_band():
         except Exception:
             _stats = None
     if _stats:
-        o.append(f'<text x="{IW - 40}" y="52" text-anchor="end" font-size="17" '
+        o.append(f'<text x="{IW - 40}" y="{52 * _k:.1f}" text-anchor="end" font-size="{17 * _k:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(_stats)}</text>')
     # 图例放标题带时整块搬进来（右缘贴数据行、底缘贴带子下沿）；否则只留分日色条
     if _legend_place() == "title":
         # 底缘留 8 px（带子下沿之上）—— 用户口径：默认 8 px，再少就顶到边了
-        o.append(_title_legend(IW - 40, _th - 8))
+        o.append(_title_legend(IW - 40, _th - 8, _k))
     # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
     days = _CFG.get("days", [])
     if days and _legend_place() != "title":
         bx = IW - 40 - len(days) * 34
         for i, d in enumerate(days):
-            o.append(f'<rect x="{bx + i * 34:.0f}" y="96" width="28" height="6" rx="3" '
+            o.append(f'<rect x="{bx + i * 34:.0f}" y="{96 * _k:.1f}" width="28" height="{6 * _k:.1f}" rx="{3 * _k:.1f}" '
                      f'fill="{d.get("color", "#888")}"/>'
-                     f'<text x="{bx + i * 34 + 14:.0f}" y="116" text-anchor="middle" '
-                     f'font-size="10" font-weight="700" fill="{TITLE_INK_MUTED}">{d.get("tag", "")}</text>')
+                     f'<text x="{bx + i * 34 + 14:.0f}" y="{116 * _k:.1f}" text-anchor="middle" '
+                     f'font-size="{10 * _k:.1f}" font-weight="700" fill="{TITLE_INK_MUTED}">{d.get("tag", "")}</text>')
     o.append(f'<line x1="0" y1="{_th - 1}" x2="{IW}" y2="{_th - 1}" '
              f'stroke="{TITLE_LINE}" stroke-width="2"/>')
     return "".join(o)
