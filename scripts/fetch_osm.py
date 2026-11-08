@@ -248,6 +248,7 @@ def fetch(force=False, soft=False, rounds=2):
                     host,
                     data=urllib.parse.urlencode({"data": QUERY}).encode(),
                     headers={"User-Agent": UA,
+                             "Accept": "application/json",
                              "Content-Type": "application/x-www-form-urlencoded"})
                 with urllib.request.urlopen(req, timeout=90) as r:
                     d = json.loads(r.read().decode("utf-8"))
@@ -350,6 +351,7 @@ def fetch_borders(soft=True):
                     host,
                     data=urllib.parse.urlencode({"data": BORDER_QUERY}).encode(),
                     headers={"User-Agent": UA,
+                             "Accept": "application/json",
                              "Content-Type": "application/x-www-form-urlencoded"})
                 with urllib.request.urlopen(req, timeout=90) as r:
                     bd = json.loads(r.read().decode("utf-8"))
@@ -431,6 +433,7 @@ def _fetch_shard(bbox, attempts=3, timeout=120):
                     host,
                     data=urllib.parse.urlencode({"data": q}).encode(),
                     headers={"User-Agent": UA,
+                             "Accept": "application/json",
                              "Content-Type": "application/x-www-form-urlencoded"})
                 with urllib.request.urlopen(req, timeout=timeout) as r:
                     d = json.loads(r.read().decode("utf-8"))
@@ -704,6 +707,7 @@ def _fetch_rect(bb, attempts=2, timeout=180):
                     host,
                     data=urllib.parse.urlencode({"data": q}).encode(),
                     headers={"User-Agent": UA,
+                             "Accept": "application/json",
                              "Content-Type": "application/x-www-form-urlencoded"})
                 with urllib.request.urlopen(req, timeout=timeout) as r:
                     d = json.loads(r.read().decode("utf-8"))
