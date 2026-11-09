@@ -99,7 +99,7 @@ PEAK_TIER_MIN_N = 8     # 有效高程样本少于此值就不分级（分位数
 # 完全看不出冰舌范围（旧实现 C_GLACIER_ED=(238,247,253) 就是这个问题）。
 # → 填充走"近白淡蓝"（比雪原略冷一档），边界必须是**可读的冰蓝**。
 C_GLACIER    = (224, 237, 249, 150)
-C_GLACIER_ED = (118, 168, 210, 235)
+C_GLACIER_ED = (146, 186, 216, 200)
 C_GLACIER_LB = (24, 92, 146, 255)      # 冰川注记：深冰蓝 + 白描边
 
 ROAD_STYLE = {
@@ -638,6 +638,8 @@ def _clean_name(s):
 
 
 # 取名的键顺序：先 `name`（OSM 的"通用名"，本地语），再各变体的中文标签。
+# ⚠ 本名不可渲染时（天城文/藏文），`_name_of()` 会继续往下试键，最后才落到
+#   `name:en`（受 CFG["label_foreign_names"] / name_map 控制，默认不自动音译）。
 _NAME_KEYS = ("name", "name:zh", "name:zh-Hans", "name:zh-CN")
 
 # 占位名 / 消歧后缀：`湖泊KW`、`湖泊ks`、`湖泊12` 这类名字**一个地理信息都没有**，
@@ -684,7 +686,11 @@ def _pick_name(t):
     for k in _NAME_KEYS:
         v = (t.get(k) or "").strip()
         if v and not _junk_name(v):               # 占位名当"无名"处理，别再往下试别的键
-            return v
+            # 本名是画不出的文字（天城文/藏文…）时**继续试下一个键**，不要直接返回 ——
+            # 否则加德满都这类 ``name=काठमाडौं`` 的城市会在图上彻底没有名字。
+            if _clean_name(v):
+                return v
+            continue
         if v:
             return ""
     en = (t.get("name:en") or "").strip()
@@ -734,6 +740,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     S = float(px_scale)
     # 道路线宽缩放（CFG["road_scale"]）：大窗口线路要压细，见 road 分支说明。
     _rs_scale = float(GC.cfg("road_scale", 1.0) or 1.0)
+    # 水系线宽缩放（CFG["water_scale"]）：与 road_scale 同理但**独立**。
+    # 大窗口里 river 的 W(2) 是给几十 km 窗口定的，8.4° 幅面上等于 1 km 宽的蓝带，
+    # 比轨迹还抢眼；缩到 0.7 后仍是"能看出走向的细线"，不抢主体（2026-11-09）。
+    _ws_scale = float(GC.cfg("water_scale", 1.0) or 1.0)
     # ---- 类别白名单（2026-11-09 新增，默认 None = 全画，老线路行为不变）----
     # 为什么需要：OSM 的数据密度是**区域性**的（尼泊尔是 HOT 重点区，几乎每条村道、
     # 每条 footpath 都数字化；西藏高原只有国道/县道）。同一个窗口跨两国时，按数据
@@ -792,6 +802,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         _w_km = abs(_bb[2] - _bb[0]) * 111.32 * math.cos(math.radians((_bb[1] + _bb[3]) / 2.0))
         if _w_km > 0:
             _land_min_px = _land_min_km2 * (size[0] / _w_km) ** 2
+    # 冰川面积下限（同一套换算，CFG["glacier_min_km2"]，默认 0 = 全画）
+    _gl_min_km2 = float(GC.cfg("glacier_min_km2", 0) or 0)
+    _gl_min_px = 0.0
+    if _gl_min_km2 > 0 and _bb and len(_bb) == 4:
+        _w_km2 = abs(_bb[2] - _bb[0]) * 111.32 * math.cos(math.radians((_bb[1] + _bb[3]) / 2.0))
+        if _w_km2 > 0:
+            _gl_min_px = _gl_min_km2 * (size[0] / _w_km2) ** 2
     ov = Image.new("RGBA", size, (0, 0, 0, 0))
     d = ImageDraw.Draw(ov, "RGBA")
 
@@ -859,6 +876,18 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         if b[0] == "glacier":
             for ring in _rings_of(e, proj, size):
+                # 冰川面积下限（CFG["glacier_min_km2"]，默认 0 = 全画）。
+                # 大窗口总览里 OSM 把每个冰斗、每条悬冰川都数字化（本窗口 6377 个），
+                # 画出来雪区上覆满淡蓝"血管"，与雪面/雪线糊成一片；只留能读出
+                # "冰舌走向"的大冰川（1:50 万口径下 < 2 km² 已是 3×3 px 的点）。
+                if _gl_min_px > 0 and len(ring) > 2:
+                    _a2 = 0.0
+                    for _k in range(len(ring)):
+                        _x0, _y0 = ring[_k]
+                        _x1, _y1 = ring[(_k + 1) % len(ring)]
+                        _a2 += _x0 * _y1 - _x1 * _y0
+                    if abs(_a2) / 2.0 < _gl_min_px:
+                        continue
                 drawable.append((order["glacier"], "glacier", None, ring, e, ()))
             continue
         # 面状要素（林地/草地/水体）统一走 _poly_rings —— way 直接成环，
@@ -943,7 +972,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             # 冰面近白淡蓝填充 + 冰蓝边界；OSM 冰川面普遍偏旧（数字化早于近年退缩），
             # 边界只作参考，实际冰舌以现场为准。
             d.polygon(pts, fill=C_GLACIER)
-            d.line(pts + [pts[0]], fill=C_GLACIER_ED, width=W(1.4), joint="curve")
+            d.line(pts + [pts[0]], fill=C_GLACIER_ED, width=W(1.0), joint="curve")
             n_glacier += 1
         elif kind == "water":
             big = sub in ("river", "canal")
@@ -952,7 +981,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 _dashed(d, pts, C_STREAM_SEASON, W(1), 7 * S, 6 * S)
             else:
                 d.line(pts, fill=C_RIVER if big else C_STREAM,
-                       width=W(2) if big else W(1), joint="curve")
+                       width=W(2 * _ws_scale) if big else W(1 * _ws_scale), joint="curve")
             n_line += 1
         elif kind == "trail":
             core, w, dash, gap = TRAIL_STYLE[sub]
@@ -973,7 +1002,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             # 大窗口上 5 px 的公路等于 1 km 宽，压在图上像一条河（2026-11-04 郭喀拉29天）。
             # CFG["road_scale"]（默认 1）整体缩放芯线与描边。
             _rs = _rs_scale
-            d.line(pts, fill=ed, width=W(w * _rs) + W(2 * max(0.5, _rs)), joint="curve")
+            # 描边：原来 `W(2*max(0.5,_rs))` 与芯线**无关**，芯宽 18 px 时描边宽 8 px、
+            # 两侧各外扩 4 px，等于把总宽撑到 26 px（+44%）。改成按芯宽比例给：
+            # 描边 = 芯宽 × 0.32（约每侧 1/8 芯宽），细芯也有 1 px 的"纸色边"可分色。
+            _edge = max(W(0.6), int(round(W(w * _rs) * 0.32)))
+            d.line(pts, fill=ed, width=W(w * _rs) + _edge, joint="curve")
             d.line(pts, fill=core, width=W(w * _rs), joint="curve")
             n_line += 1
             # 收集道路注记，稍后在地名注记之后尝试标注（优先级低于地名）。
@@ -1213,10 +1246,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         q_hi = q_mid = None       # 样本太少：不做相对分级，一律中档
     n_named = sum(1 for _p in peaks if _p[2])
     n_named_done = 0
+    # CFG["peak_unnamed_ele"]=False 时，无名峰只留三角符号、不标数字（默认 True = 旧行为）。
+    # 全域总览图上「无名峰高程」是区域性噪声：尼泊尔、西藏的 OSM 里有几千个只有 ele 的
+    # 点，标出来就是满屏 3590/4350，与有名注记抢版面且两侧数量差一个量级。
+    _unnamed_ele = _cfg_flag("peak_unnamed_ele", PEAK_UNNAMED_ELE)
     for x, y, name, ele in peaks:
         if not name:
             ev0 = _ele_of(ele)
-            if PEAK_UNNAMED_ELE and ev0:
+            if _unnamed_ele and ev0:
                 k = 0.72
                 if lab.place(d, f"{ev0:.0f}", (x, y), f_peak_lo, (120, 106, 88),
                              anchor_right=True, stroke_w=1.8 * S, pad=LBL_PAD * S,
@@ -1273,15 +1310,24 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # （本区 382 条冰川里只有 18 条有名字），注记里不带高程 —— 冰川看的是范围与末端。
     n_glacier_lb = 0
     if draw_glacier:
+        # 只标**面积最大**的一批：本窗口有 230 条具名冰川，全标出来雪区上就是
+        # 一片白色菱形麻点（2026-11-10 实测 227 个菱形把冰川面糊掉了）。
+        # 1:50 万图上冰川名是"大型冰川的地标"，不是清单 → 默认 60 条（CFG 可覆盖）。
+        _gl_max = int(GC.cfg("glacier_label_max", 0) or 0)
         glaciers.sort(key=lambda g: g[3], reverse=True)
+        n_glacier_all = len(glaciers)
+        if _gl_max > 0:
+            glaciers = glaciers[:_gl_max]
+        # 符号比原来小一档（4.6 → 3.4 逻辑 px）：菱形是"冰川存在"的提示，
+        # 不该比峰三角更抢眼；且只在**名字落位成功**后再画，避免出现无字孤菱。
+        r = 3.4 * S
         for x, y, name, _a in glaciers:
             if _skip(name):
                 continue
-            r = 4.6 * S
-            d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
-                      fill=(233, 244, 252), outline=C_GLACIER_LB)
-            if lab.place(d, name, (x, y + 7 * S), f_water, C_GLACIER_LB, anchor_center=False,
+            if lab.place(d, name, (x, y + 6 * S), f_water, C_GLACIER_LB, anchor_center=False,
                          stroke_w=2.1 * S, pad=LBL_PAD * S):
+                d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
+                          fill=(233, 244, 252), outline=C_GLACIER_LB)
                 n_glacier_lb += 1
 
     # 哑口 / 垭口：倒三角 ▽ + 名 + ele，用 warn 橙（与峰名的 ▲ 明确区分）。
@@ -1482,7 +1528,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
              if q_hi is not None else f"[样本<{PEAK_TIER_MIN_N}，未分级]")
     if verbose:
         extra = f" · 抑制重名 {n_skip}" if n_skip else ""
-        gl = f" · 冰川面 {n_glacier} · 冰川名 {n_glacier_lb}/{len(glaciers)}" if draw_glacier \
+        gl = (f" · 冰川面 {n_glacier} · 冰川名 {n_glacier_lb}/{len(glaciers)}"
+              f"（候选 {n_glacier_all} 条，按面积取前 {len(glaciers)}）") if draw_glacier \
             else " · 冰川层 关"
         # ⚠ 挤放数（n_overlap）是"有没有重叠"的**唯一可测指标**：
         #   落位率高不代表排得好（可能全是挤出来的），必须看这个数。
