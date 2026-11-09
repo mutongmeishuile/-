@@ -2329,6 +2329,13 @@ def build_terrain():
         print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
               f"线宽 {_w_major} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
     arr = np.asarray(pil).copy()
+    # 线色来源可按线路切：派生色（`CONTOUR_DERIVED`，随底图同色相）在**大窗口总览图**
+    # 上会"消失"—— 线是提亮型的浅色，与晕渲受光坡同色相、亮度也接近，实测 19552 px
+    # 全幅 4.33 px 宽、alpha 0.30 仍读不出（2026-11-09 GHT 全线）。总览图改 `False`
+    # 走固定灰棕，才是地形图里那种"深色细线"，雪区/草甸的"跳"在这个尺度反而无妨。
+    _derived = bool(_route_cfg("contour_derived", CONTOUR_DERIVED))
+    if not _derived:
+        print(f"   等高线线色：固定灰棕（CFG['contour_derived']=False，不走派生色）")
     if _abs_px:
         # 只在**出图栅格**上重算 band edges（1 px 原始边线），再按固定 px 加宽；
         # 等高距、陡坡省略的物理坡度仍来自基准 plan（m_per_px 同比缩小即可）。
@@ -2338,11 +2345,12 @@ def build_terrain():
             Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS))
         _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
         paint_contours(arr, dem_raster, 0, 0, minor=c_minor, major=c_major,
-                       m_per_px=_m_per_px / _k, w_px=_wp)
+                       m_per_px=_m_per_px / _k, w_px=_wp, derived=_derived)
         del dem_raster
     else:
         paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
-                       m_per_px=_m_per_px, w_px=_w_px, raster_shape=(RASTER_H, RASTER_W))
+                       m_per_px=_m_per_px, w_px=_w_px, derived=_derived,
+                       raster_shape=(RASTER_H, RASTER_W))
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     # ⚠ CFG["snowline_draw"]=False 只关**这条蓝虚线**，地貌垂直带的雪色照旧按 snow_m 分档。
     #   为什么需要这个开关（2026-11-07 GHT 全幅实测）：雪线掩膜是「任何 below/above 交界」，
