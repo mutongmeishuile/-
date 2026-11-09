@@ -1584,7 +1584,32 @@ def _snowline_from_cfg():
     return SNOWLINE_LEVEL
 
 
-def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL, raster_shape=None):
+def _box_blur_f32(a, r, passes=3):
+    """可分离盒式模糊（cumsum 实现，不依赖 scipy）。
+
+    三次盒式 ≈ 一次高斯（中心极限），用于**平滑高程面再取阈值**：
+    雪线掩膜是「below/above 的交界」，高原面上 5350 m 这条面会绕出上千个小闭环，
+    叠上 18 px 的虚线节距就是满屏蓝色方块麻点（2026-11-07 实测）。先低频再取等值线，
+    得到的就是一条能读的地貌界线 —— 这正是 1:50 万地形图上雪线的画法。
+    """
+    r = int(r)
+    if r < 1:
+        return a
+    out = a.astype(np.float32, copy=True)
+    H, W = out.shape
+    for _ in range(passes):
+        # 行方向
+        p = np.pad(out, ((0, 0), (r + 1, r)), mode="edge")
+        cs = np.cumsum(p, axis=1, dtype=np.float32)
+        out = (cs[:, 2 * r + 1:] - cs[:, :W]) / (2 * r + 1)
+        # 列方向
+        p = np.pad(out, ((r + 1, r), (0, 0)), mode="edge")
+        cs = np.cumsum(p, axis=0, dtype=np.float32)
+        out = (cs[2 * r + 1:, :] - cs[:H, :]) / (2 * r + 1)
+    return out
+
+
+def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL, raster_shape=None, smooth_px=0):
     """雪线：DEM level 等高线处叠蓝色虚线（arr 原地改）。返回 mask；高度不在窗口内返回 None。
 
     与 paint_contours 同一套 band-edge 原理，但用横向条纹打掩码变成虚线，
@@ -1594,21 +1619,29 @@ def paint_snowline(arr, dem_out, level=SNOWLINE_LEVEL, raster_shape=None):
     虚线节距 9/18 px 也是"基准 px"，出图时随掩膜一起放大（否则 SS=13 时
     18 px 节距只有 1.4 逻辑 px，虚线糊成实线）。给了 `raster_shape=(H, W)` 就放大。
     """
-    below = dem_out < level
+    below = (dem_out if not smooth_px else _box_blur_f32(dem_out, smooth_px)) < level
     cross = np.zeros(dem_out.shape, bool)
     cross[:-1, :] |= below[:-1, :] != below[1:, :]
     cross[:, :-1] |= below[:, :-1] != below[:, 1:]
     cross = _dilate(cross)
     if not cross.any():
         return None
-    stripe = (np.arange(cross.shape[1])[None, :] % 18) < 9       # 横向条纹 → 虚线（基准 px）
+    # 虚线节距（基准栅格 px）：14 周期里亮 8。原来是 18/9 —— 在大窗口总览上
+    # 一个「实段」折到图上近 4 km 长，雪线看起来像一串蓝色小方块而不是一根线。
+    _sp = int(_route_cfg("snowline_dash_period", 14) or 14)
+    _so = int(_route_cfg("snowline_dash_on", 8) or 8)
+    stripe = (np.arange(cross.shape[1])[None, :] % max(_sp, 4)) < max(1, min(_so, _sp - 1))
     mask = cross & stripe
     if raster_shape is not None:
         _rs = (int(raster_shape[0]), int(raster_shape[1]))
         if _rs != mask.shape:
             mask = _upsample_mask(mask, _rs)
     f = arr.astype(np.float32)
-    f[mask] = f[mask] * (1 - A_SNOWLINE) + np.asarray(C_SNOWLINE, np.float32) * A_SNOWLINE
+    # 强度可按线路覆盖（CFG["snowline_alpha"]）：0.88 是"单线雪线要一眼看见"的口径；
+    # 大窗口总览上雪线如果和轨迹同权重，整幅会被蓝虚线框满（2026-11-10 GHT 实测），
+    # 降到 0.6–0.7 后它退成"地貌界线"而不是前景符号。
+    _sa = float(_route_cfg("snowline_alpha", A_SNOWLINE) or A_SNOWLINE)
+    f[mask] = f[mask] * (1 - _sa) + np.asarray(C_SNOWLINE, np.float32) * _sa
     # ⚠ 就地 clip：`np.clip(f,…).astype(uint8)` 在 226 MP 上要额外 900 MB 的 clip 副本
     #   （与 paint_contours 同一个坑，见那里的注释）。
     np.clip(f, 0, 255, out=f)
@@ -1862,8 +1895,20 @@ _W_DEM = None
 
 
 def _w_init(dem):
+    """worker 初始化：**只传路径，不传数组**。
+
+    ⚠ 2026-11-09 实测：旧写法 `initargs=(dem,)` 会把整个 DEM（大窗口 z14 时 1.2 GB）
+    pickle 给 4 个子进程。Windows 上这条管道传不完 → `UnpicklingError: pickle data
+    was truncated`，异常被外层 `except` 吞掉后**静默退回串行**，日志只留一行
+    「并行几何不可用」。GHT 全线（19552 px）每次跑都命中，等于白丢 3 倍速度。
+    → 改成主进程 np.save 一次，worker 用 `mmap_mode="r"` 只读映射（不复制数据）。
+    串行兜底路径仍可直接传 ndarray。
+    """
     global _W_DEM
-    _W_DEM = dem
+    if isinstance(dem, (str, bytes)) or hasattr(dem, "__fspath__"):
+        _W_DEM = np.load(str(dem), mmap_mode="r")
+    else:
+        _W_DEM = dem
 
 
 def _w_level(lv):
@@ -1931,15 +1976,24 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     # 阶段 A：各等级几何并行算（进程池；任何异常都退回串行——结果一致，只是慢）
     per_lv = None
     if len(levels) >= 3:
+        _tmp_npy = OUT / "_dem_worker.npy"
         try:
             import multiprocessing as mp
             n = min(4, mp.cpu_count() or 2)
             if n >= 2:
-                with mp.Pool(n, initializer=_w_init, initargs=(dem,)) as pool:
+                # DEM 落盘一次、worker mmap 只读映射（详见 _w_init 的注释：
+                # 直接传数组会在 Windows 上截断后静默退回串行）。
+                np.save(_tmp_npy, dem)
+                with mp.Pool(n, initializer=_w_init, initargs=(str(_tmp_npy),)) as pool:
                     per_lv = pool.map(_w_level, levels, chunksize=1)
         except Exception as e:
-            print(f"   （并行几何不可用：{type(e).__name__} —— 退回串行，结果不变）")
+            print(f"   （并行几何不可用：{type(e).__name__}: {e} —— 退回串行，结果不变）")
             per_lv = None
+        finally:
+            try:
+                _tmp_npy.unlink()
+            except OSError:
+                pass
     if per_lv is None:
         _w_init(dem)
         per_lv = [_w_level(lv) for lv in levels]
@@ -2094,6 +2148,120 @@ def avoid_points(meta, scale_raster, ss):
 
 # ------------------------------------------------------------------ 高海拔水面过滤
 
+# ---- OSM「可绘制集」瘦身（2026-11-09）----
+# 背景：大窗口（8.4°×3.4°）的 osm.json 是 749 MB / 47.8 万要素，其中**真正会画的不到
+# 3 万**。这不只是磁盘问题 —— 下游有四道工序各自 `json.loads(read_text())` 整读一遍
+# （水面过滤 → 峰点人工修正 → 峰点吸附 → draw_overlay），每遍 13 s + 3–4 GB 常驻，
+# 再各自整写一份 780 MB 副本。
+# → 这里一次性筛出「bucket() 可能画到的」要素，坐标压到 5 位小数（≈1 m，远小于 1 px），
+#   写成 osm_slim.json；后面四道全部只吃这份（预计 749 MB → 30–60 MB）。
+#   白名单是 bucket() 判据的**超集**，宁可多留不可漏：判据一旦比 bucket 窄，
+#   就会出现「要素在文件里、图上却没了」的静默丢图层。
+_SLIM_ROAD = None          # 延迟到运行时从 draw_osm 取（避免循环导入）
+
+
+def _slim_sig():
+    """瘦身口径指纹：类别白名单一变，缓存必须失效（否则改了 CFG 图却没变）。"""
+    _r = GC.cfg("osm_road_classes", None)
+    _t = GC.cfg("osm_trail_classes", None)
+    _w = GC.cfg("osm_water_classes", None)
+    return json.dumps([sorted(_r) if _r else None,
+                       sorted(_t) if _t else None,
+                       sorted(_w) if _w else None], ensure_ascii=False)
+
+
+def _slim_osm(src, dst, verbose=True):
+    """把 osm.json 裁成「**本次绘制口径**真正会用到」的要素集。
+
+    ⚠ 白名单必须**跟随 CFG**，不能只按样式表：ROAD_STYLE/TRAIL_STYLE 里含
+    residential / track / path 等，按样式表留等于什么都没裁 —— 第一版实测
+    749 MB → 653 MB（只掉 13%），因为 43 万个 highway way 几乎全被留下。
+    2026-11-10 改为读 osm_road_classes / osm_trail_classes / osm_water_classes，
+    与 draw_osm.bucket() 同一口径（超集由这三个开关本身保证）。
+    """
+    src, dst = Path(src), Path(dst)
+    if not src.exists():
+        return src
+    sig = _slim_sig()
+    sig_p = dst.with_suffix(".sig")
+    try:
+        fresh = (dst.exists() and sig_p.exists()
+                 and dst.stat().st_mtime >= src.stat().st_mtime
+                 and sig_p.read_text(encoding="utf-8") == sig)
+        if fresh:
+            if verbose:
+                print(f"   复用瘦身要素集 {dst.name} "
+                      f"（{dst.stat().st_size / 1048576:.0f} MB，口径与源均未变）")
+            return dst
+    except OSError:
+        pass
+
+    from draw_osm import ROAD_STYLE, TRAIL_STYLE
+    _rc = GC.cfg("osm_road_classes", None)
+    _tc = GC.cfg("osm_trail_classes", None)
+    _wc = GC.cfg("osm_water_classes", None)
+    _rc = None if _rc is None else set(_rc)
+    _tc = None if _tc is None else set(_tc)
+    _wc = None if _wc is None else set(_wc)
+    _node_keys = ("place", "natural", "tourism", "amenity", "man_made",
+                  "historic", "railway", "aeroway", "highway", "waterway",
+                  "mountain_pass", "ele", "boundary")
+
+    def keep(e):
+        t = e.get("tags") or {}
+        if not t:
+            return False
+        if e.get("type") == "node":
+            return any(k in t for k in _node_keys)
+        if t.get("boundary") == "administrative" and str(t.get("admin_level")) == "2":
+            return True
+        h = t.get("highway")
+        if h in ROAD_STYLE and (_rc is None or h in _rc):
+            return True
+        if h in TRAIL_STYLE and (_tc is None or h in _tc):
+            # CFG 未配（None）= 与 draw_osm 一样"全画"；配成 [] 则一条不留。
+            return True
+        w = t.get("waterway")
+        if w and (_wc is None or w in _wc):
+            return True
+        if t.get("natural") in ("water", "glacier", "wood"):
+            return True
+        if t.get("landuse") in ("reservoir", "forest", "meadow"):
+            return True
+        return False
+
+    def rnd(x):
+        return None if x is None else round(x, 5)
+
+    t0 = time.time()
+    d = json.loads(src.read_text(encoding="utf-8"))
+    els = d.get("elements") or []
+    out = []
+    for e in els:
+        if not keep(e):
+            continue
+        if "lat" in e:
+            e["lat"], e["lon"] = rnd(e["lat"]), rnd(e["lon"])
+        g = e.get("geometry")
+        if g:
+            for q in g:
+                q["lat"], q["lon"] = rnd(q.get("lat")), rnd(q.get("lon"))
+        out.append(e)
+    d["elements"] = out
+    dst.write_text(json.dumps(d, ensure_ascii=False, separators=(",", ":")),
+                   encoding="utf-8")
+    try:
+        sig_p.write_text(sig, encoding="utf-8")
+    except OSError:
+        pass
+    if verbose:
+        print(f"   瘦身要素集：{len(els)} → {len(out)} 条 · "
+              f"{src.stat().st_size / 1048576:.0f} → "
+              f"{dst.stat().st_size / 1048576:.0f} MB · {time.time() - t0:.1f}s")
+    del d, els, out
+    return dst
+
+
 def _drop_high_alt_water(osm_path, dem, bbox, snow_m, out_path):
     """雪线以上的小水面直接剔除（仅大窗口总览图启用）。
 
@@ -2148,6 +2316,131 @@ def _drop_high_alt_water(osm_path, dem, bbox, snow_m, out_path):
 
 
 # ------------------------------------------------------------------ 主流程
+def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m):
+    """把 OSM 矢量层叠到地形层上（含水面过滤 / 峰点修正与吸附）并返回 pil。
+
+    抽成函数是为了让 `--osm-only` 能复用已经算好的地形层：改注记、线宽、类别口径时
+    不必重跑 DEM 下载、分层设色、晕渲、雪线（那几步占一次出图的 ~80% 时间）。
+    """
+    LON0, LAT0, LON1, LAT1 = bbox
+    try:
+        sys.path.insert(0, str(HERE))
+        from draw_osm import draw_overlay
+        # 攻略自己的 POI 名要抑制底图重复注记：重名时海拔口径会打架
+        # （OSM 十王峰 1344.4 vs 实测轨迹 1345.5），一律以实测轨迹为准。
+        # ⚠ 只按全名匹配会漏 —— route_def 的 POI 常带后缀（如「万佛顶 · 全程最高」
+        #   「雷洞坪 · 观光车终点」），而 OSM 的注记是「万佛顶」「雷洞坪」，
+        #   全名比对不成立，底图上会并排出现两条同地注记。
+        #   → 除全名外，再把「·」前的核心地名也加进跳过表。
+        try:
+            import route_def as _RD
+            skip = set()
+            for d in GC.pois_of(_RD):
+                skip.add(d["name"])
+                skip.add(d["name"].split("·")[0].strip())
+            # 2026-10-17 念青东：音译差异会让同一个山/村在 OSM 与本线 POI 下各画一遍
+            # （OSM「巴拉拉垭口」vs 攻略「巴巴拉垭口」）。route_def 可配 OSM_SKIP
+            # 显式抑制 OSM 那一条 —— 全串精确匹配拦不住音译，只能手工列。
+            for _s in (getattr(_RD, "OSM_SKIP", []) or []):
+                skip.add(str(_s).strip())
+        except Exception:                                          # noqa
+            skip = set()
+        # 先把 749 MB 裁成「会画到的几万条」，后面水面过滤/峰点修正/吸附/绘制
+        # 四次整读都只吃这份小的（详见 _slim_osm 的注释）。
+        _osm_draw = OUT / "osm.json"
+        try:
+            _osm_draw = _slim_osm(_osm_draw, OUT / "osm_slim.json")
+        except Exception as _e:                                        # noqa
+            print(f"   （要素集瘦身跳过：{_e}）")
+            _osm_draw = OUT / "osm.json"
+        try:
+            if (LON1 - LON0) > 1.5:      # 只在"大窗口总览图"启用
+                _osm_draw = _drop_high_alt_water(_osm_draw, dem, (LON0, LAT0, LON1, LAT1),
+                                                 snow_m, OUT / "osm_draw.json")
+        except Exception as _e:                                        # noqa
+            print(f"   （水面过滤跳过：{_e}）")
+        # ---- 峰点人工修正（CFG["peak_fix"] = {"峰名": [lon, lat]}）----
+        # 用在**OSM 录入明显错、自动吸附又被 400 m 护栏挡住**的那几个峰上：
+        # 把人工核对过的坐标写死，其余要素原样。与 peak_snap 不冲突 —— 改完坐标后
+        # 吸附在新位置重新判一次，差值 <min_gain 就自动不动。
+        # ⚠ 只按 `natural=peak` + 名字全串匹配，别指望它改路/村。
+        try:
+            import route_def as _RD4
+            _fix = (getattr(_RD4, "CFG", None) or {}).get("peak_fix") or {}
+        except Exception:                                          # noqa
+            _fix = {}
+        if isinstance(_fix, dict) and _fix:
+            try:
+                _dd = json.loads(_osm_draw.read_text(encoding="utf-8"))
+                _nfix = 0
+                for _e in _dd.get("elements") or []:
+                    _t = _e.get("tags") or {}
+                    if _t.get("natural") != "peak":
+                        continue
+                    _nm = (_t.get("name") or _t.get("name:en") or "").strip()
+                    if _nm not in _fix:
+                        continue
+                    _lo, _la = float(_fix[_nm][0]), float(_fix[_nm][1])
+                    print(f"   峰点人工修正：{_nm}  {_e.get('lon'):.5f},{_e.get('lat'):.5f}"
+                          f" → {_lo:.5f},{_la:.5f}")
+                    _e["lon"], _e["lat"] = _lo, _la
+                    _nfix += 1
+                if _nfix:
+                    _fixed = OUT / "osm_fixed.json"
+                    _fixed.write_text(json.dumps(_dd, ensure_ascii=False), encoding="utf-8")
+                    _osm_draw = _fixed
+                else:
+                    print("   ⚠ CFG['peak_fix'] 里的名字在本窗口一个都没匹配上（检查措辞）")
+            except Exception as _e:                                # noqa
+                print(f"   （峰点人工修正跳过：{_e}）")
+        # 峰点校正：OSM 的人工峰点常漂在山腰（博格达 7 个具名峰里 3 个偏 350–800 m），
+        # 而等高线是 DEM 画的 —— 不校正就会出现"三角符号不在地形顶上"。
+        snap = {}
+        if GC.cfg_flag("peak_snap", True):
+            try:
+                # 校正灵敏度可由线路覆盖：CFG["peak_snap_min_gain"]（默认 200 m）。
+                # 200 m 太宽松 —— 节点在坡上、离真顶差 50–150 m 也不会动（亚丁 9 个峰点
+                # 实测差 12–137 m）。用户要求"三角在等高线高点"，收到 50 m 更贴合。
+                _min_gain = float(GC.cfg("peak_snap_min_gain", 200.0) or 200.0)
+                # 位移上限：默认 400 m，`None` 表示不限（单线验证过再开 —— 冈仁波齐
+                # 9 个峰点位移 93–1081 m 全是真实漂移）。
+                # ⚠ 这里**不能**用 GC.cfg()：它把显式 None 当"没配"返回 default，
+                #   于是"写 None 想关掉护栏"会静默变回 400。必须查键是否存在。
+                try:
+                    import route_def as _RD
+                    _raw = getattr(_RD, "CFG", None) or {}
+                    _max_shift = _raw["peak_snap_max_shift"] \
+                        if "peak_snap_max_shift" in _raw else 400.0
+                except Exception:                                  # noqa
+                    _max_shift = 400.0
+                _allow = {}
+                try:
+                    import route_def as _RD2
+                    _allow = (getattr(_RD2, "CFG", None) or {}).get("peak_snap_allow") or {}
+                    if not isinstance(_allow, dict):
+                        _allow = {}
+                except Exception:                                  # noqa
+                    _allow = {}
+                if _allow:
+                    print(f"   逐峰例外：{len(_allow)} 个（"
+                          + "、".join(f"{k}≤{v:g} m" for k, v in _allow.items()) + "）")
+                snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0,
+                                         min_gain=_min_gain, max_shift_m=_max_shift,
+                                         allow_shift=_allow)
+                (OUT / "peak_snap.json").write_text(
+                    json.dumps(snap, ensure_ascii=False, indent=0), encoding="utf-8")
+            except Exception as _e:                                    # noqa
+                print(f"   （峰点校正跳过：{_e}）")
+        pil = draw_overlay(pil, m, _osm_draw, skip_names=skip,
+                           px_scale=SS, proj_scale=scale_raster,
+                           peak_snap=snap,
+                           seed_cells=(seed_cells
+                                       | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
+    except FileNotFoundError:
+        pass
+    return pil
+
+
 def build_terrain():
     LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
     # 宽高比钳制：图太宽（东西≫南北）时把南北外扩到上限，图面更协调（详见 cap_aspect）。
@@ -2292,65 +2585,82 @@ def build_terrain():
     # 超采样只负责"把这张掩膜放大几倍"，不参与等高距/线宽/陡坡省略/虚线节距
     # 的任何计算（2026-11-07 用户「等高线不随超采变动」，详见 CONTOUR_REF_SS）。
     # 顺带把旧的 dem_out（RASTER_W 宽 float32，SS=13 时 900 MB）整块省掉。
-    dem_ref, _m_per_px, c_minor, c_major, c_cov, _ref_w = contour_plan(dem, lat_c, meta["z"])
-    # 计曲线间隔也可单独指定：CFG["contour_major"]。
-    # 为什么需要：首曲线被固定成非整数倍时（如 15 m），`nice_major()` 只能给 75 m ——
-    # 高程注记变成 75/150/225 这种不好读的数字。单独指定 100 m 就回到规范值。
-    _cmaj = _route_cfg("contour_major", None)
-    if _cmaj:
-        c_major = float(_cmaj)
-        print(f"   计曲线间隔由线路指定：{c_major:g} m")
-    # 老路径（contour_width=None）的计线补偿也按**基准 px**：SS-2 在 SS=13 时是 11 px，
-    # 放到基准栅格上等于 11/4512 的粗线（整幅糊成灰带）。基准口径恒为 3-2=1。
-    _w_major = max(CONTOUR_DILATE[1], CONTOUR_REF_SS - 2)
-    # 线宽默认 CONTOUR_WIDTH=(1,2)，可按线路用 CFG["contour_width"] 覆盖，
-    # 单位**基准栅格 px**（= 4512 px 画幅上的 px），不随超采样变；
-    # 显式 None 退回老行为（首线 1 px、计线基准 1 px 补偿）。
-    _cw = _route_cfg("contour_width", CONTOUR_WIDTH)
-    _w_px = None
-    if _cw:
-        _w_px = (int(_cw[0]), int(_cw[1]))
-    # 两种线宽口径（2026-11-07 用户先选「逻辑宽恒定」，随后改为「输出 px 固定」）：
-    #   · 默认 False → `contour_width` 单位是**基准栅格 px**，出图时掩膜整体放大 ×SS/3，
-    #     所以逻辑宽恒定（4512 图 1/2 px，19552 图 4.33/8.66 px，换算逻辑宽仍 1/3、2/3）。
-    #   · True       → `contour_width` 单位是**最终图上的实际像素**，无论 SS 多大都恒
-    #     为首 1 / 计 2 px。代价：线覆盖率 ∝ 1/放大倍数（缩图会变淡），且与选档判据
-    #     （在基准栅格上测）脱钩。默认关，别影响既有线路。
-    _abs_px = bool(_route_cfg("contour_width_absolute", False))
-    _k = RASTER_W / _ref_w
-    if _abs_px:
-        _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
-        print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_wp[0]}/{_wp[1]} px@出图，固定不随超采变化）…")
-    elif _w_px:
-        print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_w_px[0]}/{_w_px[1]} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
-    else:
-        print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
-              f"线宽 {_w_major} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
+    # ---- 等高线总开关（CFG["contours"]，默认 True = 旧行为）----
+    # 1:50 万级总览图（0.54 km/px）上，500 m 等高距的相邻线平均只隔 1–2 px：
+    # 画出来既不是「线」（读不出高程关系）也不是「色带」（不连续），只能靠把它加粗到
+    # 4.33 px 假装成纹理 —— 那不是地形图语法。这条尺度上的通行做法是**分层设色 + 晕渲**，
+    # 等高线只出现在分幅图（0.1 km/px，500 m 间距 5 px）里。
+    # 关掉时同时省掉 contour_plan（要跑覆盖率选档，是这一步最贵的一环）与高程标注。
+    _CONTOUR_ON = bool(_route_cfg("contours", True))
     arr = np.asarray(pil).copy()
-    # 线色来源可按线路切：派生色（`CONTOUR_DERIVED`，随底图同色相）在**大窗口总览图**
-    # 上会"消失"—— 线是提亮型的浅色，与晕渲受光坡同色相、亮度也接近，实测 19552 px
-    # 全幅 4.33 px 宽、alpha 0.30 仍读不出（2026-11-09 GHT 全线）。总览图改 `False`
-    # 走固定灰棕，才是地形图里那种"深色细线"，雪区/草甸的"跳"在这个尺度反而无妨。
-    _derived = bool(_route_cfg("contour_derived", CONTOUR_DERIVED))
-    if not _derived:
-        print(f"   等高线线色：固定灰棕（CFG['contour_derived']=False，不走派生色）")
-    if _abs_px:
-        # 只在**出图栅格**上重算 band edges（1 px 原始边线），再按固定 px 加宽；
-        # 等高距、陡坡省略的物理坡度仍来自基准 plan（m_per_px 同比缩小即可）。
-        # ⚠ 这张 dem_raster 用完立刻 del —— 226 MP 画幅下它是 900 MB，
-        #   留着会与 paint_contours 的 f / base 一起撞内存上限。
-        dem_raster = np.asarray(
-            Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS))
-        _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
-        paint_contours(arr, dem_raster, 0, 0, minor=c_minor, major=c_major,
-                       m_per_px=_m_per_px / _k, w_px=_wp, derived=_derived)
-        del dem_raster
+    if _CONTOUR_ON:
+        dem_ref, _m_per_px, c_minor, c_major, c_cov, _ref_w = contour_plan(dem, lat_c, meta["z"])
+        # 计曲线间隔也可单独指定：CFG["contour_major"]。
+        # 为什么需要：首曲线被固定成非整数倍时（如 15 m），`nice_major()` 只能给 75 m ——
+        # 高程注记变成 75/150/225 这种不好读的数字。单独指定 100 m 就回到规范值。
+        _cmaj = _route_cfg("contour_major", None)
+        if _cmaj:
+            c_major = float(_cmaj)
+            print(f"   计曲线间隔由线路指定：{c_major:g} m")
+        # 老路径（contour_width=None）的计线补偿也按**基准 px**：SS-2 在 SS=13 时是 11 px，
+        # 放到基准栅格上等于 11/4512 的粗线（整幅糊成灰带）。基准口径恒为 3-2=1。
+        _w_major = max(CONTOUR_DILATE[1], CONTOUR_REF_SS - 2)
+        # 线宽默认 CONTOUR_WIDTH=(1,2)，可按线路用 CFG["contour_width"] 覆盖，
+        # 单位**基准栅格 px**（= 4512 px 画幅上的 px），不随超采样变；
+        # 显式 None 退回老行为（首线 1 px、计线基准 1 px 补偿）。
+        _cw = _route_cfg("contour_width", CONTOUR_WIDTH)
+        _w_px = None
+        if _cw:
+            _w_px = (int(_cw[0]), int(_cw[1]))
+        # 两种线宽口径（2026-11-07 用户先选「逻辑宽恒定」，随后改为「输出 px 固定」）：
+        #   · 默认 False → `contour_width` 单位是**基准栅格 px**，出图时掩膜整体放大 ×SS/3，
+        #     所以逻辑宽恒定（4512 图 1/2 px，19552 图 4.33/8.66 px，换算逻辑宽仍 1/3、2/3）。
+        #   · True       → `contour_width` 单位是**最终图上的实际像素**，无论 SS 多大都恒
+        #     为首 1 / 计 2 px。代价：线覆盖率 ∝ 1/放大倍数（缩图会变淡），且与选档判据
+        #     （在基准栅格上测）脱钩。默认关，别影响既有线路。
+        _abs_px = bool(_route_cfg("contour_width_absolute", False))
+        _k = RASTER_W / _ref_w
+        if _abs_px:
+            _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
+            print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+                  f"线宽 {_wp[0]}/{_wp[1]} px@出图，固定不随超采变化）…")
+        elif _w_px:
+            print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+                  f"线宽 {_w_px[0]}/{_w_px[1]} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
+        else:
+            print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
+                  f"线宽 {_w_major} px@{_ref_w}px 基准 → ×{_k:.2f} 出图）…")
+        # 线色来源可按线路切：派生色（`CONTOUR_DERIVED`，随底图同色相）在**大窗口总览图**
+        # 上会"消失"—— 线是提亮型的浅色，与晕渲受光坡同色相、亮度也接近，实测 19552 px
+        # 全幅 4.33 px 宽、alpha 0.30 仍读不出（2026-11-09 GHT 全线）。总览图改 `False`
+        # 走固定灰棕，才是地形图里那种"深色细线"，雪区/草甸的"跳"在这个尺度反而无妨。
+        _derived = bool(_route_cfg("contour_derived", CONTOUR_DERIVED))
+        if not _derived:
+            print(f"   等高线线色：固定灰棕（CFG['contour_derived']=False，不走派生色）")
+        if _abs_px:
+            # 只在**出图栅格**上重算 band edges（1 px 原始边线），再按固定 px 加宽；
+            # 等高距、陡坡省略的物理坡度仍来自基准 plan（m_per_px 同比缩小即可）。
+            # ⚠ 这张 dem_raster 用完立刻 del —— 226 MP 画幅下它是 900 MB，
+            #   留着会与 paint_contours 的 f / base 一起撞内存上限。
+            dem_raster = np.asarray(
+                Image.fromarray(dem, "F").resize((RASTER_W, RASTER_H), Image.LANCZOS))
+            _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
+            paint_contours(arr, dem_raster, 0, 0, minor=c_minor, major=c_major,
+                           m_per_px=_m_per_px / _k, w_px=_wp, derived=_derived)
+            del dem_raster
+        else:
+            paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
+                           m_per_px=_m_per_px, w_px=_w_px, derived=_derived,
+                           raster_shape=(RASTER_H, RASTER_W))
     else:
-        paint_contours(arr, dem_ref, CONTOUR_DILATE[0], _w_major, minor=c_minor, major=c_major,
-                       m_per_px=_m_per_px, w_px=_w_px, derived=_derived,
-                       raster_shape=(RASTER_H, RASTER_W))
+        # 只造基准栅格 DEM：雪线掩膜要用它（等高距/线宽一律不参与）。
+        _ref_w, _ref_h = contour_ref_size(dem.shape)
+        dem_ref = np.asarray(
+            Image.fromarray(dem, "F").resize((_ref_w, _ref_h), Image.BILINEAR))
+        _m_per_px, c_minor, c_major = 0.0, 0.0, 0.0
+        _k = RASTER_W / _ref_w
+        print("[4/7] 等高线：CFG['contours']=False → 不画线、不标高程"
+              "（1:50 万口径：分层设色 + 晕渲 + 雪线/冰川面）")
     # 雪线：联网核实的北坡 6000 m（南坡 5000 m 写进注记），叠在 DEM 等高线上
     # ⚠ CFG["snowline_draw"]=False 只关**这条蓝虚线**，地貌垂直带的雪色照旧按 snow_m 分档。
     #   为什么需要这个开关（2026-11-07 GHT 全幅实测）：雪线掩膜是「任何 below/above 交界」，
@@ -2359,8 +2669,13 @@ def build_terrain():
     scale_raster_y = RASTER_H / dh
     _snow_draw = _route_cfg("snowline_draw", True)
     if _snow_draw:
+        # 平滑半径按基准栅格 px（4512 宽）。总览尺度上 4 px ≈ 0.8 km，
+        # 足以吃掉高原面的小闭环又不动山脊走向；分幅图配 0（逐像素、贴合真实雪线）。
+        _sm = int(_route_cfg("snowline_smooth_px", 0) or 0)
+        if _sm:
+            print(f"   雪线掩膜：先平滑 {_sm} px（基准栅格）再取等高，避免高原面碎闭环")
         snow_mask = paint_snowline(arr, dem_ref, level=snow_m,
-                                   raster_shape=(RASTER_H, RASTER_W))
+                                   raster_shape=(RASTER_H, RASTER_W), smooth_px=_sm)
     else:
         snow_mask = None
     pil = Image.fromarray(arr, "RGB")
@@ -2375,11 +2690,16 @@ def build_terrain():
             pil, dem, snow_m, (scale_raster, scale_raster_y),
             avoid=avoid_points(meta, scale_raster, SS))
 
-    print(f"[5/7] 等高线高程标注（计曲线每 {c_major:g} m）…")
-    pil, seed_cells = draw_contour_labels(
-        pil, dem, (scale_raster, scale_raster_y), lo, hi,
-        avoid=avoid_points(meta, scale_raster, SS), every=c_major)
-    seed_cells = seed_cells | snow_cells
+    if _CONTOUR_ON:
+        print(f"[5/7] 等高线高程标注（计曲线每 {c_major:g} m）…")
+        pil, seed_cells = draw_contour_labels(
+            pil, dem, (scale_raster, scale_raster_y), lo, hi,
+            avoid=avoid_points(meta, scale_raster, SS), every=c_major)
+        seed_cells = seed_cells | snow_cells
+    else:
+        # 不画线就不标配数字：只留雪线名与峰顶高程（1:50 万图的注记就这两类）。
+        print("[5/7] 等高线高程标注：跳过（无等高线可依）")
+        seed_cells = set(snow_cells)
 
     print(f"[6/7] OSM 矢量叠加 + 落盘（超采样 {SS}× → 栅格 {RASTER_W}px / 逻辑 {LOGICAL_W}px）…")
     pil.save(OUT / "base_terrain.jpg", **JPG)
@@ -2401,114 +2721,8 @@ def build_terrain():
     (OUT / "base_meta.json").write_text(json.dumps(m, ensure_ascii=False, indent=1),
                                         encoding="utf-8")
 
-    try:
-        sys.path.insert(0, str(HERE))
-        from draw_osm import draw_overlay
-        # 攻略自己的 POI 名要抑制底图重复注记：重名时海拔口径会打架
-        # （OSM 十王峰 1344.4 vs 实测轨迹 1345.5），一律以实测轨迹为准。
-        # ⚠ 只按全名匹配会漏 —— route_def 的 POI 常带后缀（如「万佛顶 · 全程最高」
-        #   「雷洞坪 · 观光车终点」），而 OSM 的注记是「万佛顶」「雷洞坪」，
-        #   全名比对不成立，底图上会并排出现两条同地注记。
-        #   → 除全名外，再把「·」前的核心地名也加进跳过表。
-        try:
-            import route_def as _RD
-            skip = set()
-            for d in GC.pois_of(_RD):
-                skip.add(d["name"])
-                skip.add(d["name"].split("·")[0].strip())
-            # 2026-10-17 念青东：音译差异会让同一个山/村在 OSM 与本线 POI 下各画一遍
-            # （OSM「巴拉拉垭口」vs 攻略「巴巴拉垭口」）。route_def 可配 OSM_SKIP
-            # 显式抑制 OSM 那一条 —— 全串精确匹配拦不住音译，只能手工列。
-            for _s in (getattr(_RD, "OSM_SKIP", []) or []):
-                skip.add(str(_s).strip())
-        except Exception:                                          # noqa
-            skip = set()
-        _osm_draw = OUT / "osm.json"
-        try:
-            if (LON1 - LON0) > 1.5:      # 只在"大窗口总览图"启用
-                _osm_draw = _drop_high_alt_water(_osm_draw, dem, (LON0, LAT0, LON1, LAT1),
-                                                 snow_m, OUT / "osm_draw.json")
-        except Exception as _e:                                        # noqa
-            print(f"   （水面过滤跳过：{_e}）")
-        # ---- 峰点人工修正（CFG["peak_fix"] = {"峰名": [lon, lat]}）----
-        # 用在**OSM 录入明显错、自动吸附又被 400 m 护栏挡住**的那几个峰上：
-        # 把人工核对过的坐标写死，其余要素原样。与 peak_snap 不冲突 —— 改完坐标后
-        # 吸附在新位置重新判一次，差值 <min_gain 就自动不动。
-        # ⚠ 只按 `natural=peak` + 名字全串匹配，别指望它改路/村。
-        try:
-            import route_def as _RD4
-            _fix = (getattr(_RD4, "CFG", None) or {}).get("peak_fix") or {}
-        except Exception:                                          # noqa
-            _fix = {}
-        if isinstance(_fix, dict) and _fix:
-            try:
-                _dd = json.loads(_osm_draw.read_text(encoding="utf-8"))
-                _nfix = 0
-                for _e in _dd.get("elements") or []:
-                    _t = _e.get("tags") or {}
-                    if _t.get("natural") != "peak":
-                        continue
-                    _nm = (_t.get("name") or _t.get("name:en") or "").strip()
-                    if _nm not in _fix:
-                        continue
-                    _lo, _la = float(_fix[_nm][0]), float(_fix[_nm][1])
-                    print(f"   峰点人工修正：{_nm}  {_e.get('lon'):.5f},{_e.get('lat'):.5f}"
-                          f" → {_lo:.5f},{_la:.5f}")
-                    _e["lon"], _e["lat"] = _lo, _la
-                    _nfix += 1
-                if _nfix:
-                    _fixed = OUT / "osm_fixed.json"
-                    _fixed.write_text(json.dumps(_dd, ensure_ascii=False), encoding="utf-8")
-                    _osm_draw = _fixed
-                else:
-                    print("   ⚠ CFG['peak_fix'] 里的名字在本窗口一个都没匹配上（检查措辞）")
-            except Exception as _e:                                # noqa
-                print(f"   （峰点人工修正跳过：{_e}）")
-        # 峰点校正：OSM 的人工峰点常漂在山腰（博格达 7 个具名峰里 3 个偏 350–800 m），
-        # 而等高线是 DEM 画的 —— 不校正就会出现"三角符号不在地形顶上"。
-        snap = {}
-        if GC.cfg_flag("peak_snap", True):
-            try:
-                # 校正灵敏度可由线路覆盖：CFG["peak_snap_min_gain"]（默认 200 m）。
-                # 200 m 太宽松 —— 节点在坡上、离真顶差 50–150 m 也不会动（亚丁 9 个峰点
-                # 实测差 12–137 m）。用户要求"三角在等高线高点"，收到 50 m 更贴合。
-                _min_gain = float(GC.cfg("peak_snap_min_gain", 200.0) or 200.0)
-                # 位移上限：默认 400 m，`None` 表示不限（单线验证过再开 —— 冈仁波齐
-                # 9 个峰点位移 93–1081 m 全是真实漂移）。
-                # ⚠ 这里**不能**用 GC.cfg()：它把显式 None 当"没配"返回 default，
-                #   于是"写 None 想关掉护栏"会静默变回 400。必须查键是否存在。
-                try:
-                    import route_def as _RD
-                    _raw = getattr(_RD, "CFG", None) or {}
-                    _max_shift = _raw["peak_snap_max_shift"] \
-                        if "peak_snap_max_shift" in _raw else 400.0
-                except Exception:                                  # noqa
-                    _max_shift = 400.0
-                _allow = {}
-                try:
-                    import route_def as _RD2
-                    _allow = (getattr(_RD2, "CFG", None) or {}).get("peak_snap_allow") or {}
-                    if not isinstance(_allow, dict):
-                        _allow = {}
-                except Exception:                                  # noqa
-                    _allow = {}
-                if _allow:
-                    print(f"   逐峰例外：{len(_allow)} 个（"
-                          + "、".join(f"{k}≤{v:g} m" for k, v in _allow.items()) + "）")
-                snap = snap_peaks_to_dem(_osm_draw, dem, meta, (LAT0 + LAT1) / 2.0,
-                                         min_gain=_min_gain, max_shift_m=_max_shift,
-                                         allow_shift=_allow)
-                (OUT / "peak_snap.json").write_text(
-                    json.dumps(snap, ensure_ascii=False, indent=0), encoding="utf-8")
-            except Exception as _e:                                    # noqa
-                print(f"   （峰点校正跳过：{_e}）")
-        pil = draw_overlay(pil, m, _osm_draw, skip_names=skip,
-                           px_scale=SS, proj_scale=scale_raster,
-                           peak_snap=snap,
-                           seed_cells=(seed_cells
-                                       | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
-    except FileNotFoundError:
-        pass
+    pil = _overlay(pil, m, dem, meta, (LON0, LAT0, LON1, LAT1),
+                   SS, scale_raster, seed_cells, snow_m)
     # 署名水印（栅格层）：烧在最终底图上 —— HTML 内嵌地图与长图都吃这一张，
     # 所以在渲染期加，而不是让人事后用图片工具去盖。高清图另有独立一份（render_map_hi）。
     pil = GC.burn_watermark(pil)
@@ -2517,5 +2731,35 @@ def build_terrain():
           f"jpg {(OUT/'base_map.jpg').stat().st_size/1048576:.2f} MB")
 
 
+def build_overlay_only():
+    """只重跑 OSM 叠层：复用 base_terrain.jpg + base_meta.json。
+
+    判据：改注记/线宽/类别口径时，DEM 下载 + 分层设色 + 晕渲 + 雪线（约占一次出图
+    80% 的时间）**结果完全不变**，没有理由重算。地形层一旦定稿，后续迭代表只该碰
+    叠层这一层（2026-11-10）。
+    """
+    meta_p, terr = OUT / "base_meta.json", OUT / "base_terrain.jpg"
+    if not meta_p.exists() or not terr.exists():
+        raise SystemExit("缺 base_terrain.jpg / base_meta.json —— 先完整跑一次 make_terrain.py")
+    m = json.loads(meta_p.read_text(encoding="utf-8"))
+    LON0, LAT0, LON1, LAT1 = m["bbox"]
+    pil = Image.open(terr).convert("RGB")
+    print(f"[osm-only] 复用地形层 {pil.size} · 逻辑 {m['size'][0]}×{m['size'][1]}"
+          f" · bbox {m['bbox']}")
+    dem, meta = load_dem(int(m["z"]), LON0, LAT0, LON1, LAT1)
+    dem = fill_voids(dem)
+    scale_raster = m["raster"][0] / dem.shape[1]
+    t0 = time.time()
+    pil = _overlay(pil, m, dem, meta, (LON0, LAT0, LON1, LAT1),
+                   int(m.get("ss", 1)), scale_raster, set(), float(m["snowline"]))
+    pil = GC.burn_watermark(pil)
+    pil.save(OUT / "base_map.jpg", **JPG)
+    print(f"[osm-only] 完成 → base_map.jpg {pil.size}  "
+          f"{time.time() - t0:.1f}s  高程不改（沿用 base_meta）")
+
+
 if __name__ == "__main__":
-    build_terrain()
+    if "--osm-only" in sys.argv:
+        build_overlay_only()
+    else:
+        build_terrain()
