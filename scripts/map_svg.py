@@ -1825,7 +1825,11 @@ def _legend_band_svg():
         cx = x0 + (i % cols) * cw
         ry = BD_PADT + BD_ROW0 + BD_PITCH * (i // cols)
         if kind == "sym":
-            o.append(f'<g transform="translate({cx + 8:.1f},{ry - 5:.1f}) scale(0.42)">'
+            # 符号按 mk_pin 的**原生尺寸**（外径 PIN_D=15 逻辑 px）画，不再 ×0.42：
+            # 0.42 是当年按"图面内小图标"定的，放进下方图例带后直径只剩 6.3 逻辑 px，
+            # 与 13.5 px 的说明文字并排时缩成一个小点（2026-11-09 GHT 全线实测：
+            # 缩略后"起点/终点"左侧几乎看不到标记）。图例符号本来就该与文字同量级。
+            o.append(f'<g transform="translate({cx + 10:.1f},{ry - 5:.1f})">'
                      f'{mk_pin(0, 0, glyph)}</g>')
             o.append(f'<text x="{cx + 30:.0f}" y="{ry}" font-size="13.5" font-weight="700" '
                      f'fill="#4A5261">{_esc(text)}</text>')

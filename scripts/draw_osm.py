@@ -734,6 +734,25 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     S = float(px_scale)
     # 道路线宽缩放（CFG["road_scale"]）：大窗口线路要压细，见 road 分支说明。
     _rs_scale = float(GC.cfg("road_scale", 1.0) or 1.0)
+    # ---- 类别白名单（2026-11-09 新增，默认 None = 全画，老线路行为不变）----
+    # 为什么需要：OSM 的数据密度是**区域性**的（尼泊尔是 HOT 重点区，几乎每条村道、
+    # 每条 footpath 都数字化；西藏高原只有国道/县道）。同一个窗口跨两国时，按数据
+    # 全画 → 西半边是"紫色小径网 + 白色街道网"，东半边是"稀疏橙色干线"，
+    # GHT 全线实测两侧要素比 40:1，整幅像两张图拼的。**要统一，只能统一口径**：
+    # 按「画幅尺度」而不是「数据有没有」来决定画哪几类。
+    # 判据：1 逻辑 px ≈ 0.54 km（8.4° 窗口 / 1504 px）时，residential 街巷 < 0.1 px，
+    # track/path 全是噪声；留 trunk/primary/secondary/tertiary 四档即可表达"通路"。
+    _road_cls = GC.cfg("osm_road_classes", None)
+    _trail_cls = GC.cfg("osm_trail_classes", None)
+    _water_cls = GC.cfg("osm_water_classes", None)
+    _road_min_km = GC.cfg("osm_road_min_km", None) or {}
+    _road_cls = None if _road_cls is None else set(_road_cls)
+    _trail_cls = None if _trail_cls is None else set(_trail_cls)
+    _water_cls = None if _water_cls is None else set(_water_cls)
+    print(f"   道路类别：{'全部' if _road_cls is None else sorted(_road_cls)}"
+          f" · 步道类别：{'全部' if _trail_cls is None else (sorted(_trail_cls) or '不画')}"
+          f" · 水系线：{'全部' if _water_cls is None else sorted(_water_cls)}"
+          + (f" · 长度下限：{_road_min_km}" if _road_min_km else ""))
     global NO_CROWD
     NO_CROWD = _cfg_flag("label_no_crowd", False)
 
@@ -761,8 +780,34 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     proj = make_projector(meta["z"], meta["tx0"], meta["ty0"], meta["box"],
                           proj_scale or meta["scale"])
     size = pil.size
+    # 面状地物面积下限（CFG["landuse_min_km2"]，默认 0 = 不过滤，老线路行为不变）。
+    # 为什么要有：林地/草地面在 OSM 里是**区域性**数字化的 —— 尼泊尔把每条田边、
+    # 每片牧坡都画成小多边形（本窗口 west 每 0.5° 带 2–5 千个，西藏只有 9–217 个）；
+    # 它们画成虚线轮廓后，低倍图上就是一片"白色小方格"噪点（2026-11-09 GHT 全线实测）。
+    # 面积小于阈值的一律不画，两侧就都只剩"成片的森林/牧场"，口径一致。
+    _land_min_km2 = float(GC.cfg("landuse_min_km2", 0) or 0)
+    _land_min_px = 0.0
+    _bb = meta.get("bbox")
+    if _land_min_km2 > 0 and _bb and len(_bb) == 4:
+        _w_km = abs(_bb[2] - _bb[0]) * 111.32 * math.cos(math.radians((_bb[1] + _bb[3]) / 2.0))
+        if _w_km > 0:
+            _land_min_px = _land_min_km2 * (size[0] / _w_km) ** 2
     ov = Image.new("RGBA", size, (0, 0, 0, 0))
     d = ImageDraw.Draw(ov, "RGBA")
+
+    def _way_km(e):
+        """道路长度（km）。只用于 CFG["osm_road_min_km"] 的短段过滤。"""
+        g = e.get("geometry") or []
+        s = 0.0
+        for a, b in zip(g, g[1:]):
+            _la = a.get("lat")
+            _lb = b.get("lat")
+            if _la is None or _lb is None:
+                continue
+            dy = (_lb - _la) * 111.32
+            dx = (b["lon"] - a["lon"]) * 111.32 * math.cos(math.radians((_la + _lb) / 2.0))
+            s += math.hypot(dx, dy)
+        return s
 
     def bucket(e):
         t = e.get("tags", {})
@@ -779,12 +824,18 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if "highway" in t:
             h = t["highway"]
             if h in ROAD_STYLE:
+                if _road_cls is not None and h not in _road_cls:
+                    return None
+                _mn = _road_min_km.get(h)
+                if _mn and _way_km(e) < float(_mn):
+                    return None
                 return ("road", h)
             if h in TRAIL_STYLE:
-                return ("trail", h)
+                return ("trail", h) if (_trail_cls is None or h in _trail_cls) else None
             return None
         if "waterway" in t:
-            return ("water", t["waterway"])
+            w = t["waterway"]
+            return ("water", w) if (_water_cls is None or w in _water_cls) else None
         if t.get("natural") == "water" or t.get("landuse") == "reservoir":
             return ("waterbody", None)
         if t.get("natural") == "glacier" and draw_glacier:
@@ -818,6 +869,15 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if b[0] in ("wood", "meadow", "waterbody"):
             outs, ins = _poly_rings(e, proj, size)
             for ring in outs:
+                if _land_min_px > 0 and b[0] in ("wood", "meadow") and len(ring) > 2:
+                    # 鞋带公式取面积（栅格 px²），小于阈值的田块/牧坡不画
+                    _a2 = 0.0
+                    for _k in range(len(ring)):
+                        _x0, _y0 = ring[_k]
+                        _x1, _y1 = ring[(_k + 1) % len(ring)]
+                        _a2 += _x0 * _y1 - _x1 * _y0
+                    if abs(_a2) / 2.0 < _land_min_px:
+                        continue
                 drawable.append((order[b[0]], b[0], b[1], ring, e,
                                  tuple(ins) if b[0] == "waterbody" else ()))
             continue
