@@ -717,7 +717,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
       线宽/字号/图标/占位网格也默认同比放大。2026-11-10 起三套倍率可解耦：
       `label_font_cap` 给字体封顶、`grid_line_ss` 固定线宽基准，见下方 S_IN 注释。
     proj_scale: 投影用的「栅格像素 / 瓦片像素」比例；默认取 meta["scale"]（非超采样场景）。
-    seed_cells: 已被占用的注记网格（cell = 14×画幅倍率，字体封顶时由本函数换算），
+    seed_cells: 已被占用的注记网格（cell = 14×画幅倍率，与 Labeller 同口径），
       一般传等高线高程标注的占位，让地名/峰名主动避开等高线数字。
     peak_snap: `{"lon,lat": [lon, lat]}`，把漂在山腰的 OSM 峰点换到 DEM 山顶。
       由 `make_terrain.snap_peaks_to_dem()` 算好传进来（本模块没有 DEM）；
@@ -1049,20 +1049,19 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                     road_refs.append((pts, _nm, sub, True))
 
     # ---------------- 注记 ----------------
-    lab = Labeller(size, cell=14 * S)
+    # ⚠ 避让网格按**画幅倍率** S_IN 走，不跟字体倍率 S 一起缩小：
+    #   字号封顶 4 后 F(15.5)=62 px，若 cell 也压到 56 px，全图容量会从
+    #   ~2600 暴涨到 ~7900，再叠加 fallback 就成「字毯」（2026-11-10 实测
+    #   11042 条地名 / 挤放 11044 条）。网格保持 14×S_IN=182 px，
+    #   一个名字框约 2×1 格，容量约 2600 条 —— 补齐而不泛滥。
+    #   draw_osm 只负责"哪些名字有资格上图"，最终落字位置由 map_svg 重排，
+    #   所以这里 gap/偏移用网格口径（S_IN）不影响成品视觉。
+    lab = Labeller(size, cell=14 * S_IN)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
     # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
     lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", False)
     if seed_cells:
-        # seed_cells（雪线/等高线数字 + POI 禁标框）由 make_terrain 按 14*S_IN 网格生成；
-        # 字体倍率封顶后 Labeller 的 cell 变成 14*S，两套格子必须换算，否则禁标区
-        # 会整体缩到地图左上角（格子索引被当成新网格的坐标）。
-        if abs(S_IN - S) > 1e-6:
-            k = S_IN / S
-            lab.grid |= {(int(round(cx * k)), int(round(cy * k)))
-                         for cx, cy in seed_cells}
-        else:
-            lab.grid |= set(seed_cells)
+        lab.grid |= set(seed_cells)
 
     def _dedupe_by_name(cands, sep, name_idx, sort_idx=None, x_idx=0, y_idx=1):
         """按**名字**去重：同名注记至少相距 sep（栅格 px）才允许再放一个。
