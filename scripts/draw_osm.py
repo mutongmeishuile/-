@@ -713,11 +713,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     skip_names: 需要抑制的注记名（一般是攻略自己的 POI 名）。
       重名时两边海拔常不同（OSM 十王峰 1344.4 vs 实测轨迹 1345.5），
       同图出现两个数会让人误判——**以实测轨迹为准，抑制 OSM 那条**。
-    px_scale:  栅格超采样倍率。底图按 LOGICAL_W×SS 出图时传 SS，
-      线宽/字号/图标/占位网格全部同比放大，缩回逻辑尺寸后即得抗锯齿的锐利边缘。
+    px_scale:  栅格超采样倍率（= 画幅倍率 SS）。几何坐标按它投影，
+      线宽/字号/图标/占位网格也默认同比放大。2026-11-10 起三套倍率可解耦：
+      `label_font_cap` 给字体封顶、`grid_line_ss` 固定线宽基准，见下方 S_IN 注释。
     proj_scale: 投影用的「栅格像素 / 瓦片像素」比例；默认取 meta["scale"]（非超采样场景）。
-    seed_cells: 已被占用的注记网格（cell = 14×px_scale），一般传等高线高程标注的占位，
-      让地名/峰名主动避开等高线数字，避免两种注记叠在同一个点上。
+    seed_cells: 已被占用的注记网格（cell = 14×画幅倍率，字体封顶时由本函数换算），
+      一般传等高线高程标注的占位，让地名/峰名主动避开等高线数字。
     peak_snap: `{"lon,lat": [lon, lat]}`，把漂在山腰的 OSM 峰点换到 DEM 山顶。
       由 `make_terrain.snap_peaks_to_dem()` 算好传进来（本模块没有 DEM）；
       key 用**原始坐标**（7 位小数），所以不依赖要素顺序。空表 = 不校正。
@@ -734,10 +735,27 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   落在没有任何地物的位置，画出来就是一个莫名其妙的孤立小字（2026-11-08 用户截图指出）。
     #   判据收得很窄 —— 只打"纯字母 1–2 位"，K2 / A1 这种含数字的真地名不受影响。
     _JUNK = re.compile(r"[A-Za-z]{1,2}\Z")
+    # 纯标点名（". ." / ".." / "()" / ","）没有任何地理信息，画出来就是孤立脏点。
+    # 2026-11-10 GHT 全线实测 label_boxes.json 里有 5 条，截图上是一串小逗号。
+    _ALNUM = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
 
     def _skip(nm):
-        return (not nm) or (nm in skip_names) or bool(_JUNK.match(nm))
-    S = float(px_scale)
+        return (not nm) or (nm in skip_names) or bool(_JUNK.match(nm)) \
+            or not _ALNUM.search(nm)
+    S_IN = float(px_scale)
+    # ---- 三套倍率，彼此解耦（2026-11-10 GHT 全线定案）----
+    #   S_IN    调用方给的**画幅**倍率（= make_terrain 的 SS，全线 13 → 19552 px）。
+    #   S       字体 / 符号 / 占位网格倍率 = min(S_IN, label_font_cap)。
+    #           画幅仍按 S_IN 出，但字体不该跟着画幅一起放大；全线 cap=4。
+    #   GRID_SS 栅格**线宽**的固定基准（CFG["grid_line_ss"]，默认 = S_IN → 老线路不变）。
+    #           全线配 8：W(v) = round(v×8×0.55)，与画幅倍率、字体倍率都无关。
+    #   SEP_SS  按名去重间距的倍率（CFG["label_dedupe_sep_scale"]，默认 = S）。
+    #           sep 里的 `size[0]*比例` 已经是**栅格 px**，再乘一个 S 会超过图宽
+    #           （全线 SS=13 时水系 sep=63544 px > 19552 图宽 → 同名河全图只留 1 个）。
+    _font_cap = float(GC.cfg("label_font_cap", 0) or 0)
+    S = min(S_IN, _font_cap) if _font_cap > 0 else S_IN
+    GRID_SS = float(GC.cfg("grid_line_ss", S_IN) or S_IN)
+    SEP_SS = float(GC.cfg("label_dedupe_sep_scale", S) or S)
     # 道路线宽缩放（CFG["road_scale"]）：大窗口线路要压细，见 road 分支说明。
     _rs_scale = float(GC.cfg("road_scale", 1.0) or 1.0)
     # 水系线宽缩放（CFG["water_scale"]）：与 road_scale 同理但**独立**。
@@ -765,6 +783,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
           + (f" · 长度下限：{_road_min_km}" if _road_min_km else ""))
     global NO_CROWD
     NO_CROWD = _cfg_flag("label_no_crowd", False)
+    # 「补齐 OSM 标注」的线路级开关（默认 False = 老行为）：NO_CROWD 仍生效，
+    # 但允许村镇名 / 水系名在找不到完全空位时挤放一次，而不是直接丢掉。
+    _place_fb = _cfg_flag("label_place_fallback", False)
+    _water_fb = _cfg_flag("label_water_fallback", False)
 
     def W(v):
         """线宽 → 栅格整数像素。
@@ -772,9 +794,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         ⚠ 2026-10-21 用户：水系/公路线太粗。总览图 ss=4（10000 px）时，
         5.0 的公路芯线乘 4 就是 20 px —— 比轨迹还宽。大栅格统一乘 0.55，
         小栅格（ss=2）保持不变。
+        ⚠ 2026-11-10 GHT 全线：线宽基准与出图倍率解耦，固定 GRID_SS=8
+        （W(v)=round(v×8×0.55)），画幅仍 19552 px、字体只 ×4。
+        老线路 GRID_SS 默认 = S，行为逐字不变。
         """
-        k = 0.55 if S >= 3 else 1.0
-        return max(1, int(round(v * S * k)))
+        k = 0.55 if GRID_SS >= 3 else 1.0
+        return max(1, int(round(v * GRID_SS * k)))
 
     def F(v):
         """字号 → 栅格像素。
@@ -959,7 +984,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                     d.polygon(pts, fill=C_WOOD if kind == "wood" else C_MEADOW)
                 else:
                     _dashed(d, pts + [pts[0]], C_WOOD_ED if kind == "wood" else C_MEADOW_ED,
-                            W(1.0), 5.0 * S, 5.0 * S)
+                            W(1.0), 5.0 * GRID_SS, 5.0 * GRID_SS)
                 n_poly += 1
         elif kind == "waterbody":
             if len(pts) > 2:
@@ -978,7 +1003,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             big = sub in ("river", "canal")
             if e.get("tags", {}).get("intermittent") == "yes":
                 # 时令河：虚线、细一档。见 C_STREAM_SEASON 的说明。
-                _dashed(d, pts, C_STREAM_SEASON, W(1), 7 * S, 6 * S)
+                _dashed(d, pts, C_STREAM_SEASON, W(1), 7 * GRID_SS, 6 * GRID_SS)
             else:
                 d.line(pts, fill=C_RIVER if big else C_STREAM,
                        width=W(2 * _ws_scale) if big else W(1 * _ws_scale), joint="curve")
@@ -986,14 +1011,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         elif kind == "trail":
             core, w, dash, gap = TRAIL_STYLE[sub]
             # 不加纸色描边（见 C_TRAIL_CASING 的说明）
-            _dashed(d, pts, core, W(w), dash * S, gap * S)
+            _dashed(d, pts, core, W(w), dash * GRID_SS, gap * GRID_SS)
             n_line += 1
         elif kind == "border":
             # 国界：纸色描边 + 赭红虚线。节拍特意比步道疏（步道 5/4）——
             # 国界是"读一眼就够"的背景信息，不该比徒步轨迹更抢眼。
             # 2026-10-25 实测第一版 W(1.6)/11·6 在 4512 px 图上只有 3 px 宽，
             # 压在雪线白上几乎看不出是"界线"；加到 2.0 并把节拍压到 9/5.5。
-            _dashed(d, pts, C_BORDER, W(2.0), 9.0 * S, 5.5 * S,
+            _dashed(d, pts, C_BORDER, W(2.0), 9.0 * GRID_SS, 5.5 * GRID_SS,
                     casing=C_BORDER_HALO, casing_w=W(2.0) + W(1.4))
             n_border += len(pts)
         elif kind == "road":
@@ -1029,7 +1054,15 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
     lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", False)
     if seed_cells:
-        lab.grid |= set(seed_cells)
+        # seed_cells（雪线/等高线数字 + POI 禁标框）由 make_terrain 按 14*S_IN 网格生成；
+        # 字体倍率封顶后 Labeller 的 cell 变成 14*S，两套格子必须换算，否则禁标区
+        # 会整体缩到地图左上角（格子索引被当成新网格的坐标）。
+        if abs(S_IN - S) > 1e-6:
+            k = S_IN / S
+            lab.grid |= {(int(round(cx * k)), int(round(cy * k)))
+                         for cx, cy in seed_cells}
+        else:
+            lab.grid |= set(seed_cells)
 
     def _dedupe_by_name(cands, sep, name_idx, sort_idx=None, x_idx=0, y_idx=1):
         """按**名字**去重：同名注记至少相距 sep（栅格 px）才允许再放一个。
@@ -1220,15 +1253,15 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # OSM 把同一条河/同一条路/同一个村拆成几十上百个要素，每个都带同一个 name ——
     # 不去重就会沿河沿路把名字写满（见 _dedupe_by_name 的文档串）。
     # 水系名：sep 放到 1/4 图宽 —— 熊野川纵贯全图也只会留 3–4 个名
-    waters = _dedupe_by_name(waters, max(600.0, size[0] * 0.25) * S, 2)
+    waters = _dedupe_by_name(waters, max(600.0, size[0] * 0.25) * SEP_SS, 2)
     # 道路编号：同一条路拆几十段，ref 只在该路另一端才重复出现
     road_refs = _dedupe_by_name(
         [(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts),
           str(txt).split(";")[0].strip(), pts, isn)
          for pts, txt, sub, isn in road_refs],
-        max(500.0, size[0] * 0.22) * S, 2)
+        max(500.0, size[0] * 0.22) * SEP_SS, 2)
     # 地名：村落常被录成多个相邻 node，sep 收窄到 1/8 图宽（同村只出一个名）
-    places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * S, 3, x_idx=1, y_idx=2)
+    places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * SEP_SS, 3, x_idx=1, y_idx=2)
 
     peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
     # 2026-10-29 新增（默认关，只给总览这类"要求峰名尽量全出"的画幅用）：
@@ -1363,7 +1396,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   721 条只落 92 条），旧写法先无脑画点、再去试注记 → 图上多出几百个
         #   「没有名字的黑点」，用户第一眼就投诉（2026-11-04）。
         if lab.place(d, name, (x, y), f, col, anchor_right=True,
-                     stroke_w=2 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
+                     stroke_w=2 * S, pad=LBL_PAD * S,
+                     fallback=(not NO_CROWD) or _place_fb):
             # ⚠ 矢量模式（LABELS_VECTOR）下**不能**在栅格上画这个点：文字由 map_svg
             #   重排，拥挤的直接丢弃（本窗口 721 → 92），于是几百个点没有名字留在图上
             #   （2026-11-04 郭喀拉29天用户投诉）。map_svg 会在每个成功落位的地名锚点
@@ -1422,7 +1456,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         geo.append((x, y, nmv, t.get("natural") == "valley"))
     # sep 取图宽 12%（与 places 同档）：山谷名之间的合法间距通常远大于这个
-    geo = _dedupe_by_name(geo, max(300.0, size[0] * 0.12) * S, 2)
+    geo = _dedupe_by_name(geo, max(300.0, size[0] * 0.12) * SEP_SS, 2)
     n_geo = 0
     for x, y, nmv, _is_valley in geo:
         _col = (84, 104, 88) if _is_valley else (110, 98, 86)
@@ -1437,7 +1471,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   （2026-10-29 实测「水源 10 → 0」）。无名的按坐标容忍共存（画符号不写字）。
     _extras_named = [e for e in extras if e[2]]
     _extras_anon = [e for e in extras if not e[2]]
-    extras = _dedupe_by_name(_extras_named, max(300.0, size[0] * 0.12) * S, 2) + _extras_anon
+    extras = _dedupe_by_name(_extras_named, max(300.0, size[0] * 0.12) * SEP_SS, 2) + _extras_anon
     for x, y, name, kind, sub in extras:
         if kind in ("spring", "water"):
             r = 2.0 * S
@@ -1470,7 +1504,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if _skip(name):
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_right=True,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
+                     stroke_w=2.1 * S, pad=LBL_PAD * S,
+                     fallback=(not NO_CROWD) or _water_fb):
             n_water += 1
 
     # ---- 道路编号（ref）标注：省道/国道/县道等，沿道路中点水平放置 ----
