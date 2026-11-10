@@ -487,10 +487,13 @@ def _cfg_flag(key, default=False):
 class Labeller:
     """按优先级占位放注记，重叠就跳过。cell 是占位网格边长（随超采样倍率放大）。"""
 
-    def __init__(self, size, cell=14):
+    def __init__(self, size, cell=14, near_fn=None):
         self.size = size
         self.grid = set()
         self.cell = cell
+        # 2026-11-10 GHT 全线：近轨迹走廊判定（默认 None = 老线路逐字不变）。
+        # place() 会对落在走廊里的注记自动扩大「零重叠」候选位，并在 records 里打 near 标记。
+        self.near_fn = near_fn
         self.n_overlap = 0     # 「实在放不下也要放」的强制落位数（= 会与已有注记挤在一起的个数）
         self.boxes = []          # 已落位注记的矩形（栅格 px），导出给 map_svg 避让
         self.draw_pixels = True  # False = 只记录不画（矢量注记模式）
@@ -528,7 +531,8 @@ class Labeller:
 
     def place(self, d, text, xy, font, fill, stroke=(255, 255, 255),
               anchor_center=True, force=False, pad=2, stroke_w=1.8, fallback=True,
-              kind="", anchor_right=False, gap=5.0, right_only=False):
+              kind="", anchor_right=False, gap=5.0, right_only=False,
+              dense=False, near=False):
         """放注记。
 
         三种锚定（2026-10-24 用户：标注名称默认在标注点的正右侧，依然考虑动态避让）：
@@ -546,6 +550,10 @@ class Labeller:
         bb = d.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
         x0c, y0c = xy
+        # 近轨迹走廊：只扩大「零重叠候选位」的数量，**不放松重叠判据**
+        # （不 force、不开额外 fallback），所以密集但不会糊成字毯。
+        if self.near_fn and self.near_fn(x0c, y0c):
+            dense, near = True, True
         S = self.cell / 14.0                      # 反推超采样倍率（cell = 14*S）
         g = gap * S
         if anchor_right:
@@ -560,12 +568,14 @@ class Labeller:
         if right_only:
             # 只在右侧方向延长搜索：正右 / 右上 / 右下，偏移步进 2/4/6/9/12 逻辑 px。
             # 2026-10-29 用户定：不换左侧；6 px 不够错开密集峰群，上限放宽到 12 px。
-            for r in (2, 4, 6, 9, 12):
+            _rings = (2, 4, 6, 9, 12, 16, 20, 26) if dense else (2, 4, 6, 9, 12)
+            for r in _rings:
                 # (r,-2r) 是更陡的右上：上下只差 55 px 的两座峰（提诺山/梅尔西峰）
                 # 靠 12 px 的抬高错不开，需要拉到约一个字高。
                 cand += [(r, 0), (r, -r), (r, r), (r, -2 * r)]
         else:
-            for r in (5, 9, 12):
+            _rings = (5, 9, 12, 16, 20, 26, 32) if dense else (5, 9, 12)
+            for r in _rings:
                 cand += [(r, 0), (r, -r), (r, r),       # 右、右上、右下（保持右侧优先）
                          (0, -r), (0, r),               # 正上、正下
                          (-r, -r), (-r, r), (-r, 0)]    # 左上、左下、左侧（最后才用）
@@ -579,7 +589,7 @@ class Labeller:
             hits = self._hits(box)
             if hits == 0:                                  # 完美位置
                 self._emit(d, text, x, y, font, fill, stroke, stroke_w,
-                           ax=x0c, ay=y0c)
+                           ax=x0c, ay=y0c, near=near)
                 self._mark(box)
                 self.boxes.append(box)
                 return True
@@ -591,12 +601,14 @@ class Labeller:
             return False
         self.n_overlap += 1            # 命中"两害相权"分支：记录一次挤放，供自检核对
         _, x, y, box = best
-        self._emit(d, text, x, y, font, fill, stroke, stroke_w, ax=x0c, ay=y0c)
+        self._emit(d, text, x, y, font, fill, stroke, stroke_w,
+                   ax=x0c, ay=y0c, near=near)
         self._mark(box)
         self.boxes.append(box)
         return True
 
-    def _emit(self, d, text, x, y, font, fill, stroke, stroke_w, ax=None, ay=None):
+    def _emit(self, d, text, x, y, font, fill, stroke, stroke_w,
+              ax=None, ay=None, near=False):
         """画，或只记录（矢量模式）。位图用左上角，SVG 用基线 —— 两个都存。
 
         ax/ay：要素**真实锚点**（栅格 px），与落位后的文字框无关 —— 专门留给
@@ -611,13 +623,17 @@ class Labeller:
             asc = font.getmetrics()[0]
         except Exception:                                          # noqa
             asc = int(getattr(font, "size", 12) * 0.8)
-        self.records.append({"t": text, "x": round(float(x), 1), "y": round(float(y), 1),
-                             "base": round(float(y + asc), 1),
-                             "s": int(getattr(font, "size", 12)),
-                             "f": list(fill), "st": list(stroke),
-                             "sw": round(float(stroke_w), 1),
-                             "ax": round(float(ax if ax is not None else x), 1),
-                             "ay": round(float(ay if ay is not None else y), 1)})
+        rec = {"t": text, "x": round(float(x), 1), "y": round(float(y), 1),
+               "base": round(float(y + asc), 1),
+               "s": int(getattr(font, "size", 12)),
+               "f": list(fill), "st": list(stroke),
+               "sw": round(float(stroke_w), 1),
+               "ax": round(float(ax if ax is not None else x), 1),
+               "ay": round(float(ay if ay is not None else y), 1)}
+        # 只给走廊内的记录打标：老线路 / 未开启功能时 records 逐字不变。
+        if near:
+            rec["near"] = 1
+        self.records.append(rec)
 
 
 # ------------------------------------------------------------------ 主流程
@@ -705,6 +721,63 @@ def _pick_name(t):
     return ""
 
 
+def _route_corridor(proj, size, meta, bars, verbose=True):
+    """构造「距轨迹 ≤ bars 个比例尺条长」的判定函数；未开启/无轨迹返回 None。
+
+    2026-11-10 GHT 全线（用户：轨迹周边 1 个比例尺范围内的 OSM 标注尽可能详细，
+    其他地区保持不变）：半径取**图上比例尺色条的实际长度**（栅格 px），
+    档位表走 `GC.scale_bar_km`，与 `map_svg` 画比例尺时同一口径 ——
+    所以「1 个比例尺」在底图和注记层指的是同一个实地距离。
+
+    距离用「候选点到抽稀轨迹点」近似「点到折线」：抽稀步长 = 半径/160，
+    误差 ≤ step/2（相对数千 px 的半径可忽略），但省掉了对每条线段做投影。
+    """
+    if bars <= 0:
+        return None
+    pts = GC.track_pts()
+    if not pts:
+        if verbose:
+            print("   ⚠ 近轨迹标注加密：找不到 out/track_real.json，已跳过")
+        return None
+    iw = float((meta.get("size") or (1504, 0))[0]) or 1504.0
+    mpp = GC.m_per_px(meta)
+    frac = float(GC.cfg("scale_bar_frac", 0.16) or 0.16)
+    km = GC.scale_bar_km(mpp, iw, frac)
+    radius = (km * 1000.0 / mpp) * (size[0] / iw) * bars
+    step = max(6.0, radius / 160.0)
+    xy = []
+    for p in pts:
+        try:
+            q = proj(float(p["lon"]), float(p["lat"]))
+        except Exception:                                          # noqa
+            continue
+        if not xy or math.hypot(q[0] - xy[-1][0], q[1] - xy[-1][1]) >= step:
+            xy.append(q)
+    if not xy:
+        return None
+    import numpy as np
+    from functools import lru_cache
+    Q = np.asarray(xy, dtype=np.float32)
+    r2 = float(radius * radius)
+
+    @lru_cache(maxsize=80000)
+    def _hit(gx, gy):
+        # gx/gy 是 4 px 量化网格坐标，算距离前要还原成真实栅格 px。
+        dx = Q[:, 0] - gx * 4.0
+        dy = Q[:, 1] - gy * 4.0
+        return bool(np.min(dx * dx + dy * dy) <= r2)
+
+    # 量化到 4 栅格 px：半径数千 px 时 4 px 误差不影响走廊归属，
+    # 但同一批候选在去重/排序/落位里被反复查询时能命中缓存。
+    def near(x, y):
+        return _hit(round(float(x) / 4.0), round(float(y) / 4.0))
+
+    if verbose:
+        print(f"   近轨迹标注加密：走廊半径 {radius:.0f} 栅格 px "
+              f"（{km:g} km × {bars:g} 条比例尺）· 轨迹抽稀 {len(Q)} 点")
+    return near
+
+
 def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                  px_scale=1.0, proj_scale=None, seed_cells=None, verbose=True,
                  peak_snap=None):
@@ -762,6 +835,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 大窗口里 river 的 W(2) 是给几十 km 窗口定的，8.4° 幅面上等于 1 km 宽的蓝带，
     # 比轨迹还抢眼；缩到 0.7 后仍是"能看出走向的细线"，不抢主体（2026-11-09）。
     _ws_scale = float(GC.cfg("water_scale", 1.0) or 1.0)
+    # 栅格线宽的线路级总系数（2026-11-10 GHT 全线二次定案）：
+    #   W(v)=round(v×8×0.55×0.5)，river 由 6 px 收到 3 px。
+    #   缺省 1.0 = 其余线路逐字不变；只在大画幅需要再压细时显式配 0.5。
+    _grid_scale = float(GC.cfg("grid_line_scale", 1.0) or 1.0)
     # ---- 类别白名单（2026-11-09 新增，默认 None = 全画，老线路行为不变）----
     # 为什么需要：OSM 的数据密度是**区域性**的（尼泊尔是 HOT 重点区，几乎每条村道、
     # 每条 footpath 都数字化；西藏高原只有国道/县道）。同一个窗口跨两国时，按数据
@@ -797,9 +874,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         ⚠ 2026-11-10 GHT 全线：线宽基准与出图倍率解耦，固定 GRID_SS=8
         （W(v)=round(v×8×0.55)），画幅仍 19552 px、字体只 ×4。
         老线路 GRID_SS 默认 = S，行为逐字不变。
+        ⚠ 2026-11-10 二次定案：全线配 `grid_line_scale=0.5`，
+        W(v)=round(v×8×0.55×0.5)，river 6 → 3 px、trunk 7 → 3 px。
+        未配该键的线路 `_grid_scale=1.0`，行为不变。
         """
         k = 0.55 if GRID_SS >= 3 else 1.0
-        return max(1, int(round(v * GRID_SS * k)))
+        return max(1, int(round(v * GRID_SS * k * _grid_scale)))
 
     def F(v):
         """字号 → 栅格像素。
@@ -1068,14 +1148,29 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   一个名字框约 2×1 格，容量约 2600 条 —— 补齐而不泛滥。
     #   draw_osm 只负责"哪些名字有资格上图"，最终落字位置由 map_svg 重排，
     #   所以这里 gap/偏移用网格口径（S_IN）不影响成品视觉。
-    lab = Labeller(size, cell=14 * S_IN)
+    # ---- 近轨迹标注加密走廊（2026-11-10 GHT 全线；CFG 缺省 0 = 老线路全关）----
+    # 半径 = 1 个比例尺条长。走廊内：同名去重间距收窄、候选优先占位、
+    # Labeller 与 map_svg 双层多试「零重叠」位置；走廊外所有判据逐字不变。
+    _near_bars = float(GC.cfg("label_near_route_bars", 0) or 0)
+    _near_sep = float(GC.cfg("label_near_route_sep_mul", 0.35) or 0.35)
+    _NEAR = (_route_corridor(proj, size, meta, _near_bars, verbose=verbose)
+             if _near_bars > 0 else None)
+
+    def _near(x, y):
+        return bool(_NEAR and _NEAR(x, y))
+
+    def _near_rank(x, y):
+        return 1 if _near(x, y) else 0
+
+    lab = Labeller(size, cell=14 * S_IN, near_fn=_NEAR)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
     # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
     lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", False)
     if seed_cells:
         lab.grid |= set(seed_cells)
 
-    def _dedupe_by_name(cands, sep, name_idx, sort_idx=None, x_idx=0, y_idx=1):
+    def _dedupe_by_name(cands, sep, name_idx, sort_idx=None, x_idx=0, y_idx=1,
+                        near_fn=None, near_sep=1.0):
         """按**名字**去重：同名注记至少相距 sep（栅格 px）才允许再放一个。
 
         为什么必须做（2026-10-18 熊野古道实测）：OSM 把同一条河拆成上百个 way，
@@ -1089,9 +1184,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         做法：按 sort_idx 指定的几何尺寸降序（大河/大湖/长路先占位），
         同名已落位的标签距新候选小于 sep 就跳过。sep 取图幅尺度的比例，
         长河因此仍能拿到 2–3 个标签（符合地形图惯例），短溪只留 1 个。
+
+        2026-11-10 近轨迹走廊：near_fn 非 None 时，走廊内候选**优先占位**
+        （排序键第一维），其同名判定间距乘 near_sep（<1）收窄；走廊外 sep 原样。
         """
         def _key(c):
-            return c[sort_idx] if sort_idx is not None else 0
+            base = c[sort_idx] if sort_idx is not None else 0
+            n = 1 if (near_fn and near_fn(c[x_idx], c[y_idx])) else 0
+            return (n, base)
         placed, out = {}, []
         for c in sorted(cands, key=_key, reverse=True):
             nm = c[name_idx]
@@ -1099,7 +1199,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 continue
             cx, cy = c[x_idx], c[y_idx]
             seen = placed.setdefault(nm, [])
-            if any(math.hypot(cx - px, cy - py) < sep for px, py in seen):
+            sep_here = sep * near_sep if (near_fn and near_fn(cx, cy)) else sep
+            if any(math.hypot(cx - px, cy - py) < sep_here for px, py in seen):
                 continue
             seen.append((cx, cy))
             out.append(c)
@@ -1264,17 +1365,23 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # OSM 把同一条河/同一条路/同一个村拆成几十上百个要素，每个都带同一个 name ——
     # 不去重就会沿河沿路把名字写满（见 _dedupe_by_name 的文档串）。
     # 水系名：sep 放到 1/4 图宽 —— 熊野川纵贯全图也只会留 3–4 个名
-    waters = _dedupe_by_name(waters, max(600.0, size[0] * 0.25) * SEP_SS, 2)
+    waters = _dedupe_by_name(waters, max(600.0, size[0] * 0.25) * SEP_SS, 2,
+                             near_fn=_NEAR, near_sep=_near_sep)
     # 道路编号：同一条路拆几十段，ref 只在该路另一端才重复出现
     road_refs = _dedupe_by_name(
         [(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts),
           str(txt).split(";")[0].strip(), pts, isn)
          for pts, txt, sub, isn in road_refs],
-        max(500.0, size[0] * 0.22) * SEP_SS, 2)
+        max(500.0, size[0] * 0.22) * SEP_SS, 2,
+        near_fn=_NEAR, near_sep=_near_sep)
     # 地名：村落常被录成多个相邻 node，sep 收窄到 1/8 图宽（同村只出一个名）
-    places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * SEP_SS, 3, x_idx=1, y_idx=2)
+    places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * SEP_SS, 3,
+                             x_idx=1, y_idx=2, near_fn=_NEAR, near_sep=_near_sep)
 
-    peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
+    # 近轨迹走廊开启时，走廊内的峰优先占位（仍按高程降序），否则远处高峰会把
+    # 轨迹附近的格子先占满；走廊关闭时 _near_rank 恒 0，排序逐字不变。
+    peaks.sort(key=lambda p: (_near_rank(p[0], p[1]), _ele_of(p[3]) or -1.0),
+               reverse=True)
     # 2026-10-29 新增（默认关，只给总览这类"要求峰名尽量全出"的画幅用）：
     #   peak_label_all   → 所有具名峰都允许挤放（不再"低分位放不下就丢"）
     #   peak_label_tight → 峰名左缘紧贴三角右缘 0.5 逻辑 px（默认 gap 5.0 太远）
@@ -1379,6 +1486,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 字号用 f_water（11.5px 加粗）而不是 peaks 循环里的 f_peak_use：
     # 后者是循环内变量，且念青东这类 peak=1 的窗口压根不进分级逻辑。
     n_saddle = 0
+    if _NEAR:
+        saddles.sort(key=lambda s: -_near_rank(s[0], s[1]))
     for x, y, name, ele in saddles:
         if _skip(name):
             continue
@@ -1394,7 +1503,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_saddle += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
-    places.sort(key=lambda p: prio.get(p[0], 9))
+    # `-_near_rank` 把走廊内村镇提到同类之前；未开启时全 0，仍是原来的类别优先级。
+    places.sort(key=lambda p: (-_near_rank(p[1], p[2]), prio.get(p[0], 9)))
     n_place = 0
     for kind, x, y, name in places:
         if _skip(name):
@@ -1419,6 +1529,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_place += 1
 
     n_poi = 0
+    if _NEAR:
+        pois.sort(key=lambda p: -_near_rank(p[0], p[1]))
     for x, y, name, kind in pois:
         if _skip(name):
             continue
@@ -1467,7 +1579,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             continue
         geo.append((x, y, nmv, t.get("natural") == "valley"))
     # sep 取图宽 12%（与 places 同档）：山谷名之间的合法间距通常远大于这个
-    geo = _dedupe_by_name(geo, max(300.0, size[0] * 0.12) * SEP_SS, 2)
+    geo = _dedupe_by_name(geo, max(300.0, size[0] * 0.12) * SEP_SS, 2,
+                          near_fn=_NEAR, near_sep=_near_sep)
     n_geo = 0
     for x, y, nmv, _is_valley in geo:
         _col = (84, 104, 88) if _is_valley else (110, 98, 86)
@@ -1482,7 +1595,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   （2026-10-29 实测「水源 10 → 0」）。无名的按坐标容忍共存（画符号不写字）。
     _extras_named = [e for e in extras if e[2]]
     _extras_anon = [e for e in extras if not e[2]]
-    extras = _dedupe_by_name(_extras_named, max(300.0, size[0] * 0.12) * SEP_SS, 2) + _extras_anon
+    extras = (_dedupe_by_name(_extras_named, max(300.0, size[0] * 0.12) * SEP_SS, 2,
+                              near_fn=_NEAR, near_sep=_near_sep)
+              + _extras_anon)
     for x, y, name, kind, sub in extras:
         if kind in ("spring", "water"):
             r = 2.0 * S

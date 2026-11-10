@@ -1010,6 +1010,56 @@ def t_label_knobs():
     check("right_only 分支不含左侧候选", "(-r" not in seg)
 
 
+def t_near_route_corridor():
+    """近轨迹标注加密 + 栅格线宽减半（2026-11-10 GHT 全线三次定案）。
+
+    两项都是 CFG 缺省关闭/为 1.0 的线路级旋钮：断言「开关还在」和
+    「关掉时 records / 档位逐字不变」，防止后续重构静默回退。
+    """
+    me = Path(__file__).resolve().parent
+    do = (me / "draw_osm.py").read_text(encoding="utf-8")
+    ms = (me / "map_svg.py").read_text(encoding="utf-8")
+    gc = (me / "guide_common.py").read_text(encoding="utf-8")
+    check("draw_osm 有 grid_line_scale（W 再 ×0.5 的旋钮）", "grid_line_scale" in do)
+    check("draw_osm 有 label_near_route_bars", "label_near_route_bars" in do)
+    check("draw_osm 有 _route_corridor", "def _route_corridor" in do)
+    check("Labeller 接 near_fn 并传给落位", "near_fn=_NEAR" in do and "self.near_fn" in do)
+    check("走廊量化坐标算距离前还原 4 px", "gx * 4.0" in do and "gy * 4.0" in do)
+    check("map_svg 读 near 并多试避让位", '"near": int(it.get("near", 0) or 0)' in ms
+          and "_dense = bool(it.get(\"near\"))" in ms)
+    check("比例尺档位表只在 GC 定义一份", "def scale_bar_km" in gc
+          and "return GC.scale_bar_km(m_per_px, iw, target_frac)" in ms)
+    import guide_common as G
+    check("GC.scale_bar_km(545.3,1504,0.16)=100 km",
+          G.scale_bar_km(545.3, 1504, 0.16) == 100)
+    check("缺 grid_line_scale 时走 1.0（老线路不变）",
+          G.cfg("grid_line_scale", 1.0) == 1.0)
+    check("W 公式含 0.55 与 _grid_scale", "0.55 if GRID_SS >= 3" in do
+          and "v * GRID_SS * k * _grid_scale" in do)
+    # 功能级：走廊内记录带 near、走廊外不带；near_fn=None 时一条都不带。
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import draw_osm as DO
+        im = Image.new("RGB", (600, 400))
+        dr = ImageDraw.Draw(im)
+        font = ImageFont.load_default()
+        lab = DO.Labeller((600, 400), cell=14, near_fn=lambda x, y: x < 300)
+        for txt, xy in (("AAAA", (100, 100)), ("BBBB", (450, 100))):
+            lab.place(dr, txt, xy, font, (0, 0, 0),
+                      anchor_right=True, stroke_w=2, fallback=False)
+        check("走廊内落位打 near 标、走廊外不带",
+              len(lab.records) == 2 and lab.records[0].get("near") == 1
+              and "near" not in lab.records[1], str(lab.records))
+        check("加密不放松重叠判据（挤放 0）", lab.n_overlap == 0)
+        lab0 = DO.Labeller((600, 400), cell=14)
+        lab0.place(dr, "CCCC", (100, 250), font, (0, 0, 0),
+                   anchor_right=True, stroke_w=2, fallback=False)
+        check("未开启时 records 逐字不变",
+              bool(lab0.records) and "near" not in lab0.records[0])
+    except Exception as e:                                        # noqa
+        check("近轨迹走廊功能级用例", False, f"{type(e).__name__}: {e}")
+
+
 def t_pbf_nepal():
     """尼泊尔本地合成切片 + 下载不再产生 part 文件（2026-11-07）。"""
     fo = (HERE / "fetch_osm.py").read_text(encoding="utf-8")
@@ -1259,7 +1309,8 @@ def main():
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
-               t_osm_reuse, t_labels_vector, t_label_knobs, t_pbf_nepal,
+               t_osm_reuse, t_labels_vector, t_label_knobs,
+               t_near_route_corridor, t_pbf_nepal,
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
                t_contour_width_absolute, t_logging):
         try:

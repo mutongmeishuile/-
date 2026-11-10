@@ -609,11 +609,9 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
     ⚠ 写死长度是不通用的：短线路（bbox 只有几公里）会被 2 km 的条占满整幅，
     长线路（上百公里）又会显得太小。这里取"地图宽度的 target_frac"当目标像素长，
     再吸附到 0.1/0.2/0.5/1/2/5/… 的整数档。
+    2026-11-10 起档位表抽到 `GC.scale_bar_km`（draw_osm 的近轨迹走廊共用同一口径）。
     """
-    target_m = iw * target_frac * m_per_px
-    cand = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
-    km = min(cand, key=lambda k: abs(k * 1000 - target_m))
-    return km
+    return GC.scale_bar_km(m_per_px, iw, target_frac)
 
 
 # ---- 全局字号口径（2026-10-24）----
@@ -655,6 +653,9 @@ def _load_base_labels():
             "t": it["t"], "x": (it.get("ax", it["x"])) / ss, "y": (it.get("ay", it["base"])) / ss,
             "fs": fs, "w": it["s"] / ss, "pri": s0,
             "fill": it["f"], "stroke": it["st"],
+            # 近轨迹走廊标记（draw_osm 2026-11-10）：缺省 0 = 老缓存/老线路逐字不变。
+            # 有标记的注记在 `_place_base_labels` 里多试几圈「零重叠」位置。
+            "near": int(it.get("near", 0) or 0),
         })
     # 重要度按"徒步关心什么"排（2026-10-21）：垭口 > 地名/湖 > 峰 > 河。
     # 拥挤时才需要取舍，所以这个顺序只在"实在没地方"时决定谁被丢。
@@ -738,6 +739,11 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
         return ""
     if pois:
         items = [it for it in items if not _poi_dup(it, pois, pin_xy)]
+    # 近轨迹走廊（2026-11-10 GHT 全线）：走廊内候选先占位，避免远处地名把好位置抢光。
+    # 只在 label_boxes 带 near 标记时生效；老缓存没有该字段 → 排序 key 全 0，
+    # Python 排序稳定 → 逐字保持原顺序。
+    if any(it.get("near") for it in items):
+        items.sort(key=lambda d: (-d.get("near", 0), -d["rank"]))
     out, dropped = [], 0
     _drop_names = []
     for it in items:
@@ -750,13 +756,21 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
         gap = 3.2 * _vk()
         vmid = fs * 0.34            # 基线偏移：让文字中线对准锚点
         tried = [(gap, vmid)]
-        for k in (0, 1, 2):
+        # 走廊内的注记多试几圈 / 几个斜向：仍然是「零重叠才落」，只提高找到空位的概率，
+        # 不放松重叠判据，所以密集但不成字毯（用户口径：动态避让、布局合理）。
+        _dense = bool(it.get("near"))
+        for k in ((0, 1, 2, 3, 4, 5) if _dense else (0, 1, 2)):
             r = fs * 0.8 * (k + 1)
             tried += [(gap, vmid - r), (gap, vmid + r),                      # 右侧上/下错开
                       (-gap - w, vmid),                                      # 左侧水平
                       (-gap - w, vmid - r), (-gap - w, vmid + r),
                       (-w * 0.5, vmid - fs * 1.15 - r * 0.55),               # 正上方
                       (-w * 0.5, vmid + fs * 1.35 + r * 0.55)]               # 正下方
+        if _dense:
+            for k in (2, 3, 4, 5):
+                r = fs * 0.8 * (k + 1)
+                tried += [(gap + r, vmid - r), (gap + r, vmid + r),          # 右上/右下斜向
+                          (-gap - w - r, vmid - r), (-gap - w - r, vmid + r)]
         for dx, dy in tried:
             x0 = it["x"] + dx
             yb = it["y"] + dy
