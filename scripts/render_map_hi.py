@@ -247,7 +247,19 @@ def _assert_seams(im, parts):
 
 
 def main():
-    svg, _ = MS.build_svg(mobile=False, embed_image=True, embed_max=0, with_title=True)
+    # 2026-11-10 GHT 全线：画幅按 _SS 超采，但字体 / 符号只按 min(_SS, cap) 放大，
+    # 白色描边恒为「外围 +halo_out_px 输出 px」。未配 cap 的线路 k=1、白晕走旧口径。
+    _cap = CFG.get("vector_symbol_cap")
+    _visual = {
+        "ss": float(_SS),
+        "k": (min(float(_SS), float(_cap)) / float(_SS)) if _cap else 1.0,
+        "halo_out_px": CFG.get("halo_out_px"),
+    }
+    if _visual["k"] != 1.0 or _visual["halo_out_px"] is not None:
+        print(f"  视觉倍率 k={_visual['k']:.4f}（画幅 ×{_SS}，符号上限 ×{_cap}）"
+              f" · 白描边外围 +{_visual['halo_out_px']} px")
+    svg, _ = MS.build_svg(mobile=False, embed_image=True, embed_max=0, with_title=True,
+                          visual=_visual)
     bands = _shot_bands()
     if len(bands) > 1:
         print(f"  超高画布 {W}×{H} → 分 {len(bands)} 带截图拼接（单窗光栅截白规避）")

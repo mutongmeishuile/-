@@ -50,9 +50,40 @@ DAY_DASH_W_DEF = 1.0    # 分日界虚线
 PIN_D_DEF = 5.0         # 图钉可见外径（起点/终点/营地/水源/海子/垭口同尺寸）
 # 图钉内部字形按同一系数等比缩（基准是「外径 19.8」那版几何）。线路级可用 CFG["pin_d"] 覆盖。
 
+# ---- 高清图视觉元素统一倍率（2026-11-10 GHT 全线定案）----
+# 画幅按 SS 超采（长边 ~20000 px），但字号 / 符号只按 min(SS, cap) 放大（默认 cap=4）：
+#   出图栅格 px = 设计基准 px × min(SS, cap)
+# 换算到 SVG 逻辑坐标（viewBox 宽 IW=1504）：逻辑 px = 设计基准 px × k，k = min(SS,cap)/SS。
+# visual 由 render_map_hi 显式传入 build_svg；网页内嵌图 / 其余线路不传 → k=1、白晕走旧口径，
+# 逐字保持旧行为（共享脚本默认不得改动其余线路）。
+_VIS = {"ss": 1.0, "k": 1.0, "halo_out_px": None}
 
-def _pin_d():
-    return float(_CFG.get("pin_d") or PIN_D_DEF)
+
+def _vk():
+    return float(_VIS["k"])
+
+
+def _halo_sw_text(fs):
+    """文字白晕描边宽度（逻辑 px）。halo_out_px 给定时恒为『外围 +o 输出 px』。"""
+    o = _VIS.get("halo_out_px")
+    if o is None:
+        return max(0.8, fs * 0.13)
+    return 2.0 * float(o) / float(_VIS["ss"])
+
+
+def _halo_sw_sym():
+    """符号（峰三角 / 锚点圆）白色描边宽度（逻辑 px）。"""
+    o = _VIS.get("halo_out_px")
+    if o is None:
+        return 0.7
+    return 2.0 * float(o) / float(_VIS["ss"])
+
+
+def _pin_d(k=None):
+    kk = _vk() if k is None else float(k)
+    return float(_CFG.get("pin_d") or PIN_D_DEF) * kk
+
+
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
 MFS_S = 2.8           # 手机版里程点/线宽的额外放大
 
@@ -216,16 +247,16 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
 
 
 # ---------------------------------------------------------------- 点位符号
-def mk_pin(x, y, kind):
+def mk_pin(x, y, kind, k=None):
     # 2026-10-17 用户反馈：POI 图钉在轨迹上过大，遮挡地名/道路。
     # 统一从 r≈19–20 缩到 r≈14–15，字号同步缩小，与地名同量级。
     # 2026-11-03 用户定口径：**外径恒 = PIN_D（默认 15 逻辑 px）**，起点/终点/营地/水源/
     #   海子/垭口同尺寸。内部字形按同一系数 PINS 等比缩，所以只改 PIN_D 一处即可整体收放。
-    PINS = PS * _pin_d() / (2 * 15 * PS_BASE)
+    PINS = PS * _pin_d(k) / (2 * 15 * PS_BASE)
     _R = 15 * PINS          # 外圈半径（所有 kind 统一）
     # 2026-11-03：外径收到 5 之后，内部字形只剩 2–3 px、只会糊成脏点 ——
     # 低于 8 px 自动退化成「白色细环 + 单色实心点」，可辨识度反而更高。
-    if _pin_d() < 8:
+    if _pin_d(k) < 8 * (_vk() if k is None else float(k)):
         _dc = {"start": "#D93B2B", "end": "#0F6E5C", "camp": D1_C, "water": "#0F8A9B",
                "peak": "#4A5261", "peak_hi": "#4A5261", "temple": "#5A4A8A",
                "warn": "#D0871B", "pass": "#8B5E3C", "ford": "#2E86AB",
@@ -606,7 +637,7 @@ def _load_base_labels():
         # 原来是按文字宽度分 11.4/10.6/10.0 三档（更早是 14+/11.5–14/其余 三档），
         # **三档已废弃** —— 同屏 0.6–1.4 px 的差异既不构成层级、又让同类地物看着不一样大。
         # 调字号就从 8 起算；POI 标注 = 基准 +1（label_fs_poi）。
-        fs = _FS_BASE
+        fs = _FS_BASE * _vk()
         out.append({
             # 用 draw_osm 记录的**要素真实锚点** ax/ay 当基准（不再用文字框位置当锚点，
             # 否则峰名/湖名的避让起点、引线落点都会偏到文字位置 → "明显偏移"）。
@@ -700,12 +731,12 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     _drop_names = []
     for it in items:
         fs = it["fs"]
-        w = GC.text_w(it["t"], fs) + 4
+        w = GC.text_w(it["t"], fs) + 4 * _vk()
         h = fs * 1.22
         pad = fs * 0.55
         # 默认位（2026-10-24 用户要求）：**锚点右侧、垂直居中**。只有放不下才动态避让。
         # x0 是文字左边界（text-anchor 默认 start），所以要摆到左边得用 -gap-w。
-        gap = 3.2
+        gap = 3.2 * _vk()
         vmid = fs * 0.34            # 基线偏移：让文字中线对准锚点
         tried = [(gap, vmid)]
         for k in (0, 1, 2):
@@ -740,26 +771,26 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                 # 三角改由矢量层画（2026-11-05）：draw_osm 在矢量模式下不再把三角烤进栅格
                 # ——它先画三角再去试注记，挤不下的峰名被丢，图上就留一堆无字三角。
                 # 现在三角与字同生同灭，锚点也统一有符号。
-                _tr_ = 2.9
-                out.append(f'<path d="M {_ax:.1f},{_ay - _tr_:.1f} '
-                           f'L {_ax + _tr_ * 0.92:.1f},{_ay + _tr_ * 0.62:.1f} '
-                           f'L {_ax - _tr_ * 0.92:.1f},{_ay + _tr_ * 0.62:.1f} Z" '
-                           f'fill="{c1}" stroke="#FFFFFF" stroke-width="0.7" '
+                _tr_ = 2.9 * _vk()      # 峰三角与字号同走「× min(SS, cap)」口径
+                out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} '
+                           f'L {_ax + _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} '
+                           f'L {_ax - _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} Z" '
+                           f'fill="{c1}" stroke="#FFFFFF" stroke-width="{_halo_sw_sym():.4f}" '
                            f'stroke-linejoin="round"/>')
             if not _is_peak:
                 # **每个**地名都在锚点上打一个小圆 —— 这是"这个字标的是哪"最直接的答案。
                 # 只给被推远的那几个画圆是不够的：紧贴锚点的名字反而更让人怀疑它指哪儿。
-                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="1.3" '
+                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="{1.3 * _vk():.3f}" '
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
-                           f'stroke-width="0.7"/>')
+                           f'stroke-width="{_halo_sw_sym():.4f}"/>')
             if math.hypot(_cx - _ax, _cy - _ay) > 5:
                 out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
                            f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.5" '
                            f'stroke-opacity="0.55"/>')
             t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             wt = 700          # 字号统一后不再靠字重区分主次（白晕 + 颜色承担）
-            out.append(f'<text x="{x0:.1f}" y="{yb:.1f}" font-size="{fs:.1f}" '
-                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="{max(0.8, fs * 0.13):.2f}" '
+            out.append(f'<text x="{x0:.3f}" y="{yb:.3f}" font-size="{fs:.3f}" '
+                       f'font-weight="{wt}" fill="{c1}" stroke="{c2}" stroke-width="{_halo_sw_text(fs):.4f}" '
                        f'stroke-opacity="0.92" paint-order="stroke" '
                        f'stroke-linejoin="round">{t}</text>')
             break
@@ -1045,22 +1076,31 @@ def build_map_overlay(mobile=False):
         x, y = XY[i]
         z = MFS_S if mobile else 1.0
         nd = len(str(target))
-        # 2026-11-03 用户要求「公里数数字动态适应」：圈径随位数走，字号再按圈内可用宽度反算
-        # （数字按 0.60 字宽估），保证 3 位数也不会顶出圈外、2 位数不会虚胖。
-        rr = (5.8 if nd <= 2 else 7.6) * z
-        fs = (8.6 if nd <= 2 else 7.6) * z
-        fs = min(fs, (2 * rr - 2.4) / (0.60 * nd))
+        # 2026-11-10 用户「动态缩小公里数填充」：白底圆圈不再固定 5.8/7.6 两档，
+        # 直接由「数字实际占宽 + 内衬」反推 —— 位数越多圈越大，整体随视觉倍率 k 收紧；
+        # 字号仍受 3 位数不顶出 7.6×k 圈径的约束。未开 visual 的线路 k=1，逐字回到旧口径。
+        k = _vk()
+        if k == 1.0 and not _VIS.get("halo_out_px"):
+            rr = (5.8 if nd <= 2 else 7.6) * z
+            fs = (8.6 if nd <= 2 else 7.6) * z
+            fs = min(fs, (2 * rr - 2.4) / (0.60 * nd))
+        else:
+            fs = 8.0 * z * k
+            fs = min(fs, (2 * 7.6 * z * k - 1.2 * z * k) / (0.60 * nd))
+            pad_k = 1.2 * z * k
+            rr = (fs * 0.60 * nd + pad_k) / 2.0
         # 里程点**撞上营地/垭口图钉就跳过**：圆圈压住倒三角，读者会以为垭口在那儿
         # （2026-10-27 实测「195」压在 主措什贡垭口 图标上）。少一个 5 km 点无伤大雅。
-        if any((x - px) ** 2 + (y - py) ** 2 < (rr + _PIN_R + 2) ** 2 for px, py in pin_xy):
+        if any((x - px) ** 2 + (y - py) ** 2
+               < (rr + (_PIN_R + 2) * k) ** 2 for px, py in pin_xy):
             continue
         # 里程点是**固定锚点**（画在轨迹上），登记进 _OCC 让地名/POI 标注绕开它 ——
         # 否则会出现「195」圆圈压住垭口三角、或者地名贴着数字写（2026-10-27 实测）。
-        _OCC.append((x - rr - 1, y - rr - 1, x + rr + 1, y + rr + 1))
-        o.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{rr:.1f}" fill="#FFFFFF" '
-                 f'stroke="#3A4250" stroke-width="{2*M:.1f}"/>'
-                 f'<text x="{x:.1f}" y="{y+fs*0.38:.1f}" text-anchor="middle" '
-                 f'font-size="{fs:.1f}" font-weight="800" '
+        _OCC.append((x - rr - k, y - rr - k, x + rr + k, y + rr + k))
+        o.append(f'<circle cx="{x:.3f}" cy="{y:.3f}" r="{rr:.3f}" fill="#FFFFFF" '
+                 f'stroke="#3A4250" stroke-width="{2*M*k:.3f}"/>'
+                 f'<text x="{x:.3f}" y="{y+fs*0.38:.3f}" text-anchor="middle" '
+                 f'font-size="{fs:.3f}" font-weight="800" '
                  f'fill="#3A4250">{target}</text>')
 
     # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
@@ -1214,7 +1254,7 @@ def build_map_overlay(mobile=False):
         # 标注字号**不跟符号缩放走**：图钉要小（0.66），字要读得清。
         # 2026-10-21 实测：字跟着 PS 缩到 9.6 之后，比底图地名（10–11.4）还小，
         # 白晕又占掉 1/4 笔画 —— POI 名看着发虚发灰，主次颠倒。
-        base = _FS_POI          # 全图统一口径：轨迹标注 = 底图地名 + 2 px（起终点也不例外）
+        base = _FS_POI * _vk()  # 9 px 设计基准 × min(SS,cap)（高清图）；HTML 内嵌图 k=1
         col = D2_T if k in ("start", "end") else INK
         if mobile:
             txt = getattr(RD, "SHORT", {}).get(name, name)
@@ -1295,7 +1335,7 @@ def build_map_overlay(mobile=False):
                 cy = sy + (LG_SYM0 + LG_SYM_PITCH * (i // 2)) * S
                 # 复用真实符号：整体 scale 缩小，保证"图例样本 = 图上符号"
                 g.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale({glyph_scale})">'
-                         f'{mk_pin(0, 0, kind)}</g>')
+                         f'{mk_pin(0, 0, kind, k=1.0)}</g>')
                 g.append(f'<text x="{cx+22*S:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
                          f'font-weight="700" fill="#4A5261">{nm}</text>')
         g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(16.5*S)}" '
@@ -1580,7 +1620,7 @@ def _title_legend(x_right, y_bottom, outer_k=1.0):
     for i, (kind, nm) in enumerate(syms):
         cx = (i % sym_cols) * sym_cell + 7
         cy = (nrow_all - sym_rows + i // sym_cols) * PITCH + 15
-        o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.52)">{mk_pin(0, 0, kind)}</g>')
+        o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.52)">{mk_pin(0, 0, kind, k=1.0)}</g>')
         o.append(f'<text x="{cx + 16:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
 
@@ -1830,7 +1870,7 @@ def _legend_band_svg():
             # 与 13.5 px 的说明文字并排时缩成一个小点（2026-11-09 GHT 全线实测：
             # 缩略后"起点/终点"左侧几乎看不到标记）。图例符号本来就该与文字同量级。
             o.append(f'<g transform="translate({cx + 10:.1f},{ry - 5:.1f})">'
-                     f'{mk_pin(0, 0, glyph)}</g>')
+                     f'{mk_pin(0, 0, glyph, k=1.0)}</g>')
             o.append(f'<text x="{cx + 30:.0f}" y="{ry}" font-size="13.5" font-weight="700" '
                      f'fill="#4A5261">{_esc(text)}</text>')
             continue
@@ -1849,11 +1889,18 @@ def _legend_band_svg():
 
 
 
-def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=False):
+def build_svg(mobile=False, embed_image=True, embed_max=EMBED_MAX, with_title=False,
+              visual=None):
     """返回 (svg 字符串, 自检信息)。embed_max=0 表示不降采样（高清地图用）。
 
     with_title=True：在整幅图上方加一条名称带（独立高清图用，HTML 内嵌版不用）。
+    visual：高清图专用的视觉倍率 dict {ss, k, halo_out_px}；不传 = 旧口径（k=1）。
     """
+    global _VIS
+    # 每轮重置：同一进程里先出高清图、再出 HTML 内嵌图时，不能把 k 带过去。
+    _VIS = {"ss": 1.0, "k": 1.0, "halo_out_px": None}
+    if visual:
+        _VIS.update({kk: vv for kk, vv in visual.items() if vv is not None})
     overlay, placed = build_map_overlay(mobile)
     img = ""
     if embed_image:

@@ -810,6 +810,18 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         """
         return max(6, int(round(v * S)))
 
+    def SW(v):
+        """白描边（白晕）宽度 → 栅格像素。
+
+        2026-11-10 GHT 全线：统一为「外围 +CFG["halo_out_px"] 输出 px」，
+        不随超采变化；stroke 居中绘制，所以 stroke 宽 = 2 × 外围增量。
+        未配该键的线路逐字保持旧的 v*S 口径。
+        """
+        o = GC.cfg("halo_out_px", None)
+        if o is not None:
+            return max(1, int(round(2.0 * float(o))))
+        return v * S
+
     data = json.loads(osm_path.read_text(encoding="utf-8"))
     els = data["elements"]
     proj = make_projector(meta["z"], meta["tx0"], meta["ty0"], meta["box"],
@@ -1288,7 +1300,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if _unnamed_ele and ev0:
                 k = 0.72
                 if lab.place(d, f"{ev0:.0f}", (x, y), f_peak_lo, (120, 106, 88),
-                             anchor_right=True, stroke_w=1.8 * S, pad=LBL_PAD * S,
+                             anchor_right=True, stroke_w=SW(1.8), pad=LBL_PAD * S,
                              fallback=False, kind="peak"):
                     if lab.draw_symbols:
                         d.polygon([(x, y - 6 * S * k), (x - 5.4 * S * k, y + 3.6 * S * k),
@@ -1330,7 +1342,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   （2026-11-05 用户「没有标注的 osm 地名标记符号也去掉」）。
         #   矢量模式下三角由 map_svg 在地名锚点补画，三角与字同生同灭。
         if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
+                     stroke_w=SW(2.1), pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
                      gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0,
                      right_only=_peak_right):
             if lab.draw_symbols:
@@ -1357,7 +1369,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if _skip(name):
                 continue
             if lab.place(d, name, (x, y + 6 * S), f_water, C_GLACIER_LB, anchor_center=False,
-                         stroke_w=2.1 * S, pad=LBL_PAD * S):
+                         stroke_w=SW(2.1), pad=LBL_PAD * S):
                 d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
                           fill=(233, 244, 252), outline=C_GLACIER_LB)
                 n_glacier_lb += 1
@@ -1375,7 +1387,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # 符号跟注记一起出生（同 places / peaks）：矢量模式下 map_svg 只在落位的地名
         # 锚点补小圆，栅格这边再画就成了"没有名字的倒三角"。
         if lab.place(d, txt, (x, y), f_water, (150, 78, 24), anchor_right=True,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S, fallback=not NO_CROWD):
+                     stroke_w=SW(2.1), pad=LBL_PAD * S, fallback=not NO_CROWD):
             if lab.draw_symbols:
                 d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
                           fill=(255, 244, 232), outline=(176, 96, 32))
@@ -1395,7 +1407,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   721 条只落 92 条），旧写法先无脑画点、再去试注记 → 图上多出几百个
         #   「没有名字的黑点」，用户第一眼就投诉（2026-11-04）。
         if lab.place(d, name, (x, y), f, col, anchor_right=True,
-                     stroke_w=2 * S, pad=LBL_PAD * S,
+                     stroke_w=SW(2), pad=LBL_PAD * S,
                      fallback=(not NO_CROWD) or _place_fb):
             # ⚠ 矢量模式（LABELS_VECTOR）下**不能**在栅格上画这个点：文字由 map_svg
             #   重排，拥挤的直接丢弃（本窗口 721 → 92），于是几百个点没有名字留在图上
@@ -1414,7 +1426,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # 它们的价值远低于"被压住"的代价，而峰名/湖名/地名宁可轻微重叠也要显示。
         # ⚠ 符号同样只在注记落位成功后才画（否则留下无名的绿点）。
         if lab.place(d, name, (x, y), f_poi, (58, 66, 56), anchor_right=True,
-                     stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                     stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
             if kind == "temple":
                 d.rectangle([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S], fill=(178, 96, 72),
                             outline=(255, 255, 255))
@@ -1460,7 +1472,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     for x, y, nmv, _is_valley in geo:
         _col = (84, 104, 88) if _is_valley else (110, 98, 86)
         if lab.place(d, nmv, (x, y), f_poi, _col, anchor_right=True,
-                     stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                     stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
             n_geo += 1
 
     # ---- 水源 / 营地 / 补给：徒步者最需要的一类点（2026-10-29 补） ----
@@ -1477,7 +1489,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168), outline=(255, 255, 255))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (26, 84, 138), anchor_right=True,
-                             stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                             stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
             else:
                 n_extra[kind] += 1
@@ -1487,14 +1499,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                       fill=(226, 238, 224), outline=(74, 118, 74))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (60, 92, 60), anchor_right=True,
-                             stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                             stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
         else:                                   # supply：小卖部 / 补给 / 餐饮
             r = 2.6 * S
             d.rectangle([x - r, y - r, x + r, y + r], fill=(206, 168, 96), outline=(255, 255, 255))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (122, 92, 40), anchor_right=True,
-                             stroke_w=2 * S, pad=LBL_PAD * S, fallback=False):
+                             stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
 
     # ---- 海子 / 水系名：蓝色斜体感（用深青蓝 + 白描边），动态避让已有注记 ----
@@ -1503,7 +1515,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if _skip(name):
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_right=True,
-                     stroke_w=2.1 * S, pad=LBL_PAD * S,
+                     stroke_w=SW(2.1), pad=LBL_PAD * S,
                      fallback=(not NO_CROWD) or _water_fb):
             n_water += 1
 
@@ -1511,8 +1523,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # road_refs 已被 _dedupe_by_name 去过重，这里是 (cx, cy, ref, pts)
     n_road_ref = 0
     if road_refs:
-        f_road_ref = _font(F(10.5), True)
-        f_road_name = _font(F(10.0), False)
+        f_road_ref = _font(F(float(_uni_sz) if _uni_sz else 10.5), True)
+        f_road_name = _font(F(float(_uni_sz) if _uni_sz else 10.0), False)
         for _cx, _cy, ref_clean, pts, _is_name in road_refs:
             if len(pts) < 2:
                 continue
@@ -1551,7 +1563,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                     acc += seg
             if lab.place(d, ref_clean, (mx, my),
                          f_road_name if _is_name else f_road_ref, col,
-                         anchor_right=True, stroke_w=2.0 * S,
+                         anchor_right=True, stroke_w=SW(2.0),
                          pad=LBL_PAD * S, fallback=not NO_CROWD):
                     _ok = True
                     break
