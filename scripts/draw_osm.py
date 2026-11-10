@@ -1586,8 +1586,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
 
     # 导出给 map_svg：占位框（避让）+ 矢量注记（画字）
     try:
+        # ⚠ `ss` 必须写**画幅倍率 S_IN**，不能写字体倍率 S：
+        #   records 里的 ax/ay 是按 proj_scale=scale×S_IN 投影出的栅格坐标，
+        #   map_svg._load_base_labels() 用 `ax/ss` 换算回逻辑 px。字体封顶后
+        #   S≠S_IN，若这里写 4 会把所有地名锚点放大 3.25 倍、整片飞出图外。
         (OUT / "label_boxes.json").write_text(
-            json.dumps({"ss": S,
+            json.dumps({"ss": S_IN,
                         "boxes": [[round(v, 1) for v in b] for b in lab.boxes],
                         "labels": lab.records}, ensure_ascii=False), encoding="utf-8")
     except Exception as _e:                                        # noqa
