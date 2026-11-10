@@ -195,6 +195,7 @@ agent_created: true
 | qa | `qa_guide.py` | 数值化自检（不产文件，只判成败） |
 | — | `check_window.py` | 窗口自检：名峰是否被切在图外（exit 1 = 图外有个比图里更高的峰）。线路名带峰名的线必跑 |
 | osm2 | `_fetch_extra.py` | **补抓水源 / 营地 / 补给 / 山屋**（主 QUERY 不含这些 node，见 `pitfalls-terrain §32`）。跑一次合并进 `osm.json`，图上多出蓝点（水源）· 绿三角（营地）· 沙色方块（补给）。徒步线建议跑 |
+| osm3 | 项目本地 `_fetch_window.py`（模板见 `pitfalls-terrain §38`） | **按窗口补区域性数据空洞**：整窗要素齐全但某个子区域稀疏时，0.9° 分片 Overpass 抓该窗口、按 `(type,id)` 并集追加进 `osm.json`。⚠ 不用 `fetch_osm --force`（半截数据 + `_cache_covers` 假命中）；抓前备份、全块成功才合并、数百 MB 缓存走字节追加，之后跑 `make_terrain --osm-only` 重出 |
 
 **线路相关的只有一个文件：`scripts/route_def.py`。** 其余 8 个脚本一句线路名都不认，
 全部从 `route_def` 读（`CFG` 文案 / `POIS` 点位 / 里程爬升 / `CFG["kml"]`）。

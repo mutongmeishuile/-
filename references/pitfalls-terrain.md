@@ -1523,3 +1523,80 @@ paint_contours(..., raster_shape=(H, W))   # 出图时才把掩膜放大
 `selftest.py::t_contour_ss_invariant`：同一份合成地形在 `HIKING_MAP_SS=3` / `=13`
 两个子进程里跑 `contour_plan`，断言选出的 `(minor, major)` 逐字相等；
 再断言 `_upsample_mask` 放大 4× 后线占比不变（±5%）。改这块代码先看它红没红。
+
+---
+
+## 38. 按窗口补抓 OSM：修「区域性数据空洞」，不要重抓整窗（2026-11-10 尼泊尔南部）
+
+**症状**：GHT 全线（80.52–88.92°E / 27.07–30.43°N，19552 px）南部黄圈内看着一个
+OSM 地名都没有。缩略图上 32 px 的字缩到 3 px 本来就不可读，但配准 + 数数据后确认
+**84.0–86.5°E 是真空洞**：整窗 `osm.json` 里 18337 个 place 节点，该经度带只有
+61 个 place / 61 个可用名，而相邻 0.9° 带常有四位数。窗口内 `label_boxes.json`
+落位仅 103 条（对照全图 1804 条）。
+
+**先判「空」是数据空还是渲染筛掉**（这三步别省，否则会去改错层）：
+1. 用 `base_meta.json` 的 bbox 把截图配准到经纬度，锁定真实窗口；
+2. 流式统计 `osm_slim.json` 在该窗口的具名要素（按 place / natural / waterway 分桶）；
+3. 数 `label_boxes.json` 落在窗口里的记录。数据多、落位少 = 渲染筛选问题
+   （去重间距 / `label_no_crowd`）；数据本身就少 = 补抓。
+
+### 38.1 通道参数：沿用 11-08/09 西段分块经验，别照搬 `fetch_osm.py` 的超时
+
+| 项 | 值 | 为什么 |
+| --- | --- | --- |
+| 服务端 | `[out:json][timeout:900]` | `fetch_osm._query()` 的 180 是大块 504 的头号原因；本次首版照抄 180/200 → 立刻 502 + 504，改 900 后 6/6 全成功 |
+| 客户端 | `urlopen(timeout=1200)` | 服务端 900 之外还要留下载/排队余量 |
+| 传输 | `Accept-Encoding: gzip` + `gzip.decompress` | 几何 JSON 压 4–5×，`_fetch_gz.py` 实测 de 单块 1600 s → 277 s |
+| 端点 | **只用** `overpass-api.de` / `overpass.kumi.systems` | 首轮探测 private.coffee / nchc 全超时；按「先探活再定序」（§9），别按名气排 |
+| 分块 | 0.9° × 0.9°、2 并发、每块单独落盘 | 6 块 / 20.3 min；耗时几乎全是排队，块越少越好，但单块过大会超时 |
+| 可靠性 | 3 轮重试 + 分块落盘断点续 + **全部块成功才合并** | 见 §14「半截数据」：缺一块就合并 = 静默丢一大片地名 |
+| 下载源 | Geofabrik `download.geofabrik.de` 本机 15 s 不可达 | 见 `self-hosted-terrain.md` §6；尼泊尔只有 openstreetmap.fr 的省级片，且本案是补差额、不是重抽整窗 |
+
+**查询类别必须按「绘制白名单」精简**：只抓 `draw_osm` 真会画的
+`highway=trunk/primary/secondary`、`waterway`、`natural=water/peak/saddle/valley/ridge`、
+`place`、`mountain_pass`、`tourism`、`amenity=place_of_worship`、`historic`。
+⚠ **不要**把 residential / track / path / wood / glacier / 国界塞回去 ——
+尼泊尔是 HOT 重点区，这几类一抓就是几十万条，全是主缓存已有的东西，白等排队。
+
+### 38.2 合并：字节追加 + 正则扫 id，绝不整读 785 MB 成 Python 对象
+
+主缓存是 `{"_source": ..., "elements": [...]}` 的**单个大 JSON**。
+历史 `_merge_tiles.py` 用 `json.load` 整读整写，在 749 MB 时约 3–4 GB 常驻 → OOM。
+本次做法（脚本 `全线/scripts/_fetch_window.py`，项目本地、未改共享 `fetch_osm.py`）：
+
+1. `data = CACHE.read_bytes()`，用 `_ID_RE = rb'\{"type":\s*"(\w+)",\s*"id":\s*(\d+)'`
+   扫出已有 `(type, id)` 集合；**扫不到 10 万条就拒绝合并**（防结构不符把缓存写坏）；
+2. 新要素按 `(type,id)` 取差集 → `json.dumps` 逐条编码，在 `data.rfind(b"]}")` 前
+   字节追加 `,` + 新元素，`os.replace` 原子替换；mtime 变化自动让 `osm_slim` /
+   `osm_draw` 失效重建；
+3. 备份 `out/osm.json.pre_window`（只备一次，不反复覆盖）；
+4. 在头部 `_source` 字符串里追加 `+ 84-88.9E/27.0-27.9N window Overpass shards`，
+   下次一看缓存头就知道数据怎么来的。
+
+### 38.3 ⚠ 为什么不能用 `fetch_osm.py --force`
+
+`--force` 是**整窗重抽**，撞 `osm_fetch_budget`(420 s) 会拿半截数据，
+`_cache_covers()` 又会因为国界/长河这种横跨全图的元素**假命中**（§14、§6）；
+而且境外/跨境窗口会回落到 Overpass 一次查询，比 6 块分片更容易 504。
+按窗口补抓是「保留原缓存 + 并集追加」，旧要素 100% 不动。
+
+### 38.4 命令与核验
+
+```bash
+python scripts/_fetch_window.py --probe                    # 先只抓第一块验通道
+python scripts/_fetch_window.py                           # 6 块 + 自动合并（可断点续）
+python scripts/make_terrain.py --osm-only                 # 重建 base_map / label_boxes
+python scripts/render_map_hi.py                          # 重出高清成品
+```
+
+- 抓前**一定**备份 `osm.json`；`_win_shards/` 是断点续的依据，别删。
+- 合并后核对：缓存大小、`(type,id)` 数、`_source` 尾部标注；
+  `--osm-only` 日志里的「挤放数」必须为 0（>0 说明补进了重复/挤爆的注记）。
+- 效果判据：本案 47204 条 → 块间去重 46992 → 新增 **38555**
+  （hamlet 2670 / village 720 / locality 759 / peak 779 / river 1331…），
+  主缓存 749→**813 MB** / 477905→**516460** 要素；
+  窗口内落位 **103 → 362（3.5×）**、全图 1804 → 2075，**挤放仍 0**。
+  1:1 裁图对比 84.0–84.8°E：7–8 个地名 → 30+（Sailkot / Kabilas / Sauraha /
+  Meghauli…），没有糊成字毯。
+- ⚠ 补抓窗口边缘的 relation（大湖/冰川）会被裁断，日志里「缝合残链 2 条丢弃」
+  属正常，可接受；但补抓后要顺手确认没有引入空名/纯标点脏名。
