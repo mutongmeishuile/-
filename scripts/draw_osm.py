@@ -819,7 +819,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # ---- 三套倍率，彼此解耦（2026-11-10 GHT 全线定案）----
     #   S_IN    调用方给的**画幅**倍率（= make_terrain 的 SS，全线 13 → 19552 px）。
     #   S       字体 / 符号 / 占位网格倍率 = min(S_IN, label_font_cap)。
-    #           画幅仍按 S_IN 出，但字体不该跟着画幅一起放大；全线 cap=4。
+    #           画幅仍按 S_IN 出，但字体不该跟着画幅一起放大；倍数由线路 CFG
+    #           决定（GHT 全线 2026-11-11 起为 3），这里不写死。
     #   GRID_SS 栅格**线宽**的固定基准（CFG["grid_line_ss"]，默认 = S_IN → 老线路不变）。
     #           全线配 8：W(v) = round(v×8×0.55)，与画幅倍率、字体倍率都无关。
     #   SEP_SS  按名去重间距的倍率（CFG["label_dedupe_sep_scale"]，默认 = S）。
@@ -872,7 +873,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         5.0 的公路芯线乘 4 就是 20 px —— 比轨迹还宽。大栅格统一乘 0.55，
         小栅格（ss=2）保持不变。
         ⚠ 2026-11-10 GHT 全线：线宽基准与出图倍率解耦，固定 GRID_SS=8
-        （W(v)=round(v×8×0.55)），画幅仍 19552 px、字体只 ×4。
+        （W(v)=round(v×8×0.55)），画幅仍 19552 px、字体走线路级 cap。
         老线路 GRID_SS 默认 = S，行为逐字不变。
         ⚠ 2026-11-10 二次定案：全线配 `grid_line_scale=0.5`，
         W(v)=round(v×8×0.55×0.5)，river 6 → 3 px、trunk 7 → 3 px。
