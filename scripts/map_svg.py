@@ -63,20 +63,31 @@ def _vk():
     return float(_VIS["k"])
 
 
-def _halo_sw_text(fs):
-    """文字白晕描边宽度（逻辑 px）。halo_out_px 给定时恒为『外围 +o 输出 px』。"""
+def _halo_out():
+    """白底单侧外扩量（逻辑 px）= halo_out_px 输出 px / SS，固定不随超采。
+
+    未启用 visual 时返回 None（各调用点走旧口径）。
+    """
     o = _VIS.get("halo_out_px")
-    if o is None:
-        return max(0.8, fs * 0.13)
-    return 2.0 * float(o) / float(_VIS["ss"])
+    return None if o is None else float(o) / float(_VIS["ss"])
+
+
+def _sw(old):
+    """任意白色描边：启用 visual 时统一为「外围 +halo_out_px 输出 px」。
+    SVG stroke 居中绘制，描边宽度 = 2 × 单侧外扩量。
+    """
+    ho = _halo_out()
+    return 2.0 * ho if ho is not None else old
+
+
+def _halo_sw_text(fs):
+    """文字白晕描边宽度（逻辑 px）。"""
+    return _sw(max(0.8, fs * 0.13))
 
 
 def _halo_sw_sym():
     """符号（峰三角 / 锚点圆）白色描边宽度（逻辑 px）。"""
-    o = _VIS.get("halo_out_px")
-    if o is None:
-        return 0.7
-    return 2.0 * float(o) / float(_VIS["ss"])
+    return _sw(0.7)
 
 
 def _pin_d(k=None):
@@ -263,19 +274,19 @@ def mk_pin(x, y, kind, k=None):
                "poi": "#6B4FA0", "village": "#C4703A"}.get(kind)
         if _dc:
             return (f'<circle cx="{x}" cy="{y}" r="{_R:.1f}" fill="{_dc}" stroke="#FFFFFF" '
-                    f'stroke-width="{max(0.8, _R * 0.36):.1f}"/>')
+                    f'stroke-width="{_sw(max(0.8, _R * 0.36)):.4f}"/>')
         return ""
 
     if kind == "start":
         r = _R
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#D93B2B" stroke="#fff" '
-                f'stroke-width="{4*PINS:.1f}"/>'
+                f'stroke-width="{_sw(4 * PINS):.4f}"/>'
                 f'<text x="{x}" y="{y+6*PINS:.1f}" text-anchor="middle" font-size="{16*PINS:.1f}" '
                 f'font-weight="800" fill="#fff">起</text>')
     if kind == "end":
         r = _R
         return (f'<circle cx="{x}" cy="{y}" r="{r:.1f}" fill="#0F6E5C" stroke="#fff" '
-                f'stroke-width="{4*PINS:.1f}"/>'
+                f'stroke-width="{_sw(4 * PINS):.4f}"/>'
                 f'<text x="{x}" y="{y+6*PINS:.1f}" text-anchor="middle" font-size="{15*PINS:.1f}" '
                 f'font-weight="800" fill="#fff">终</text>')
     if kind in ("peak", "peak_hi"):
@@ -323,10 +334,10 @@ def mk_pin(x, y, kind, k=None):
                 f'<circle cx="{x}" cy="{y}" r="{10.8*PINS:.1f}" fill="#2E86AB"/>'
                 f'<path d="M {x-6*PINS:.1f},{y-1*PINS:.1f} Q {x-3*PINS:.1f},{y-5*PINS:.1f} '
                 f'{x},{y-1*PINS:.1f} Q {x+3*PINS:.1f},{y+3*PINS:.1f} {x+6*PINS:.1f},{y-1*PINS:.1f}" '
-                f'stroke="#fff" stroke-width="{2.2*PINS:.1f}" fill="none" stroke-linecap="round"/>'
+                f'stroke="#fff" stroke-width="{_sw(2.2 * PINS):.4f}" fill="none" stroke-linecap="round"/>'
                 f'<path d="M {x-6*PINS:.1f},{y+3.5*PINS:.1f} Q {x-3*PINS:.1f},{y-0.5*PINS:.1f} '
                 f'{x},{y+3.5*PINS:.1f} Q {x+3*PINS:.1f},{y+7*PINS:.1f} {x+6*PINS:.1f},{y+3.5*PINS:.1f}" '
-                f'stroke="#fff" stroke-width="{2.2*PINS:.1f}" fill="none" stroke-linecap="round"/>')
+                f'stroke="#fff" stroke-width="{_sw(2.2 * PINS):.4f}" fill="none" stroke-linecap="round"/>')
     if kind == "poi":
         # 地标：菱形
         return (f'<circle cx="{x}" cy="{y}" r="{15*PINS:.1f}" fill="#fff" opacity="0.95"/>'
@@ -1016,10 +1027,15 @@ def build_map_overlay(mobile=False):
     # ⚠ 线宽与符号要成比例：主线太粗会盖住底图等高线、也压掉点位符号。
     #   2026-10-09 亚丁线「线太粗」→ 5.4/8.6 降到 4.0/6.2；
     #   2026-10-21 珠峰东坡扩窗后线相对更粗、压地名 → 再收到 3.0/4.9。
-    ROUTE_W = float(_CFG.get("route_w") or ROUTE_W_DEF) * M
+    # 2026-11-10：主线也走「设计基准 px × min(SS,cap)」→ 2.0×4 = 8 输出 px。
+    ROUTE_W = float(_CFG.get("route_w") or ROUTE_W_DEF) * M * _vk()
     # 「白色描边」按**每侧**宽度定义：总衬底 = 主线 + 2×描边。
     # 若按总宽写（1.0 < 2.0），白边会被主线完全盖住、且不报错 —— 所以这里显式换算。
+    # 启用 visual 时：白底每侧恒 halo_out_px 输出 px（不随超采，全线 = 1 px）。
     _halo_side = float(_CFG.get("route_halo_side") or ROUTE_HALO_SIDE_DEF)
+    _ho = _halo_out()
+    if _ho is not None:
+        _halo_side = _ho
     HALO_W = (ROUTE_W / M + 2 * _halo_side) * M
     _TRK, _TRK_HW = XY, (ROUTE_W + HALO_W) / 2 + 1.0
     o.append(f'<path d="{d_of(XY)}" fill="none" stroke="#FFFFFF" stroke-width="{HALO_W}" '
@@ -1105,15 +1121,17 @@ def build_map_overlay(mobile=False):
 
     # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
     _dash_w = float(_CFG.get("day_dash_w") or DAY_DASH_W_DEF)
+    _dash_core = _dash_w * M * _vk()
+    _dash_halo = (_dash_w + 1.25) * M if _ho is None else _dash_core + 2 * _ho
     for _bi in _split_is[1:-1] if len(_split_is) > 2 else [SPLIT_I]:
         sx, sy = XY[_bi]
         # ⚠ 2026-10-21：原来这条分日界是"白色胶囊底 + 2.4 粗虚线"，线宽收到 3.0 之后
         #   它反而比主线还抢眼（图上像一排白色药丸）。改成细虚线 + 极窄白底。
         o.append(f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
-                 f'stroke="#FFFFFF" stroke-width="{(_dash_w + 1.25) * M:.1f}" stroke-linecap="round" '
+                 f'stroke="#FFFFFF" stroke-width="{_dash_halo:.4f}" stroke-linecap="round" '
                  f'opacity="0.85"/>'
                  f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
-                 f'stroke="#6C7480" stroke-width="{_dash_w * M:.1f}" '
+                 f'stroke="#6C7480" stroke-width="{_dash_core:.4f}" '
                  f'stroke-dasharray="{7*M:.0f} {5*M:.0f}" stroke-linecap="round"/>')
 
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
@@ -1284,16 +1302,18 @@ def build_map_overlay(mobile=False):
         if gap > 34 * M:
             px = min(max(x, box[0]), box[2])
             py = min(max(y, box[1]), box[3])
+            _lead_core = 1.4 * M * _vk()
+            _lead_halo = 2.6 * M if _ho is None else _lead_core + 2 * _ho
             o.append(f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
-                     f'stroke="#FFFFFF" stroke-width="{2.6*M:.1f}" stroke-linecap="round"/>'
+                     f'stroke="#FFFFFF" stroke-width="{_lead_halo:.4f}" stroke-linecap="round"/>'
                      f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
-                     f'stroke="{col}" stroke-width="{1.4*M:.1f}" stroke-linecap="round" '
+                     f'stroke="{col}" stroke-width="{_lead_core:.4f}" stroke-linecap="round" '
                      f'opacity="0.75"/>')
         # ⚠ 白描边要"细而净"：5.4*PS（≈4.6 逻辑 px / 9 栅格 px）在浅色地形上会糊成
         #   一圈白阴影（用户原话"字体看上去有白色的阴影"）。收到 2.4*PS ≈ 字号的 13%，
         #   读起来是"描边"而不是"发光"，同时仍能压住底图等高线。
         o.append(f'<text x="{tx}" y="{ty+7.4*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
-                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{max(1.1, fs * 0.17):.2f}" '
+                 f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{_sw(max(1.1, fs * 0.17)):.4f}" '
                  f'stroke-opacity="0.92" paint-order="stroke" stroke-linejoin="round">{t}</text>')
 
     # ---- 落位绘制 ----
