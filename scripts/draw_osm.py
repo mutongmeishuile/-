@@ -1156,12 +1156,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     _NEAR = (_route_corridor(proj, size, meta, _near_bars, verbose=verbose)
              if _near_bars > 0 else None)
 
-    def _near(x, y):
-        return bool(_NEAR and _NEAR(x, y))
-
-    def _near_rank(x, y):
-        return 1 if _near(x, y) else 0
-
+    # 近轨迹走廊：只加密走廊内的落位机会，不改候选的原有顺序 ——
+    # 把 near 提到前面会抢占远处同名/格子（实测走廊外地名 -101 条），
+    # 与用户「其他地区保持不变」冲突。
     lab = Labeller(size, cell=14 * S_IN, near_fn=_NEAR)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
     # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
@@ -1185,21 +1182,22 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         同名已落位的标签距新候选小于 sep 就跳过。sep 取图幅尺度的比例，
         长河因此仍能拿到 2–3 个标签（符合地形图惯例），短溪只留 1 个。
 
-        2026-11-10 近轨迹走廊：near_fn 非 None 时，走廊内候选**优先占位**
-        （排序键第一维），其同名判定间距乘 near_sep（<1）收窄；走廊外 sep 原样。
+        2026-11-10 近轨迹走廊：near_fn 非 None 时，走廊内候选的同名判定间距乘
+        near_sep（<1）收窄，且**走廊内/外各用一套独立的同名池**：
+        走廊内多留的候选不会去占走廊外的名字槽。⚠ 别改回「near 优先排序 +
+        共用一池」—— 实测会让走廊外地名少 101 条（其他地区没保持不变）。
         """
         def _key(c):
-            base = c[sort_idx] if sort_idx is not None else 0
-            n = 1 if (near_fn and near_fn(c[x_idx], c[y_idx])) else 0
-            return (n, base)
-        placed, out = {}, []
+            return c[sort_idx] if sort_idx is not None else 0
+        placed, placed_near, out = {}, {}, []
         for c in sorted(cands, key=_key, reverse=True):
             nm = c[name_idx]
             if not nm:
                 continue
             cx, cy = c[x_idx], c[y_idx]
-            seen = placed.setdefault(nm, [])
-            sep_here = sep * near_sep if (near_fn and near_fn(cx, cy)) else sep
+            _is_near = bool(near_fn and near_fn(cx, cy))
+            seen = (placed_near if _is_near else placed).setdefault(nm, [])
+            sep_here = sep * near_sep if _is_near else sep
             if any(math.hypot(cx - px, cy - py) < sep_here for px, py in seen):
                 continue
             seen.append((cx, cy))
@@ -1378,10 +1376,8 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     places = _dedupe_by_name(places, max(260.0, size[0] * 0.12) * SEP_SS, 3,
                              x_idx=1, y_idx=2, near_fn=_NEAR, near_sep=_near_sep)
 
-    # 近轨迹走廊开启时，走廊内的峰优先占位（仍按高程降序），否则远处高峰会把
-    # 轨迹附近的格子先占满；走廊关闭时 _near_rank 恒 0，排序逐字不变。
-    peaks.sort(key=lambda p: (_near_rank(p[0], p[1]), _ele_of(p[3]) or -1.0),
-               reverse=True)
+    # 顺序保持旧口径（高程降序）：走廊内峰名靠 dense 候选环多落，不靠插队。
+    peaks.sort(key=lambda p: _ele_of(p[3]) or -1.0, reverse=True)
     # 2026-10-29 新增（默认关，只给总览这类"要求峰名尽量全出"的画幅用）：
     #   peak_label_all   → 所有具名峰都允许挤放（不再"低分位放不下就丢"）
     #   peak_label_tight → 峰名左缘紧贴三角右缘 0.5 逻辑 px（默认 gap 5.0 太远）
@@ -1486,8 +1482,6 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 字号用 f_water（11.5px 加粗）而不是 peaks 循环里的 f_peak_use：
     # 后者是循环内变量，且念青东这类 peak=1 的窗口压根不进分级逻辑。
     n_saddle = 0
-    if _NEAR:
-        saddles.sort(key=lambda s: -_near_rank(s[0], s[1]))
     for x, y, name, ele in saddles:
         if _skip(name):
             continue
@@ -1503,8 +1497,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_saddle += 1
 
     prio = {"city": 0, "town": 1, "suburb": 2, "village": 3, "neighbourhood": 4, "hamlet": 5}
-    # `-_near_rank` 把走廊内村镇提到同类之前；未开启时全 0，仍是原来的类别优先级。
-    places.sort(key=lambda p: (-_near_rank(p[1], p[2]), prio.get(p[0], 9)))
+    places.sort(key=lambda p: prio.get(p[0], 9))
     n_place = 0
     for kind, x, y, name in places:
         if _skip(name):
@@ -1529,8 +1522,6 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_place += 1
 
     n_poi = 0
-    if _NEAR:
-        pois.sort(key=lambda p: -_near_rank(p[0], p[1]))
     for x, y, name, kind in pois:
         if _skip(name):
             continue

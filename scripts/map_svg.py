@@ -739,11 +739,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
         return ""
     if pois:
         items = [it for it in items if not _poi_dup(it, pois, pin_xy)]
-    # 近轨迹走廊（2026-11-10 GHT 全线）：走廊内候选先占位，避免远处地名把好位置抢光。
-    # 只在 label_boxes 带 near 标记时生效；老缓存没有该字段 → 排序 key 全 0，
-    # Python 排序稳定 → 逐字保持原顺序。
-    if any(it.get("near") for it in items):
-        items.sort(key=lambda d: (-d.get("near", 0), -d["rank"]))
+    # 近轨迹走廊（2026-11-10 GHT 全线）：**不插队**。near 项只多试几个零重叠位置，
+    # 顺序仍按原来的 rank；一旦把 near 提前，会抢占走廊外地名的位置
+    # （用户口径：其他地区保持不变）。
     out, dropped = [], 0
     _drop_names = []
     for it in items:
