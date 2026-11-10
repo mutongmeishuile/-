@@ -1777,6 +1777,16 @@ def _title_band():
     if _legend_place() == "title":
         # 底缘留 8 px（带子下沿之上）—— 用户口径：默认 8 px，再少就顶到边了
         o.append(_title_legend(IW - 40, _th - 8, _k))
+        # 2026-11-10：把图例从独立图例带搬进标题带后，`legend_foot` 里的
+        #   © OpenStreetMap contributors (ODbL) 与作者署名就没有落点了。
+        #   标题带是唯一的「图外」区域，在左下角补一行小字；随 _title_scale()
+        #   一起缩，缩略图里不抢眼、1:1 下仍可读。其它两种放法脚注仍在
+        #   图例卡 / 图例带里，这里不重复画。
+        _foot = GC.author_legend(_CFG.get("legend_foot", "仅供参考 · 非导航用途"))
+        if _foot:
+            o.append(f'<text x="{x0}" y="{_th - 4 * _k:.1f}" '
+                     f'font-size="{9 * _k:.1f}" font-weight="600" '
+                     f'fill="{TITLE_INK_MUTED}">{_esc(_foot)}</text>')
     # 分日色条：与图例同色，先给读者一个"这是几天线"的暗示
     days = _CFG.get("days", [])
     if days and _legend_place() != "title":
