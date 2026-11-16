@@ -1295,7 +1295,10 @@ def build_map_overlay(mobile=False):
         for sc in FS_LADDER:
             fs = base * sc
             w = GC.text_w(txt, fs) + 26 * M
-            r = _layout(x, y, dx * M, dy * M, anc, w, fs * 0.86, commit=False)
+            # 首选偏移（作者的 dx/dy）要跟字号一起缩：k=1 时逐字不变，
+            # 高清图上字号只放大 ×min(SS,cap)，偏移却照旧 → 标签离图钉越来越远
+            # （2026-11-12 用户："poi 标注似乎离标注点比较远"）。
+            r = _layout(x, y, dx * M * _vk(), dy * M * _vk(), anc, w, fs * 0.86, commit=False)
             # 优先零重叠；都不零重叠时取面积最小、并列取字号大
             if best is None or r[4] < best[4] - 1e-6 or \
                (abs(r[4] - best[4]) <= 1e-6 and sc > best[5]):
@@ -1783,7 +1786,11 @@ def _title_band():
             _stats = f"{RD.TOTAL_KM:.1f} km · +{RD.ASC} / −{RD.DESC} m"
         except Exception:
             _stats = None
-    if _stats:
+    # ⚠ 图例搬进标题带时**不再画数据行**（2026-11-16 麦理浩径实测）：带高被
+    #   band_max_ratio=0.10 压到 56 逻辑 px 时，图例右下角贴边排布，右对齐的数据行
+    #   正好压在图例 D4/D5 两行上（"105.9 km · +5027…" 和「昂平 → 狮子山」摞在一起）。
+    #   数字改由 title_lite 承担（作者在 route_def 里写进副标题），版面只留图例。
+    if _stats and _legend_place() != "title":
         o.append(f'<text x="{IW - 40}" y="{52 * _k:.1f}" text-anchor="end" font-size="{17 * _k:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(_stats)}</text>')
     # 图例放标题带时整块搬进来（右缘贴数据行、底缘贴带子下沿）；否则只留分日色条

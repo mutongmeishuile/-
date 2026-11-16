@@ -1357,6 +1357,35 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     peaks = [(x, y, _clean_name(n), e) for x, y, n, e in peaks]
     saddles = [(x, y, _clean_name(n), e) for x, y, n, e in saddles]
     places = [(k, x, y, _clean_name(n)) for k, x, y, n in places]
+
+    # ---- 地名：先分级、再按预算截断，然后才抢格子 ----
+    # 为什么要有（2026-11-16 麦理浩径实测）：原来是 `for kind, x, y, name in places`
+    # 按 OSM 元素的先后顺序落字 —— 小村名（hamlet）可能抢在镇名前占掉格子，
+    # 15040 px 的图上落了 1172 条地名，把整幅铺满，而该标的大地名反被挤掉。
+    # 现在：① 按等级排序（city>town>village>hamlet>locality）；② 近轨迹走廊内的
+    # 地名**升一档**参与竞争（满足"优先标轨迹附近"，但不是"只标附近" —— 远处的
+    # 仍按自身等级抢名额）；③ 截到 CFG["place_label_max"] 条预算内。
+    _PR = {"city": 0, "town": 1, "suburb": 1, "village": 2, "hamlet": 3,
+           "neighbourhood": 4, "locality": 4, "isolated_dwelling": 5}
+    if _NEAR is not None:
+        def _pr(p):
+            return _PR.get(p[0], 4) - (1 if _NEAR(p[1], p[2]) else 0)
+    else:
+        def _pr(p):
+            return _PR.get(p[0], 4)
+    places.sort(key=_pr)
+    _pmax = int(GC.cfg("place_label_max", 0) or 0)
+    if _pmax > 0 and len(places) > _pmax:
+        print(f"   地名预算 {len(places)} → {_pmax} 条（按等级排序后截断）")
+        places = places[:_pmax]
+
+    # ---- 水系名：只标最长的 N 条（与冰川名同口径：大江大湖是地标，不是清单）----
+    _wmax = int(GC.cfg("water_label_max", 0) or 0)
+    if _wmax > 0 and len(waters) > _wmax:
+        waters.sort(key=lambda w: w[3], reverse=True)
+        print(f"   水系名预算 {len(waters)} → {_wmax} 条（按长度/面积取前 N）")
+        waters = waters[:_wmax]
+
     waters = [(x, y, _clean_name(n)) for x, y, n, _sz in waters]
     pois = [(x, y, _clean_name(n), k) for x, y, n, k in pois]
 
