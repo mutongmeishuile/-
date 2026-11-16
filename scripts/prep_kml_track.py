@@ -100,15 +100,27 @@ def main():
     #   集中在 64.5 / 68 / 104.5 / 106.5 km 的垭口与营地），以及 -32768 这类哨兵值。
     #   不修的话 11 点滑动平均只把它们摊薄成"掉到 1000 m 以下"的几个点 →
     #   ① 剖面图直接扎到 0 m（用户看到一道深渊）；② 该日累计爬升虚增上千（D01 算出 +5279 m）。
-    #   这里按"落在 [500, 9000] 之外即无效"判定，用前后最近的**有效点线性插值**补上；
-    #   整条轨迹都无效时退回原值（不改变其它线路的行为）。
+    #   这里按"落在 [lo, 9000] 之外、或恰好等于 0 / -32768"判定，用前后最近的
+    #   **有效点线性插值**补上；整条轨迹都无效时退回原值。
+    #   ⚠ 下界 lo **不能写死 500**（2026-11-16 麦理浩径踩坑）：那条线全程 0–914 m，
+    #     写死 500 会把 87% 的点判成无效、再互相插值 → 整条剖面被压平在 500.9 m、
+    #     累计爬升只剩 741 m（真值约 4000）且**不报错**。改为按中位数自适应下界：
+    #     中位高程 < 500 m 的低海拔线路用 -400（保留 0 以下的海平面点），否则沿用 500。
+    #     两种情况都把「恰好 0」当哨兵值 —— GPS 不会给出 float 精确 0 的真高程。
     raw_ele = [p[2] for p in raw]
-    ok = [i for i, v in enumerate(raw_ele) if 500 <= v <= 9000]
+    _srt = sorted(v for v in raw_ele if -32768 < v < 9000)
+    _med = _srt[len(_srt) // 2] if _srt else 0.0
+    lo_ok = -400.0 if _med < 500 else 500.0
+
+    def _ele_ok(v):
+        return (v != 0) and (v != -32768) and (lo_ok <= v <= 9000)
+
+    ok = [i for i, v in enumerate(raw_ele) if _ele_ok(v)]
     if ok and len(ok) < len(raw_ele):
         ele = list(raw_ele)
         n_fix = 0
         for i in range(len(ele)):
-            if 500 <= ele[i] <= 9000:
+            if _ele_ok(ele[i]):
                 continue
             lo = max([j for j in ok if j < i], default=None)
             hi = min([j for j in ok if j > i], default=None)

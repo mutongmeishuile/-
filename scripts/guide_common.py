@@ -1061,3 +1061,44 @@ def png_meta(desc=""):
     if desc:
         info.add_text("Description", desc)
     return {"pnginfo": info}
+
+
+# ------------------------------------------------------------------ 高程有效性
+# 2026-11-16 麦理浩径踩坑：`prep_kml_track.py` 与 `build_guide.py` 各写了一份
+# "高程落在 [500, 9000] 之外即无效"的判据 —— 那是按 3500 m 级雪山定的。
+# 换到 0–914 m 的海岸线路，87% 的点被判无效、再互相插值，结果是
+# **整条剖面被压平在 500.9 m、累计爬升只剩 741 m（真值 5027）**，全程不报错。
+# 判据收敛到这里：下界按中位数自适应（低海拔线路 -400，保留海平面以下点），
+# 「恰好 0」与 -32768 一律当哨兵值 —— GPS 不会给出 float 精确 0 的真高程。
+def ele_valid_bounds(vals):
+    """返回 (lo, hi)：这批高程的"有效区间"。中位 < 500 m 的低海拔线路下界放到 -400。"""
+    s = sorted(v for v in vals if -32768 < v < 9000)
+    med = s[len(s) // 2] if s else 0.0
+    return (-400.0 if med < 500 else 500.0), 9000.0
+
+
+def fix_invalid_ele(ele):
+    """把 0 / -32768 / 越界高程按前后有效点线性插值补上。返回 (新列表, 修正点数)。"""
+    lo_ok, hi_ok = ele_valid_bounds(ele)
+
+    def ok(v):
+        return v != 0 and v != -32768 and lo_ok <= v <= hi_ok
+
+    idx = [i for i, v in enumerate(ele) if ok(v)]
+    if not idx or len(idx) == len(ele):
+        return list(ele), 0
+    out = list(ele)
+    n = 0
+    for i in range(len(out)):
+        if ok(out[i]):
+            continue
+        a = max([j for j in idx if j < i], default=None)
+        b = min([j for j in idx if j > i], default=None)
+        if a is None:
+            out[i] = ele[b]
+        elif b is None:
+            out[i] = ele[a]
+        else:
+            out[i] = ele[a] + (ele[b] - ele[a]) * (i - a) / (b - a)
+        n += 1
+    return out, n

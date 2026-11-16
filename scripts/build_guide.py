@@ -544,22 +544,10 @@ def _load_cum():
     # ⚠ 无效高程（ele=0 / -32768 / 越界）必须先按前后有效点插值，否则 11 点平滑后
     #   仍会出现"掉到谷底又爬上来"的假落差 —— 时间表的「累计↑/↓」列会虚增上千
     #   （2026-10-27 梅里转山实测：38.8 km 处累计↑ 报到 +12687，而全程真值 22630）。
-    #   与 prep_kml_track.py 的判据保持一致：[500, 9000] 之外视为无效。
-    _ok = [i for i, v in enumerate(ele) if 500 <= v <= 9000]
-    if _ok and len(_ok) < n:
-        _fix = list(ele)
-        for i in range(n):
-            if 500 <= _fix[i] <= 9000:
-                continue
-            lo = max([j for j in _ok if j < i], default=None)
-            hi = min([j for j in _ok if j > i], default=None)
-            if lo is None:
-                _fix[i] = ele[hi]
-            elif hi is None:
-                _fix[i] = ele[lo]
-            else:
-                _fix[i] = ele[lo] + (ele[hi] - ele[lo]) * (i - lo) / (hi - lo)
-        ele = _fix
+    #   判据收敛到 guide_common.fix_invalid_ele()：原先这里与 prep_kml_track 各写一份
+    #   「[500, 9000] 之外即无效」，低海拔线路（麦理浩径 0–914 m）会把 87% 的点判无效、
+    #   互相插值后整表变成平的（累计↑ 全是 +0），见该函数注释。
+    ele, _n_fix = GC.fix_invalid_ele(ele)
     # 11 点滑动平均（前缀和 O(n)）
     pref = [0.0] * (n + 1)
     for i, v in enumerate(ele):

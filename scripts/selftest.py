@@ -1219,10 +1219,10 @@ def t_contour_ss_invariant():
         "y,x=np.mgrid[0:1700,0:2900].astype(np.float32);"
         "dem=4600+900*np.sin(x/210.0)+650*np.sin(y/170.0)+380*np.sin((x+y)/95.0);"
         "r=m.contour_plan(dem,28.0,14,verbose=False);"
-        "print(r[2],r[3],m.SS,m.RASTER_W)"
+        "print(r[2],r[3],m.SS,m.RASTER_W,round(float(r[4]),4))"
     )
     got = {}
-    for ss in ("3", "13"):
+    for ss in ("3", "6", "13"):
         try:
             p = subprocess.run([sys.executable, "-c", _code], cwd=str(HERE),
                                env=dict(_os.environ, HIKING_MAP_SS=ss),
@@ -1231,12 +1231,25 @@ def t_contour_ss_invariant():
         except Exception as e:                                      # noqa
             got[ss] = []
             check(f"SS={ss} 子进程跑得起来", False, f"{type(e).__name__}: {e}")
-    ok2 = bool(got.get("3")) and got.get("3")[:2] == got.get("13", [None, None])[:2]
-    check("同一地形 SS=3 / SS=13 选出的等高距相同", ok2,
-          f"SS=3 → {got.get('3')} / SS=13 → {got.get('13')}")
+    # ① k ≤ 上限（SS=6 时 k=2 恰好等于默认 k_max）→ 选档逐字相等
+    ok2 = bool(got.get("3")) and got.get("3")[:2] == got.get("6", [None, None])[:2]
+    check("k ≤ 上限（SS=3 / SS=6）选出的等高距逐字相同", ok2,
+          f"SS=3 → {got.get('3')} / SS=6 → {got.get('6')}")
+    # ② k 超上限时走覆盖率补偿：选更密一档，且基准覆盖率 ≈ ×(k/k_max)
+    #    （2026-11-12 用户口径：线宽封顶 2 之后出图覆盖率仍要落在 0.15–0.20）
+    try:
+        m3, m13 = float(got["3"][0]), float(got["13"][0])
+        c3, c13 = float(got["3"][4]), float(got["13"][4])
+        ratio = c13 / c3 if c3 else 0.0
+        check("k 超上限 → 选档加密且覆盖率补偿 ≈ k/k_max（±20%）",
+              m13 <= m3 and 1.7 <= ratio <= 2.6,
+              f"SS=3: {m3:g} m/{c3:.1%} → SS=13: {m13:g} m/{c13:.1%}（比值 {ratio:.2f}，"
+              f"期望 {13 / 3 / 2:.2f}）")
+    except (IndexError, ValueError) as e:
+        check("k 超上限 → 选档加密且覆盖率补偿 ≈ k/k_max（±20%）", False, f"{type(e).__name__}: {e}")
     if got.get("13"):
         check("SS=13 的画幅确实是 19552 px（对照：几何仍在 4512 基准上）",
-              got["13"][2:] == ["13", "19552"], str(got["13"]))
+              got["13"][2:4] == ["13", "19552"], str(got["13"]))
 
     # ③ 掩膜放大后线占比不变：斜线在 4× 放大下仍占同样的比例
     h, w = 300, 400
@@ -1299,6 +1312,36 @@ def t_contour_width_absolute():
           str(MT.CONTOUR_WIDTH))
 
 
+# ---------------------------------------------------------------- 高程有效性（低海拔线路回归）
+def t_ele_valid_lowalt():
+    """低海拔线路（麦理浩径 0–914 m）不得被"有效高程"判据一刀切成平地。
+
+    2026-11-16 实测：prep_kml_track / build_guide 里各写了一份「[500, 9000] 之外即无效」，
+    海岸线路 87% 的点被判无效 → 互相插值 → 整条剖面压平在 500.9 m、累计爬升 741 m
+    （真值 5027），**全程不报错**。判据已收敛到 guide_common.fix_invalid_ele()。
+    """
+    import random
+    import guide_common as GC
+    random.seed(7)
+    # 造一条 5–900 m 起伏的"海岸线路"，中间埋 3 个哨兵值（0 与 -32768）
+    ele = []
+    for i in range(400):
+        ele.append(round(5 + 450 * (1 + __import__("math").sin(i / 21.0)), 2))
+    ele[100] = 0
+    ele[101] = 0
+    ele[250] = -32768
+    fixed, n = GC.fix_invalid_ele(ele)
+    check("低海拔线路：哨兵值被修正", n == 3, f"修正 {n} 点（应为 3）")
+    bad = [v for v in fixed if v == 0 or v == -32768 or v < -400]
+    check("低海拔线路：修正后无越界值", not bad, f"残留 {bad[:5]}")
+    check("低海拔线路：剖面不被压平",
+          max(fixed) - min(fixed) > 300, f"range={max(fixed) - min(fixed):.0f} m")
+    lo, hi = GC.ele_valid_bounds([5, 300, 900])
+    check("低海拔线路：有效下界自适应到 -400", lo == -400 and hi == 9000, f"{lo}–{hi}")
+    lo2, _ = GC.ele_valid_bounds([3500, 4200, 5000])
+    check("高海拔线路：有效下界仍是 500", lo2 == 500, f"{lo2}")
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1312,7 +1355,7 @@ def main():
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
-               t_contour_width_absolute, t_logging):
+               t_contour_width_absolute, t_logging, t_ele_valid_lowalt):
         try:
             if VERBOSE:
                 fn()
