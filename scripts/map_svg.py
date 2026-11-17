@@ -1174,19 +1174,41 @@ def build_map_overlay(mobile=False):
                  f'fill="#3A4250">{target}</text>')
 
     # 分日界短线（每个分界一条；无 day_bounds 时只画 split1）
+    # 2026-11-18 用户定案：不再水平横贯图幅 —— 总长限 3×K px（K=VIS_CAP=3 → 9px），
+    # 方向取分界点前后约 1 km 轨迹趋势的法线（大致垂直于轨迹走向）。
     _dash_w = float(_CFG.get("day_dash_w") or DAY_DASH_W_DEF)
     _dash_core = _dash_w * M * _vk()
     _dash_halo = (_dash_w + 1.25) * M if _ho is None else _dash_core + 2 * _ho
+    try:
+        _dash_max_k = float(GC.cfg("day_dash_max_k", GC.DAY_DASH_MAX_K)
+                            or GC.DAY_DASH_MAX_K)
+    except Exception:                                              # noqa
+        _dash_max_k = GC.DAY_DASH_MAX_K
+    _dash_half = _dash_max_k * GC.VIS_CAP / 2.0        # 半长（逻辑 px）
+    _TREND_KM = 1.0                                    # 局部趋势窗口（前后各 1 km）
     for _bi in _split_is[1:-1] if len(_split_is) > 2 else [SPLIT_I]:
         sx, sy = XY[_bi]
-        # ⚠ 2026-10-21：原来这条分日界是"白色胶囊底 + 2.4 粗虚线"，线宽收到 3.0 之后
-        #   它反而比主线还抢眼（图上像一排白色药丸）。改成细虚线 + 极窄白底。
-        o.append(f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
+        _i0, _i1 = _bi, _bi
+        while _i0 > 0 and KM[_bi] - KM[_i0] < _TREND_KM:
+            _i0 -= 1
+        while _i1 < len(XY) - 1 and KM[_i1] - KM[_bi] < _TREND_KM:
+            _i1 += 1
+        _tx = XY[_i1][0] - XY[_i0][0]
+        _ty = XY[_i1][1] - XY[_i0][1]
+        _tn = math.hypot(_tx, _ty)
+        if _tn > 1e-9:
+            _nx, _ny = -_ty / _tn, _tx / _tn           # 轨迹法线 = 垂直于局部走向
+        else:
+            _nx, _ny = 0.0, 1.0                        # 退化（原地折返）：竖直短线
+        _x1, _y1 = sx - _nx * _dash_half, sy - _ny * _dash_half
+        _x2, _y2 = sx + _nx * _dash_half, sy + _ny * _dash_half
+        o.append(f'<line x1="{_x1:.1f}" y1="{_y1:.1f}" x2="{_x2:.1f}" y2="{_y2:.1f}" '
                  f'stroke="#FFFFFF" stroke-width="{_dash_halo:.4f}" stroke-linecap="round" '
                  f'opacity="0.85"/>'
-                 f'<line x1="{sx-36*M:.0f}" y1="{sy:.1f}" x2="{sx+36*M:.0f}" y2="{sy:.1f}" '
+                 f'<line x1="{_x1:.1f}" y1="{_y1:.1f}" x2="{_x2:.1f}" y2="{_y2:.1f}" '
                  f'stroke="#6C7480" stroke-width="{_dash_core:.4f}" '
-                 f'stroke-dasharray="{7*M:.0f} {5*M:.0f}" stroke-linecap="round"/>')
+                 f'stroke-dasharray="{max(1.5, _dash_half):.1f} {max(1.5, _dash_half):.1f}" '
+                 f'stroke-linecap="round"/>')
 
     pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
     if not mobile:

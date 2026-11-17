@@ -1190,3 +1190,7 @@ LABEL_LEADER_MIN_PX = 5.0
 # 超过上限就不画那根线（字仍落位），避免横贯半幅的长引线。线路可
 # CFG["label_leader_max_k"] 覆盖（单位：K 的倍数）。
 LABEL_LEADER_MAX_K  = 3.0
+# 分日界短线（2026-11-18 用户定案）：总长同样限 3×K px（K=VIS_CAP=3 → 9 px），
+# 方向取分界点前后一段轨迹趋势的法线（大致垂直于轨迹），不再水平横贯图幅。
+# 线路可 CFG["day_dash_max_k"] 覆盖（单位：K 的倍数）。
+DAY_DASH_MAX_K      = 3.0

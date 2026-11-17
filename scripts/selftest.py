@@ -527,6 +527,12 @@ def t_aspect_leader_numeric():
     check("map_svg 读引线倍率并按 K 折算", 'GC.cfg("label_leader_max_k"' in svg
           and "_leader_max = _leader_max_k * GC.VIS_CAP" in svg)
     check("引线只画 min<长度≤max", "_leader_min < math.hypot(_cx - _ax, _cy - _ay) <= _leader_max" in svg)
+    # 分日界短线限长 3×K 且方向垂直轨迹（2026-11-18 用户）
+    check("GC 有分日界长度上限 3×K", "DAY_DASH_MAX_K      = 3.0" in gc)
+    check("map_svg 读分日界倍率并按 K 折算", 'GC.cfg("day_dash_max_k"' in svg
+          and "_dash_half = _dash_max_k * GC.VIS_CAP / 2.0" in svg)
+    check("分日界不再写死水平 ±36*M", "sx-36*M" not in svg and "sx+36*M" not in svg)
+    check("分日界方向取轨迹法线", "_nx, _ny = -_ty / _tn, _tx / _tn" in svg)
     # 海面上的 OSM waterbody 不盖 C_WATER（大灘海假水面）
     check("draw_overlay 接 sea_mask", "sea_mask=None" in do)
     check("waterbody 落在海面则跳过", "_in_sea" in do and "if len(pts) > 2 and not _in_sea:" in do)
