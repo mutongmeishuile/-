@@ -76,8 +76,11 @@ LABELS_VECTOR = True
 # 林地/草地是否保留半透明填充（False = 只描边，默认）。
 LANDUSE_FILL = False
 # 无名峰是否只标高程（2026-10-20 北天山：OSM 峰点 333 个，带名字的 0 个）。
-# 只标「▲ 4016」这样的读数，不编造名字 —— 一片没有地名的山至少还有高程可读。
-PEAK_UNNAMED_ELE = True
+# 旧行为只标「▲ 4016」这样的读数，不编造名字 —— 一片没有地名的山至少还有高程可读。
+# 2026-11-17 用户定案：纯数字注记直接舍去 → 默认 False；确实需要读数的高海拔线路
+# 在 route_def.CFG 显式写 `"peak_unnamed_ele": True`（麦径 399/1619 条是这种读数，
+# 市区小山上成片 839/779/756… 全是噪声）。
+PEAK_UNNAMED_ELE = False
 
 # 注记之间的留白（逻辑像素 × S）。2026-10-17 希夏邦马：字号收 0.85 倍后仍有挤压，
 # 把留白从 2.0 提到 **2.8** —— 在"避免重叠"这件事上，留白比缩字号更有效：
@@ -683,13 +686,20 @@ def _strip_latin(s):
 # 分布在四条河谷里，一屏能看到 4 个 —— 不滤掉整张图都显得像半成品。
 # ⚠ 只匹配「通用类名 + 纯 ASCII 短后缀」，不碰真名（"湖泊群""月亮湖"都不会命中）。
 NAME_JUNK_RE = re.compile(r"^(?:湖泊|海子|水塘|水库|无名湖?)\s*[A-Za-z0-9]{0,3}$")
+# 纯数字注记（2026-11-17 用户）：`name=839`、无名峰高程读数等，图上就是一个光秃秃的
+# 三位数，既不是地名也不指路，纯占版面。默认整类舍去；极端线路可用
+# CFG["label_allow_numeric"]=True 保留。⚠ 等高线高程数字走 make_terrain 独立通道，不受影响。
+NAME_NUMERIC_RE = re.compile(r"^\d[\d\s.,'’\-]*$")
 
 
 def _junk_name(v):
-    """是不是 OSM 里那种"给无名水体编号"的占位名。"""
+    """是不是 OSM 里那种"给无名水体编号"的占位名 / 纯数字读数。"""
     if not v:
         return False
-    if NAME_JUNK_RE.match(v.strip()):
+    v = v.strip()
+    if NAME_JUNK_RE.match(v):
+        return True
+    if NAME_NUMERIC_RE.match(v) and not GC.cfg_flag("label_allow_numeric", False):
         return True
     for pat in (GC.cfg("name_junk_re", None) or []):      # 线路级追加正则
         try:

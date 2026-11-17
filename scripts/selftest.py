@@ -477,6 +477,60 @@ def t_symbol_single_layer():
         check("矢量模式下地名画圆点", sym(place, False) == "dot")
 
 
+# ---------------------------------------------------------------- ⑨d 画幅/引线/纯数字（2026-11-17）
+def t_aspect_leader_numeric():
+    """16:9/9:16 画幅吸附 / 引线阈值 / 纯数字注记舍去。"""
+    print("⑨d 画幅吸附 / 引线阈值 / 纯数字舍去")
+    me = Path(__file__).resolve().parent
+    gc = (me / "guide_common.py").read_text(encoding="utf-8")
+    mt = (me / "make_terrain.py").read_text(encoding="utf-8")
+    fo = (me / "fetch_osm.py").read_text(encoding="utf-8")
+    svg = (me / "map_svg.py").read_text(encoding="utf-8")
+    do = (me / "draw_osm.py").read_text(encoding="utf-8")
+
+    import guide_common as GC
+    import draw_osm as DO
+    check("GC 有 16:9/9:16 目标常量",
+          "MAP_ASPECT_LAND  = 16.0 / 9.0" in gc and "MAP_ASPECT_PORT  = 9.0 / 16.0" in gc)
+    check("GC 有统一画幅入口 map_window", "def map_window():" in gc)
+    check("make_terrain 走 map_window", "GC.map_window()" in mt)
+    check("fetch_osm 走同一个 map_window（避免边缘空白）", "GC.map_window()" in fo)
+    check("竖图时逻辑宽按 9:16 收（长边恒 1504）",
+          "GC.MAP_LONG_LOGICAL * GC.MAP_ASPECT_PORT" in mt)
+
+    # 纯函数：横图只扩南北、竖图只扩东西，吸附后的比值命中目标
+    wide = GC.snap_aspect(0.0, 0.0, 3.0, 1.0, GC.MAP_ASPECT_LAND)
+    check("横图吸附只改南北", wide[0] == 0.0 and wide[2] == 3.0)
+    check("横图吸附命中 16:9", abs(GC.aspect_ratio(*wide) - 16.0 / 9.0) < 0.01,
+          GC.aspect_ratio(*wide))
+    tall = GC.snap_aspect(0.0, 0.0, 1.0, 5.0, GC.MAP_ASPECT_PORT)
+    check("竖图吸附只改东西", tall[1] == 0.0 and tall[3] == 5.0)
+    check("竖图吸附命中 9:16", abs(GC.aspect_ratio(*tall) - 9.0 / 16.0) < 0.01,
+          GC.aspect_ratio(*tall))
+    snap2 = GC.snap_aspect(*wide, GC.MAP_ASPECT_LAND)
+    check("已吸附窗口二次吸附不再变（ mercator 非线性容差）",
+          all(abs(a - b) < 2e-3 * max(1.0, abs(b)) for a, b in zip(wide, snap2)),
+          (wide, snap2))
+
+    # 引线：默认阈值 30 逻辑 px，可由线路 CFG 覆盖；代码里不再写死 5
+    check("引线默认阈值常量", "LABEL_LEADER_MIN_PX = 30.0" in gc)
+    check("map_svg 读引线阈值", 'GC.cfg("label_leader_min_px"' in svg)
+    check("引线不再写死 5 px", "> 5:" not in svg)
+
+    # 纯数字：无名峰默认不标高程，OSM name 为纯数字按垃圾名滤掉
+    check("无名峰高程默认关", "PEAK_UNNAMED_ELE = False" in do)
+    check("纯数字正则存在", "NAME_NUMERIC_RE" in do)
+    old_flag = GC.cfg_flag
+    try:
+        GC.cfg_flag = lambda k, d=False: d
+        check("_junk_name 滤掉纯数字", DO._junk_name("839"))
+        check("_junk_name 保留中文名", not DO._junk_name("大帽山"))
+        check("_junk_name 保留外文名", not DO._junk_name("Kwun Yam Shan"))
+        check("_junk_name 保留含数字的真名", not DO._junk_name("狮子山 495m"))
+    finally:
+        GC.cfg_flag = old_flag
+
+
 # ---------------------------------------------------------------- ⑩ 峰点校正
 def t_peak_snap():
     """OSM 峰点该不该被吸到 DEM 山顶，判据要能被离线验证。
@@ -1485,7 +1539,7 @@ def main():
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_zh_name_supply_peak, t_symbol_single_layer,
-               t_peak_snap, t_contour_cov_min, t_snowline_legend,
+               t_aspect_leader_numeric, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,

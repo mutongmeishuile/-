@@ -126,7 +126,7 @@ def cap_aspect(lon0, lat0, lon1, lat1, max_ratio):
 #   ① 常规尺寸下等于 4 倍样本降采样 → 线更锐、字更实；
 #   ② 放大到 200% 时仍有真实像素，不会立刻糊成一团。
 # 代价：底图 jpg 体积约 ×2.5，HTML 变大，但这是"放大能看清"唯一实际有效的做法。
-LOGICAL_W = 1504
+LOGICAL_W = GC.MAP_LONG_LOGICAL   # 长边逻辑 px（横图=宽 / 竖图=高），build_terrain 按吸附结果重设
 # 超采样倍率：`CFG["map_ss"]` 可按线路覆盖（**默认 4** → 6016 px，2026-11-03 由 3 上调）。
 #   配合 `CONTOUR_WIDTH=(1,2)`（单位栅格 px、不随超采样变）→ 线宽在 6016 px 上反而是"更细"，
 #   视觉上等高线退到背景、晕渲与设色主导，这是用户要的"清爽地形图"口径。
@@ -2478,17 +2478,16 @@ def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m):
 
 
 def build_terrain():
-    LON0, LAT0, LON1, LAT1, src = GC.resolve_bbox()
-    # 宽高比钳制：图太宽（东西≫南北）时把南北外扩到上限，图面更协调（详见 cap_aspect）。
-    # 默认把宽高比钳到 1.5:1（2026-11-03 定）：东西向长线（如萨普 128×50 km = 2.54:1）
-    # 会出成一根扁带子，放进竖版攻略里很突兀。cap_aspect 只扩南北、不裁轨迹，
-    # 本来就窄/方的线路（比例 < 1.5）原样不动 —— 所以这是个"只治过宽"的安全默认。
-    # 想要其他上限：CFG["map_aspect_max"]=1.3/1.7；设 0/False 明确关闭。
-    _cap = _route_cfg("map_aspect_max", 1.5)
-    if _cap is not None and float(_cap or 0) > 0:
-        _cap = float(_cap)
-        LON0, LAT0, LON1, LAT1 = cap_aspect(LON0, LAT0, LON1, LAT1, _cap)
-        src = f"{src} · 宽高比钳到 {_cap:g}∶1"
+    global LOGICAL_W, RASTER_W
+    LON0, LAT0, LON1, LAT1, src = GC.map_window()
+    # 画幅吸附 16:9 / 9:16（2026-11-17 用户定）：**长边**恒 1504 逻辑 px
+    # （× SS=10 → 15040 物理 px），另一边按目标比推导。竖线路以前是宽恒 1504、
+    # 高度随南北跨度暴涨到 7000+（长边 7 万 px），现在反过来：高恒 1504、宽按 9:16 收。
+    # OSM 抓取必须走同一个 GC.map_window()，否则扩出来的边缘没数据。
+    _ratio = GC.aspect_ratio(LON0, LAT0, LON1, LAT1)
+    LOGICAL_W = (GC.MAP_LONG_LOGICAL if _ratio >= 1.0
+                 else int(round(GC.MAP_LONG_LOGICAL * GC.MAP_ASPECT_PORT)))
+    RASTER_W = LOGICAL_W * SS
     GC.assert_bbox_covers((LON0, LAT0, LON1, LAT1), "make_terrain")
     print(f"[1/6] 地图窗口（{src}）: {LON0}, {LAT0} → {LON1}, {LAT1}", flush=True)
     # 线路级可强制 DEM 级别（CFG["dem_z"]）：z14 的平滑会吞掉冰川面的细节，

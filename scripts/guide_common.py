@@ -476,6 +476,64 @@ def resolve_bbox(pad_frac=None, min_pad=0.004):
             f"轨迹包围盒 + {pad:.0%} 留白（自动）")
 
 
+def aspect_ratio(lon0, lat0, lon1, lat1):
+    """窗口的像素「宽:高」比（Web Mercator，与 z / 瓦片大小无关）。"""
+    x0, y0 = mercator_px(float(lon0), float(lat1), 12)
+    x1, y1 = mercator_px(float(lon1), float(lat0), 12)
+    dy = abs(y1 - y0)
+    return abs(x1 - x0) / dy if dy > 0 else 0.0
+
+
+def snap_aspect(lon0, lat0, lon1, lat1, aspect):
+    """只扩不缩地把窗口宽高比吸附到 `aspect`（返回新的 4 元组）。
+
+    `ratio < aspect`（太窄/太高）→ 以中心为轴扩东西；
+    `ratio > aspect`（太宽/太扁）→ 扩南北。轨迹永远留在窗口内。
+    """
+    r = aspect_ratio(lon0, lat0, lon1, lat1)
+    if r <= 0 or abs(r - float(aspect)) < 1e-9:
+        return lon0, lat0, lon1, lat1
+    if r < float(aspect):
+        mid = (float(lon0) + float(lon1)) / 2.0
+        span = (float(lon1) - float(lon0)) * float(aspect) / r
+        return mid - span / 2.0, lat0, mid + span / 2.0, lat1
+    mid = (float(lat0) + float(lat1)) / 2.0
+    span = (float(lat1) - float(lat0)) * r / float(aspect)
+    return lon0, mid - span / 2.0, lon1, mid + span / 2.0
+
+
+def map_window():
+    """**出图窗口唯一入口** = `resolve_bbox()` → 按 16:9 / 9:16 吸附。
+
+    返回与 resolve_bbox 同样的 5 元组 `(lon0, lat0, lon1, lat1, 来源说明)`。
+    `make_terrain.py` 与 `fetch_osm.py` 必须都走这里 —— 否则 OSM 只抓到
+    吸附前的窗口，扩出来的上下/左右边缘会一片空白（2026-11-10 尼泊尔踩过）。
+    线路级开关 `CFG["map_aspect_mode"]`：`"snap"`（默认）/`"cap"`（旧 map_aspect_max）/
+    `"off"`（完全不调整）。
+    """
+    lon0, lat0, lon1, lat1, src = resolve_bbox()
+    try:
+        mode = str(cfg("map_aspect_mode", "snap") or "snap").lower()
+    except Exception:                                              # noqa
+        mode = "snap"
+    if mode == "off":
+        return lon0, lat0, lon1, lat1, src
+    if mode == "cap":
+        cap = cfg("map_aspect_max", 1.5)
+        if cap is None or float(cap) <= 0:
+            return lon0, lat0, lon1, lat1, src
+        r0, r1 = aspect_ratio(lon0, lat0, lon1, lat1), float(cap)
+        if r0 <= r1 or r0 <= 0:
+            return lon0, lat0, lon1, lat1, src
+        mid = (lat0 + lat1) / 2.0
+        span = (lat1 - lat0) * r0 / r1
+        return lon0, mid - span / 2.0, lon1, mid + span / 2.0, f"{src} · 宽高比钳到 {r1:g}∶1"
+    ratio = aspect_ratio(lon0, lat0, lon1, lat1)
+    target = MAP_ASPECT_LAND if ratio >= 1.0 else MAP_ASPECT_PORT
+    lon0, lat0, lon1, lat1 = snap_aspect(lon0, lat0, lon1, lat1, target)
+    return lon0, lat0, lon1, lat1, f"{src} · 画幅吸附 {'16∶9' if target >= 1 else '9∶16'}"
+
+
 def assert_bbox_covers(bbox, where=""):
     """自检：轨迹必须落在窗口内 —— 这是"画错山"唯一能自动拦下来的防线。"""
     bb = track_bbox()
@@ -1116,3 +1174,14 @@ MAP_SS         = 10     # 默认超采样倍率：1504 × 10 = 15040 px 长边�
 GRID_LINE_W    = 2.0    # 栅格线宽固定倍率：W(v)=round(v×2)，**不含画幅倍率 SS**。
                         # 小径 / 主干道 / 水系 / 国界共用同一套 W()；线路可 CFG["grid_line_ss"] 覆盖。
                         # 2026-11-17 用户定案：线宽不再随出图放大而变粗。
+
+# 画幅长宽比（2026-11-17 用户定案）：纯地图（不含标题带）吸附到 16:9 / 9:16，
+# 长边 MAP_LONG_LOGICAL × MAP_SS ≈ 15000 px。横线路走 16:9、竖线路走 9:16；
+# 只扩不缩，保证轨迹永远在窗口内。单线可 CFG["map_aspect_mode"]="cap"/"off"
+# 退回旧的 map_aspect_max 口径或彻底关闭。
+MAP_LONG_LOGICAL = 1504
+MAP_ASPECT_LAND  = 16.0 / 9.0
+MAP_ASPECT_PORT  = 9.0 / 16.0
+# 底图地名引线：位移超过该逻辑 px 才画（2026-11-17 用户：太多短引线没必要）。
+# 麦理浩径实测 844 条引线里中位数仅 23 px → 默认 30 px 砍掉约 2/3。
+LABEL_LEADER_MIN_PX = 30.0

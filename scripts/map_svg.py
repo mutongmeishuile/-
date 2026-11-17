@@ -767,6 +767,13 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # 符号归属：V1 默认 True = 符号只在栅格画一遍（见 _base_label_sym 说明）。
     # 与 draw_osm 的 lab.draw_symbols 读同一个键，保证栅格/矢量不会双画。
     _sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", True)
+    # 引线最小位移（2026-11-17 用户：很多短引线没必要）。逻辑 px，线路可
+    # CFG["label_leader_min_px"] 覆盖；0/None = 回到旧的「>5 px 就画」。
+    try:
+        _leader_min = float(GC.cfg("label_leader_min_px", GC.LABEL_LEADER_MIN_PX)
+                            or GC.LABEL_LEADER_MIN_PX)
+    except Exception:                                              # noqa
+        _leader_min = GC.LABEL_LEADER_MIN_PX
     for it in items:
         fs = it["fs"]
         w = GC.text_w(it["t"], fs) + 4 * _vk()
@@ -829,7 +836,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
                            f'stroke-width="{_halo_sw_sym():.4f}"/>')
             # 引线独立于符号归属：符号在栅格时同样需要它指认"字标的是哪"。
-            if math.hypot(_cx - _ax, _cy - _ay) > 5:
+            # 但只有**真被推远**的才画：麦径实测 844 条里中位位移仅 23 px，
+            # 短引线看着像脏线，反而干扰阅读（2026-11-17 用户）。
+            if math.hypot(_cx - _ax, _cy - _ay) > _leader_min:
                 out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
                            f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.5" '
                            f'stroke-opacity="0.55"/>')

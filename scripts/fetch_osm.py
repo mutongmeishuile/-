@@ -58,12 +58,14 @@ def vprint(*a, **k):
         print(*a, **k)
 
 
-# 窗口与 make_terrain.py 完全同源（同一个 resolve_bbox()）——
+# 窗口与 make_terrain.py 完全同源（同一个 GC.map_window() = resolve_bbox + 16:9/9:16 吸附）——
 # 旧版这里写死了一份常量，改线路时极易只改一处，导致矢量与地形整体错位。
+# ⚠ 2026-11-17 起必须走 map_window() 而不是 resolve_bbox()：吸附会把窗口扩到
+# 16:9/9:16，只按吸附前窗口抓数据会让新露出的上下/左右边缘一片空白。
 # 窗口来自当前项目的轨迹。**不在项目目录里 import 也算合法**（批量工具 `cluster_osm.py`
 # 需要在工作区根目录一次服务几十条线路）—— 那时窗口是 None，只能走 `--cluster-bbox`。
 try:
-    LON0, LAT0, LON1, LAT1, _src = GC.resolve_bbox()
+    LON0, LAT0, LON1, LAT1, _src = GC.map_window()
     BBOX = f"{LAT0},{LON0},{LAT1},{LON1}"
 except SystemExit:
     LON0 = LAT0 = LON1 = LAT1 = None
