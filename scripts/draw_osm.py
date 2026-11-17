@@ -1282,8 +1282,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     _grid_cell = float(GC.cfg("label_grid_cell", GC.LABEL_GRID_CELL) or GC.LABEL_GRID_CELL)
     lab = Labeller(size, cell=_grid_cell * S_IN, near_fn=_NEAR, s_scale=S_IN)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
-    # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
-    lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", True)
+    # 符号归属（2026-11-18 用户定案）：默认 False = 矢量模式不烤符号，交给 map_svg
+    # 在**最终落位成功处**补画。原因：两套避让结果不同（栅格 2182 / 矢量 1128），
+    # 栅格先画符号会留下约 1000 个无字孤三角。总览/bigmap 通道显式开 True。
+    lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", False)
     if seed_cells:
         lab.grid |= set(seed_cells)
 

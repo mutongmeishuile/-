@@ -716,21 +716,29 @@ def _is_peak_item(it):
 
 
 def _base_label_sym(fill, sym_on_raster):
-    """底图地名锚点由谁画什么符号 —— 返回 'peak' / 'dot' / None。
+    """底图地名锚点由谁画什么符号 —— 返回 'peak' / 'saddle' / 'glacier' / 'dot' / None。
 
-    · sym_on_raster=True（V1 默认，2026-11-17 起）：返回 None。符号已由 draw_osm
-      烤进栅格底图（峰三角 / 垭口倒三角 / 地名圆点），map_svg 不再补画 —— 否则
-      栅格倒三角 + 矢量圆点两套不同口径叠在一起，成"倒三角里戳个点"的脏符号
-      （麦理浩径 2026-11-17 实测）。⚠ 引线不受此开关影响，照常画（独立的"字指哪"功能）。
-    · sym_on_raster=False：沿用 2026-11-05 起的矢量补画 —— 峰名画矢量三角、其余画
-      小圆点，符号与注记同生同灭（栅格层此时不画符号）。用于符号不进栅格的通道。
+    2026-11-18 用户定案：**默认 False（矢量补画）**。原因是"符号必须跟着最终落位
+    的名字走"。栅格层（draw_osm.Labeller）与矢量层（本函数所在模块）是两套独立避让，
+    栅格实测落位 2182 条、矢量只落 1128 条 —— 差出来的约 1000 个符号全成了图上
+    无字的孤三角/孤圆点（用户："丢失了很多记录"）。改由矢量在**落位成功处**补画，
+    符号与字同生同灭，也不会双画（栅格此时不画）。
+
+    · sym_on_raster=True（显式开启，总览 / build_bigmap 通道）：返回 None，
+      符号由 draw_osm 烤进栅格。
+    · sym_on_raster=False（默认）：按字色分流 —— 峰棕=三角、垭口橙=倒三角、
+      冰川蓝=菱形、其余=小圆点。
 
     与 draw_osm 的口径对应：`lab.draw_symbols = lab.draw_pixels or labels_symbol_on_raster`。
     两边必须读同一个 CFG 键，否则又回到"栅格画 + 矢量补"的双画。
     """
     if sym_on_raster:
         return None
-    f = tuple(fill)
+    f = tuple(fill)[:3]
+    if f == (150, 78, 24):
+        return "saddle"          # 垭口：橙
+    if f == (36, 84, 128):
+        return "glacier"         # 冰川名：深冰蓝
     return "peak" if (f[0] - f[2] > 12 and f[0] < 110) else "dot"
 
 
@@ -769,9 +777,10 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # 落位诊断（MAP_LBL_DUMP=1）：把每个地名的「锚点 / 最终字位 / 命中第几个候选」
     # dump 成 JSON，用于回答"为什么这个字离锚点这么远"——不靠肉眼猜。
     _dbg = [] if os.environ.get("MAP_LBL_DUMP") else None
-    # 符号归属：V1 默认 True = 符号只在栅格画一遍（见 _base_label_sym 说明）。
-    # 与 draw_osm 的 lab.draw_symbols 读同一个键，保证栅格/矢量不会双画。
-    _sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", True)
+    # 符号归属：2026-11-18 默认 False = 矢量层在**落位成功处**补画。
+    # 理由见 _base_label_sym：栅格/矢量两套落位差 ~1000 条，栅格画符号会产生
+    # 大量无字孤三角。总览（build_bigmap）显式开 True 保持烤栅格。
+    _sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", False)
     # 引线最小位移（2026-11-17 用户：很多短引线没必要）。逻辑 px，线路可
     # CFG["label_leader_min_px"] 覆盖；0/None = 回到旧的「>5 px 就画」。
     try:
@@ -887,20 +896,34 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             _ax, _ay = it["x"], it["y"]
             _cx = min(max(_ax, box[0]), box[2])
             _cy = min(max(_ay, box[1]), box[3])
-            # 符号：V1 默认走栅格（_sym_on_raster=True）→ 这里不补画，只留引线。
-            # 只有显式 labels_symbol_on_raster=False 的通道才由矢量层补画符号。
+            # 符号：2026-11-18 默认由矢量层在**落位成功处**补画（_sym_on_raster=False），
+            # 符号与字同生同灭 —— 栅格层那套多落位的符号不再单独出现（无字孤三角）。
             _sym = _base_label_sym(f, _sym_on_raster)
             if _sym == "peak":
-                # 三角由矢量层画：draw_osm 在矢量模式下不把三角烤进栅格时，
-                # 符号与注记同生同灭，锚点也统一有符号。
+                # 峰：正三角（与栅格 tri 同口径：半宽 5.4 逻辑 px、高 9.6）
                 _tr_ = 2.9 * _vk()      # 峰三角与字号同走「× min(SS, cap)」口径
                 out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} '
                            f'L {_ax + _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} '
                            f'L {_ax - _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} Z" '
                            f'fill="{c1}" stroke="#FFFFFF" stroke-width="{_halo_sw_sym():.4f}" '
                            f'stroke-linejoin="round"/>')
+            elif _sym == "saddle":
+                # 垭口：倒三角（尖端向下）+ 米色填充，与峰名三角明确区分
+                _tr_ = 2.9 * _vk()
+                out.append(f'<path d="M {_ax - _tr_ * 0.95:.3f},{_ay - _tr_ * 0.72:.3f} '
+                           f'L {_ax + _tr_ * 0.95:.3f},{_ay - _tr_ * 0.72:.3f} '
+                           f'L {_ax:.3f},{_ay + _tr_:.3f} Z" '
+                           f'fill="#FFF4E8" stroke="{c1}" stroke-width="{_halo_sw_sym():.4f}" '
+                           f'stroke-linejoin="round"/>')
+            elif _sym == "glacier":
+                # 冰川：菱形
+                _tr_ = 2.3 * _vk()
+                out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} L {_ax + _tr_:.3f},{_ay:.3f} '
+                           f'L {_ax:.3f},{_ay + _tr_:.3f} L {_ax - _tr_:.3f},{_ay:.3f} Z" '
+                           f'fill="#E9F4FC" stroke="{c1}" stroke-width="{_halo_sw_sym():.4f}" '
+                           f'stroke-linejoin="round"/>')
             elif _sym == "dot":
-                # 矢量补画通道下，每个地名在锚点打一个小圆 —— "这个字标的是哪"的答案。
+                # 地名 / 湖 / 河：小圆点 —— "这个字标的是哪"的答案。
                 out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="{1.3 * _vk():.3f}" '
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
                            f'stroke-width="{_halo_sw_sym():.4f}"/>')

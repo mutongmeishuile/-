@@ -451,7 +451,7 @@ def t_symbol_single_layer():
     check("draw_osm 用 labels_symbol_on_raster 决定栅格是否画符号",
           'lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster"' in do)
     check("map_svg 用同一键决定是否补画",
-          '_sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", True)' in svg)
+          '_sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", False)' in svg)
     check("map_svg 调 _base_label_sym 分流符号",
           "_sym = _base_label_sym(f, _sym_on_raster)" in svg)
 
@@ -476,9 +476,10 @@ def t_symbol_single_layer():
         check("栅格符号模式下峰名不补三角", sym(peak, True) is None)
         check("栅格符号模式下垭口不补圆点", sym(saddle, True) is None)
         check("栅格符号模式下地名不补圆点", sym(place, True) is None)
-        # 矢量补画模式（显式 False）：峰名三角、其余圆点 —— 老行为不回归
+        # 矢量补画模式（2026-11-18 起默认）：峰三角 / 垭口倒三角 / 冰川菱形 / 其余圆点
         check("矢量模式下峰名画三角", sym(peak, False) == "peak")
-        check("矢量模式下垭口画圆点", sym(saddle, False) == "dot")
+        check("矢量模式下垭口画倒三角", sym(saddle, False) == "saddle")
+        check("矢量模式下冰川画菱形", sym((36, 84, 128), False) == "glacier")
         check("矢量模式下地名画圆点", sym(place, False) == "dot")
 
 
@@ -1567,8 +1568,9 @@ def t_default_render_params_v1():
     check("V1 小径与主干道共用 W()（2026-11-17 小径再 ×0.5）",
           "W(w) * _trail_scale" in osm
           and "d.line(pts, fill=core, width=W(w * _rs)" in osm)
-    check("V1 draw_osm 符号烤栅格默认 True",
-          '_cfg_flag("labels_symbol_on_raster", True)' in osm)
+    check("V1 符号归属：默认矢量补画（符号跟最终名字走）",
+          '_cfg_flag("labels_symbol_on_raster", False)' in osm
+          and 'GC.cfg_flag("labels_symbol_on_raster", False)' in svg)
     check("V1 map_svg 字号基准 8 / POI 9 未变",
           'GC.cfg("label_fs_base", 8)' in svg and 'GC.cfg("label_fs_poi", _FS_BASE + 1)' in svg)
     check("V1 map_svg 轨迹基准 3.0 / 白晕 1.0（2026-11-17 主线加粗）",
