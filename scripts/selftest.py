@@ -544,6 +544,14 @@ def t_aspect_leader_numeric():
           mt.count("_label_grid_cell()") >= 3 and "cell = 14.0 * S" not in mt)
     check("候选环步进细化到 1/2/3",
           "(1, 2, 3, 5, 8, 12)" in do)
+    # 底图地名：正右/正左优先、兜底保留旧候选（2026-11-18 用户：不该斜着跑远）
+    check("地名候选正右/正左优先于斜向",
+          "tried = [(gap, vmid)]" in svg
+          and "tried += [(-gap - w, vmid)]" in svg
+          and svg.index("tried += [(-gap - w, vmid)]")
+          < svg.index("(gap + r, vmid - r)"))
+    check("地名候选有旧集兜底（不减少落位数）",
+          "_legacy = []" in svg and "_seen = set(tried)" in svg)
     # 海面上的 OSM waterbody 不盖 C_WATER（大灘海假水面）
     check("draw_overlay 接 sea_mask", "sea_mask=None" in do)
     check("waterbody 落在海面则跳过", "_in_sea" in do and "if len(pts) > 2 and not _in_sea:" in do)

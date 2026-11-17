@@ -134,6 +134,7 @@ PS = PS_BASE
 _PAD = 18
 _PIN_R = 15
 _OCC, _LABELS, LABEL_OF = [], [], {}
+_DBG_TAG = "desk"       # 落位 dump 区分桌面/手机（两者坐标口径不同，别混着看）
 _TRK, _TRK_HW = [], 0.0     # 轨迹点与半宽（_layout 用来避让线）
 _lg_rect = _sb_rect = _cp_rect = _bd_rect = None
 
@@ -765,6 +766,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # （用户口径：其他地区保持不变）。
     out, dropped = [], 0
     _drop_names = []
+    # 落位诊断（MAP_LBL_DUMP=1）：把每个地名的「锚点 / 最终字位 / 命中第几个候选」
+    # dump 成 JSON，用于回答"为什么这个字离锚点这么远"——不靠肉眼猜。
+    _dbg = [] if os.environ.get("MAP_LBL_DUMP") else None
     # 符号归属：V1 默认 True = 符号只在栅格画一遍（见 _base_label_sym 说明）。
     # 与 draw_osm 的 lab.draw_symbols 读同一个键，保证栅格/矢量不会双画。
     _sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", True)
@@ -794,32 +798,87 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
         gap = 3.2 * _vk()
         vmid = fs * 0.34            # 基线偏移：让文字中线对准锚点
         tried = [(gap, vmid)]
-        # 走廊内的注记多试几圈 / 几个斜向：仍然是「零重叠才落」，只提高找到空位的概率，
-        # 不放松重叠判据，所以密集但不成字毯（用户口径：动态避让、布局合理）。
         _dense = bool(it.get("near"))
+        # 2026-11-18 用户定案：优先**正右/正左**，斜向放最后。
+        # 旧顺序把「右上/右下」排在「左侧」之前、且第一档 r=fs*0.8（6.4 px），
+        # 于是轻微冲突就把字推到斜上方 20+ px（截图里「明显错位」的成因）。
+        # 新顺序：正右 → 正右水平推远 → 正左 → 正左水平推远 → 同侧上下错开
+        #         → 正上/正下 → 斜向（仅走廊内）。
+        _rstep = fs * 0.55
+        # 1) 贴身正右 / 正左
+        tried += [(-gap - w, vmid)]
+        # 2) 同侧微小上下错开（仍在贴身范围，避免为躲一个字的缺口就横移很远）
+        for k in ((1, 2, 3) if _dense else (1, 2)):
+            r = _rstep * k
+            tried += [(gap, vmid - r), (gap, vmid + r),
+                      (-gap - w, vmid - r), (-gap - w, vmid + r)]
+        # 3) 正右 / 正左 水平推远（用户口径：宁可远一点，也别偏到斜上方）
+        for k in (1, 2, 3):
+            r = _rstep * k
+            tried += [(gap + r, vmid), (-gap - w - r, vmid)]
+        # 4) 正上 / 正下
+        tried += [(-w * 0.5, vmid - fs * 1.25),
+                  (-w * 0.5, vmid + fs * 1.45)]
+        # 5) 斜向（最后手段，仅走廊内多试）
+        if _dense:
+            for k in (1, 2, 3, 4, 5):
+                r = _rstep * k
+                tried += [(gap + r, vmid - r), (gap + r, vmid + r),
+                          (-gap - w - r, vmid - r), (-gap - w - r, vmid + r)]
+        # 6) 兜底：旧版完整候选集（含大环、大斜向）。上面的贴身顺序找不到位置时
+        #    还有退路 —— 保证「只改偏好、不减少落位数」（实测新顺序会把
+        #    「吹筒坳」这类被邻居围住的字直接丢掉）。
+        _legacy = []
         for k in ((0, 1, 2, 3, 4, 5) if _dense else (0, 1, 2)):
             r = fs * 0.8 * (k + 1)
-            tried += [(gap, vmid - r), (gap, vmid + r),                      # 右侧上/下错开
-                      (-gap - w, vmid),                                      # 左侧水平
-                      (-gap - w, vmid - r), (-gap - w, vmid + r),
-                      (-w * 0.5, vmid - fs * 1.15 - r * 0.55),               # 正上方
-                      (-w * 0.5, vmid + fs * 1.35 + r * 0.55)]               # 正下方
+            _legacy += [(gap, vmid - r), (gap, vmid + r),
+                        (-gap - w, vmid), (-gap - w, vmid - r), (-gap - w, vmid + r),
+                        (-w * 0.5, vmid - fs * 1.15 - r * 0.55),
+                        (-w * 0.5, vmid + fs * 1.35 + r * 0.55)]
         if _dense:
             for k in (2, 3, 4, 5):
                 r = fs * 0.8 * (k + 1)
-                tried += [(gap + r, vmid - r), (gap + r, vmid + r),          # 右上/右下斜向
-                          (-gap - w - r, vmid - r), (-gap - w - r, vmid + r)]
-        for dx, dy in tried:
+                _legacy += [(gap + r, vmid - r), (gap + r, vmid + r),
+                            (-gap - w - r, vmid - r), (-gap - w - r, vmid + r)]
+        _seen = set(tried)
+        for c in _legacy:
+            if c not in _seen:
+                _seen.add(c)
+                tried.append(c)
+        _rs = {"occ": 0, "trk": 0, "oob": 0} if _dbg is not None else None
+        _first_hit = None
+        for _ti, (dx, dy) in enumerate(tried):
             x0 = it["x"] + dx
             yb = it["y"] + dy
             box = (x0 - pad, yb - fs * 1.02, x0 + w + pad, yb + fs * 0.26)
             if box[0] < 3 or box[2] > IW - 3 or box[1] < 3 or box[3] > IH - 3:
+                if _rs is not None:
+                    _rs["oob"] += 1
                 continue
-            if any(GC.rect_overlap_area(box, o) > 0 for o in _OCC):
+            _hit = None
+            for o in _OCC:
+                if GC.rect_overlap_area(box, o) > 0:
+                    _hit = o
+                    break
+            if _hit is not None:
+                if _rs is not None:
+                    _rs["occ"] += 1
+                if _first_hit is None:
+                    _first_hit = _hit
                 continue
             if _near_track(box, track, half_w):
+                if _rs is not None:
+                    _rs["trk"] += 1
                 continue
             _OCC.append(box)
+            if _dbg is not None:
+                _dbg.append({"t": it["t"], "ax": it["x"], "ay": it["y"],
+                             "x": x0, "y": yb, "dx": dx, "dy": dy, "try": _ti,
+                             "d": math.hypot(x0 - it["x"], yb - it["y"]),
+                             "w": w, "fs": fs, "n_cand": len(tried),
+                             "rs": _rs,
+                             "first_hit": None if _first_hit is None
+                             else [round(v, 1) for v in _first_hit]})
             f, st = it["fill"], it["stroke"]
             c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
             c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
@@ -868,6 +927,12 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
         # 用户报「图上怎么没有珠峰」时，第一件事就是确认它是否在这一行里。
         if os.environ.get("MAP_LBL_DEBUG"):
             print("      丢弃：" + "、".join(_drop_names))
+    if _dbg is not None:
+        try:
+            (GC.OUT / f"_label_dump_{only or 'all'}_{_DBG_TAG}.json").write_text(
+                json.dumps(_dbg, ensure_ascii=False), encoding="utf-8")
+        except Exception:                                          # noqa
+            pass
     return "".join(out)
 
 
@@ -1055,9 +1120,10 @@ def _badge_svg(box, uri):
 
 def build_map_overlay(mobile=False):
     """返回地图 SVG 的内容（不含 <svg> 外壳与底图）。"""
-    global PS, _PAD, _PIN_R
+    global PS, _PAD, _PIN_R, _DBG_TAG
     global _lg_rect, _sb_rect, _cp_rect, _bd_rect
     M = MFS_M if mobile else 1.0
+    _DBG_TAG = "mobile" if mobile else "desk"
     PS = PS_BASE * M
     _PIN_R = 19 * M
     _PAD = 22
