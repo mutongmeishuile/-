@@ -2367,12 +2367,14 @@ def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m, sea_
     非 None 时**先刷海面再画 OSM** —— 保证公路/水系画在海面之上（2026-11-17 用户）。
     """
     LON0, LAT0, LON1, LAT1 = bbox
+    _sea_at_scale = None
     if sea_mask is not None:
         try:
             from PIL import ImageFilter as _IF
             rw, rh = pil.size
             _sea = Image.fromarray((np.clip(np.asarray(sea_mask, np.float32), 0, 1) * 255)
                                     .astype(np.uint8), "L").resize((rw, rh), Image.BILINEAR)
+            _sea_at_scale = _sea          # 供 draw_osm 剔除落在海里的 waterbody 面
             _alpha = _sea.filter(_IF.GaussianBlur(1.0))
             _sea_rgb = Image.new("RGB", (rw, rh), SEA_RGB)
             pil = Image.composite(_sea_rgb, pil, _alpha)
@@ -2384,9 +2386,10 @@ def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m, sea_
             _eg = Image.new("RGB", (rw, rh), SEA_EDGE_RGB)
             pil = Image.composite(_eg, pil, _edge.point(lambda v: int(v * 0.55)))
             print(f"   海面补刷：DEM≤{sea_mask.shape} 掩膜已刷（在 OSM 之前，公路不被盖）")
-            del _sea, _alpha, _sea_rgb, _inner, _edge, _eg
+            del _alpha, _sea_rgb, _inner, _edge, _eg
         except Exception as _e:                                       # noqa
             print(f"   （海面补刷跳过：{_e}）")
+            _sea_at_scale = None
     try:
         sys.path.insert(0, str(HERE))
         from draw_osm import draw_overlay
@@ -2497,7 +2500,7 @@ def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m, sea_
                 print(f"   （峰点校正跳过：{_e}）")
         pil = draw_overlay(pil, m, _osm_draw, skip_names=skip,
                            px_scale=SS, proj_scale=scale_raster,
-                           peak_snap=snap,
+                           peak_snap=snap, sea_mask=_sea_at_scale,
                            seed_cells=(seed_cells
                                        | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
     except FileNotFoundError:

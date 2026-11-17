@@ -860,7 +860,7 @@ def _route_near_km(proj, size, meta, near_km, verbose=True):
 
 def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                  px_scale=1.0, proj_scale=None, seed_cells=None, verbose=True,
-                 peak_snap=None):
+                 peak_snap=None, sea_mask=None):
     """把 OSM 要素叠到 pil 上。
 
     skip_names: 需要抑制的注记名（一般是攻略自己的 POI 名）。
@@ -875,6 +875,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     peak_snap: `{"lon,lat": [lon, lat]}`，把漂在山腰的 OSM 峰点换到 DEM 山顶。
       由 `make_terrain.snap_peaks_to_dem()` 算好传进来（本模块没有 DEM）；
       key 用**原始坐标**（7 位小数），所以不依赖要素顺序。空表 = 不校正。
+    sea_mask: 与 pil 同尺寸的 L 模式图，255=海面（make_terrain 在 fill_voids 前
+      用原始 DEM 算好）。启用海面补刷的线路传入后，`natural=water` 面若**落在
+      海面里**（如香港 OSM 把海湾标成 water relation：大灘海 Long Harbour），
+      就不再用 C_WATER 盖一层 —— 否则直边浅蓝色块糊在海面上（2026-11-17 用户）。
+      水库/湖（在陆上，DEM>sea_level）不受影响；None = 老行为逐字不变。
     """
     osm_path = Path(osm_path) if osm_path else (OUT / "osm.json")
     # 冰川层按线路开关：默认关，route_def.CFG["glacier_layer"]=True 才画（判据见常量注释）
@@ -1163,7 +1168,18 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                             W(1.0), 5.0 * GRID_SS, 5.0 * GRID_SS)
                 n_poly += 1
         elif kind == "waterbody":
-            if len(pts) > 2:
+            # 海面补刷线路：海湾被 OSM 标成 natural=water 时，底图已刷海色，
+            # 再盖一层 C_WATER 会出现直边浅蓝色块（大灘海截图，2026-11-17）。
+            # 判据：外环质心落在海面具里 → 跳过整面（水库/湖在陆上，不受影响）。
+            _in_sea = False
+            if sea_mask is not None and pts:
+                try:
+                    _mx = sum(p[0] for p in pts) / len(pts)
+                    _my = sum(p[1] for p in pts) / len(pts)
+                    _in_sea = sea_mask.getpixel((int(_mx), int(_my))) > 127
+                except Exception:                                  # noqa
+                    _in_sea = False
+            if len(pts) > 2 and not _in_sea:
                 _fill_poly(pts, holes, C_WATER)
                 d.line(pts + [pts[0]], fill=C_WATER_ED, width=W(1), joint="curve")
                 for h in holes:

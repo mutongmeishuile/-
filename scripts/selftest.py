@@ -522,6 +522,15 @@ def t_aspect_leader_numeric():
     check("引线默认阈值常量回到 5", "LABEL_LEADER_MIN_PX = 5.0" in gc)
     check("map_svg 读引线阈值", 'GC.cfg("label_leader_min_px"' in svg)
     check("引线不再写死 5 px", "> 5:" not in svg)
+    # 引线长度上限 3×K（9 px，2026-11-17 用户：间隔线太长）
+    check("GC 有引线长度上限 3×K", "LABEL_LEADER_MAX_K  = 3.0" in gc)
+    check("map_svg 读引线倍率并按 K 折算", 'GC.cfg("label_leader_max_k"' in svg
+          and "_leader_max = _leader_max_k * GC.VIS_CAP" in svg)
+    check("引线只画 min<长度≤max", "_leader_min < math.hypot(_cx - _ax, _cy - _ay) <= _leader_max" in svg)
+    # 海面上的 OSM waterbody 不盖 C_WATER（大灘海假水面）
+    check("draw_overlay 接 sea_mask", "sea_mask=None" in do)
+    check("waterbody 落在海面则跳过", "_in_sea" in do and "if len(pts) > 2 and not _in_sea:" in do)
+    check("make_terrain 把画幅尺寸海面具传给 draw_osm", "sea_mask=_sea_at_scale" in mt)
 
     # 纯数字：无名峰默认不标高程，OSM name 为纯数字按垃圾名滤掉
     check("无名峰高程默认关", "PEAK_UNNAMED_ELE = False" in do)

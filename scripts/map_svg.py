@@ -775,6 +775,15 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                             or GC.LABEL_LEADER_MIN_PX)
     except Exception:                                              # noqa
         _leader_min = GC.LABEL_LEADER_MIN_PX
+    # 引线长度上限（2026-11-17 用户）：只保留 3×K px（K=VIS_CAP=3 → 9 px），
+    # 超长的线不画（字仍落位，杜绝「字在another山头、一根线横穿地图」）。
+    # 逻辑 px 口径与 _leader_min 一致；线路可 CFG["label_leader_max_k"] 改倍数。
+    try:
+        _leader_max_k = float(GC.cfg("label_leader_max_k", GC.LABEL_LEADER_MAX_K)
+                              or GC.LABEL_LEADER_MAX_K)
+    except Exception:                                              # noqa
+        _leader_max_k = GC.LABEL_LEADER_MAX_K
+    _leader_max = _leader_max_k * GC.VIS_CAP
     for it in items:
         fs = it["fs"]
         w = GC.text_w(it["t"], fs) + 4 * _vk()
@@ -839,7 +848,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             # 引线独立于符号归属：符号在栅格时同样需要它指认"字标的是哪"。
             # 但只有**真被推远**的才画：麦径实测 844 条里中位位移仅 23 px，
             # 短引线看着像脏线，反而干扰阅读（2026-11-17 用户）。
-            if math.hypot(_cx - _ax, _cy - _ay) > _leader_min:
+            if _leader_min < math.hypot(_cx - _ax, _cy - _ay) <= _leader_max:
                 out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
                            f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.5" '
                            f'stroke-opacity="0.55"/>')
