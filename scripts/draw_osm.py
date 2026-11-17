@@ -490,10 +490,14 @@ def _cfg_flag(key, default=False):
 class Labeller:
     """按优先级占位放注记，重叠就跳过。cell 是占位网格边长（随超采样倍率放大）。"""
 
-    def __init__(self, size, cell=14, near_fn=None):
+    def __init__(self, size, cell=14, near_fn=None, s_scale=None):
         self.size = size
         self.grid = set()
         self.cell = cell
+        # 超采样倍率。以前靠 cell/14 反推（cell 恒 14×S）；网格粒度改成
+        # CFG["label_grid_cell"] 之后必须显式传入，否则 S 会被算错（gap/候选步进全歪）。
+        # 不传则保留旧反推，兼容老调用与单测。
+        self.s_scale = s_scale
         # 2026-11-10 GHT 全线：近轨迹走廊判定（默认 None = 老线路逐字不变）。
         # place() 会对落在走廊里的注记自动扩大「零重叠」候选位，并在 records 里打 near 标记。
         self.near_fn = near_fn
@@ -557,7 +561,7 @@ class Labeller:
         # （不 force、不开额外 fallback），所以密集但不会糊成字毯。
         if self.near_fn and self.near_fn(x0c, y0c):
             dense, near = True, True
-        S = self.cell / 14.0                      # 反推超采样倍率（cell = 14*S）
+        S = (self.s_scale if self.s_scale else self.cell / 14.0)   # 超采样倍率
         g = gap * S
         if anchor_right:
             ox0, oy0 = x0c + g, y0c - th / 2.0    # 右侧、垂直居中
@@ -569,15 +573,17 @@ class Labeller:
         U = S
         cand = [(0, 0)]
         if right_only:
-            # 只在右侧方向延长搜索：正右 / 右上 / 右下，偏移步进 2/4/6/9/12 逻辑 px。
-            # 2026-10-29 用户定：不换左侧；6 px 不够错开密集峰群，上限放宽到 12 px。
-            _rings = (2, 4, 6, 9, 12, 16, 20, 26) if dense else (2, 4, 6, 9, 12)
+            # 只在右侧方向延长搜索：正右 / 右上 / 右下，小步进优先（2026-11-18 细化）。
+            # 原来最小档 2 px、之后 4/6/9/12 跳跃过大 —— 一档挪 20–90 px，视觉上像"字跑了"。
+            _rings = ((1, 2, 3, 5, 8, 12, 16, 22, 28) if dense
+                      else (1, 2, 3, 5, 8, 12))
             for r in _rings:
                 # (r,-2r) 是更陡的右上：上下只差 55 px 的两座峰（提诺山/梅尔西峰）
                 # 靠 12 px 的抬高错不开，需要拉到约一个字高。
                 cand += [(r, 0), (r, -r), (r, r), (r, -2 * r)]
         else:
-            _rings = (5, 9, 12, 16, 20, 26, 32) if dense else (5, 9, 12)
+            _rings = ((1, 2, 3, 5, 8, 12, 16, 22, 28) if dense
+                      else (1, 2, 3, 5, 8, 12))
             for r in _rings:
                 cand += [(r, 0), (r, -r), (r, r),       # 右、右上、右下（保持右侧优先）
                          (0, -r), (0, r),               # 正上、正下
@@ -1271,7 +1277,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 近轨迹走廊：只加密走廊内的落位机会，不改候选的原有顺序 ——
     # 把 near 提到前面会抢占远处同名/格子（实测走廊外地名 -101 条），
     # 与用户「其他地区保持不变」冲突。
-    lab = Labeller(size, cell=14 * S_IN, near_fn=_NEAR)
+    # 避让网格粒度（逻辑 px，2026-11-18 用户定案：14 → 4，见 GC.LABEL_GRID_CELL 注释）。
+    # 必须与 make_terrain.poi_label_cells 的 seed 网格同口径，否则 POI 占位会漏判。
+    _grid_cell = float(GC.cfg("label_grid_cell", GC.LABEL_GRID_CELL) or GC.LABEL_GRID_CELL)
+    lab = Labeller(size, cell=_grid_cell * S_IN, near_fn=_NEAR, s_scale=S_IN)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
     # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
     lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", True)

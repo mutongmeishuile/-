@@ -1300,6 +1300,17 @@ def _route_cfg(key, default):
     return GC.cfg(key, default)
 
 
+def _label_grid_cell():
+    """注记避让网格粒度（**逻辑** px）。默认 GC.LABEL_GRID_CELL=4，
+    线路可用 CFG["label_grid_cell"] 覆盖；乘 SS 得到物理格边长。
+
+    2026-11-18 用户定案：原 14 逻辑 px 比字高粗 2.6 倍，把「只共享一个大格、
+    实际并不重叠」的框判成冲突，注记被迫多跳一档漂离锚点。
+    """
+    return float(_route_cfg("label_grid_cell", GC.LABEL_GRID_CELL)
+                 or GC.LABEL_GRID_CELL)
+
+
 def nice_major(minor, ratio=5):
     """由首曲线间隔推**规范的计曲线间隔**：优先 minor×5，退而求其次 ×4、×3。
 
@@ -1706,7 +1717,7 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
     fn = _label_font(max(8, int(round(LABEL_FONT * 0.8 * _label_cap_scale()))))
     stroke = max(2, int(round(2 * CONTOUR_LABEL_HALO_OUT)))   # 外围固定 1 px（同高程注记）
     W, H = pil.size
-    cell = 14.0 * S
+    cell = _label_grid_cell() * S       # 与 draw_osm / 等高线数字同口径（2026-11-18）
     avoid_cells = set()
     for x, y, r in (avoid or ()):
         for cx in range(int((x - r) // cell), int((x + r) // cell) + 1):
@@ -1973,7 +1984,8 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     scale: (sx, sy) = DEM 像素 → 栅格像素；avoid: [(x, y, r)] 栅格像素。
     every: 计曲线间隔（= 本次自适应选定的值），必须与 paint_contours 用的 major 一致，
            否则数字会落在没有加粗线的位置上（"数字浮在图上"）。
-    返回：已占位的网格单元集合（cell = 14*SS），供 OSM 注记继续避让。
+    返回：已占位的网格单元集合（cell = GC.LABEL_GRID_CELL×SS，与 draw_osm 同口径），
+          供 OSM 注记继续避让。
     """
     every = float(every if every else LABEL_EVERY)
     sx, sy = scale
@@ -1989,8 +2001,9 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     gap, sep, win = LABEL_GAP * S, LABEL_SEP * S, LABEL_WINDOW * S
     W, H = pil.size
 
-    # 避让栅格（cell 与 draw_osm.Labeller 保持一致）
-    cell = 14.0 * S
+    # 避让栅格（cell 与 draw_osm.Labeller 保持一致；粒度读 GC.LABEL_GRID_CELL，
+    # 2026-11-18 由 14 收到 4 逻辑 px）
+    cell = _label_grid_cell() * S
     avoid_cells = set()
     for x, y, r in (avoid or ()):
         for cx in range(int((x - r) // cell), int((x + r) // cell) + 1):
@@ -2502,7 +2515,8 @@ def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m, sea_
                            px_scale=SS, proj_scale=scale_raster,
                            peak_snap=snap, sea_mask=_sea_at_scale,
                            seed_cells=(seed_cells
-                                       | poi_label_cells(meta, scale_raster, SS, 14 * SS)))
+                                       | poi_label_cells(meta, scale_raster, SS,
+                                                         _label_grid_cell() * SS)))
     except FileNotFoundError:
         pass
     return pil

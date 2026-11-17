@@ -533,6 +533,17 @@ def t_aspect_leader_numeric():
           and "_dash_half = _dash_max_k * GC.VIS_CAP / 2.0" in svg)
     check("分日界不再写死水平 ±36*M", "sx-36*M" not in svg and "sx+36*M" not in svg)
     check("分日界方向取轨迹法线", "_nx, _ny = -_ty / _tn, _tx / _tn" in svg)
+    # 注记避让网格粒度 14 → 4 逻辑 px（2026-11-18 用户：字被假冲突推远）
+    check("GC 有避让网格粒度 4", "LABEL_GRID_CELL     = 4.0" in gc)
+    check("Labeller 不再靠 cell/14 反推倍率",
+          "self.s_scale = s_scale" in do
+          and "S = (self.s_scale if self.s_scale else self.cell / 14.0)" in do)
+    check("draw_osm 读 label_grid_cell 并传 s_scale",
+          'GC.cfg("label_grid_cell"' in do and "s_scale=S_IN" in do)
+    check("make_terrain 三处网格同口径",
+          mt.count("_label_grid_cell()") >= 3 and "cell = 14.0 * S" not in mt)
+    check("候选环步进细化到 1/2/3",
+          "(1, 2, 3, 5, 8, 12)" in do)
     # 海面上的 OSM waterbody 不盖 C_WATER（大灘海假水面）
     check("draw_overlay 接 sea_mask", "sea_mask=None" in do)
     check("waterbody 落在海面则跳过", "_in_sea" in do and "if len(pts) > 2 and not _in_sea:" in do)
