@@ -1186,8 +1186,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_line += 1
         elif kind == "trail":
             core, w, dash, gap = TRAIL_STYLE[sub]
+            # 2026-11-17 用户定案：小径线宽在统一 W() 上再乘 0.5（CFG trail_line_scale
+            # 可覆盖）。旧实现 OSM 步道与公路等比 → 市区步道网压过地形；减半后让位。
+            _trail_scale = float(GC.cfg("trail_line_scale", 0.5) or 0.5)
             # 不加纸色描边（见 C_TRAIL_CASING 的说明）
-            _dashed(d, pts, core, W(w), dash * GRID_SS, gap * GRID_SS)
+            _dashed(d, pts, core, max(1, int(round(W(w) * _trail_scale))),
+                    dash * GRID_SS, gap * GRID_SS)
             n_line += 1
         elif kind == "border":
             # 国界：纸色描边 + 赭红虚线。节拍特意比步道疏（步道 5/4）——
@@ -1344,17 +1348,27 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             # 而 peak 在非登山区（念青东/横断山腹地）常常一个都没有 ——
             # saddle 是那一带唯一稳的山口标注来源。
             # ⚠ 与攻略自己的垭口 POI 同名时由 skip_names 去重，不会画两遍。
-            saddles.append((x, y, _pick_name(t), t.get("ele", "")))
+            _snm = _pick_name(t)
+            if _snm:                      # 无意义/纯数字名 → 整条舍弃（2026-11-17 用户）
+                saddles.append((x, y, _snm, t.get("ele", "")))
         elif "place" in t:
             # place=locality（小地名）也走这支：prio 里没有 locality 会排到最后，
             # 用 f_ham 画，无需单独分支。
-            places.append((t["place"], x, y, _pick_name(t)))
+            _pnm = _pick_name(t)
+            if _pnm:                      # 无名/纯数字地名不收集，避免空符号
+                places.append((t["place"], x, y, _pnm))
         elif t.get("natural") == "water":
-            waters.append((x, y, _pick_name(t), 0.0))
+            _wnm = _pick_name(t)
+            if _wnm:
+                waters.append((x, y, _wnm, 0.0))
         elif t.get("tourism") in ("attraction", "viewpoint", "alpine_hut"):
-            pois.append((x, y, _pick_name(t), t["tourism"]))
+            _tnm = _pick_name(t)
+            if _tnm:
+                pois.append((x, y, _tnm, t["tourism"]))
         elif t.get("amenity") == "place_of_worship":
-            pois.append((x, y, _pick_name(t), "temple"))
+            _pnm = _pick_name(t)
+            if _pnm:
+                pois.append((x, y, _pnm, "temple"))
         elif t.get("_kind") in ("spring", "water", "camp", "supply"):
             # 徒步参考点（2026-10-29 贡嘎总览图）：水源 / 营地 / 补给。
             # 数据由 scripts/_fetch_extra.py 单独抓并打 _kind 标记 ——
@@ -1710,12 +1724,16 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             n_geo += 1
 
     # ---- 水源 / 营地 / 补给：徒步者最需要的一类点（2026-10-29 补） ----
-    # 有名字的配字；无名的水源只画小蓝点（知道"这里有水"就够了，写字反而变噪声）。
+    # 有名字的配字；2026-11-17 用户定案：无名/纯数字等无意义要素「连符号带名字都舍弃」
+    # —— 这些点此前无名仍画小蓝点/三角/补给点（"知道这里有水就够了"），现在默认丢掉；
+    # 峰/地名/垭口/POI 本就随注记同生同灭，这里把最后一类无字符号也关掉。
+    # CFG["label_keep_anon_symbol"]=True 可恢复旧行为（图上保留无名的水/营地小符号）。
+    _keep_anon_sym = GC.cfg_flag("label_keep_anon_symbol", False)
     n_extra = {"spring": 0, "water": 0, "camp": 0, "supply": 0}
     # ⚠ 只对**具名**的去重：无名水源/营地名字为空，彼此全视为同名 → 会被去成 1 个
-    #   （2026-10-29 实测「水源 10 → 0」）。无名的按坐标容忍共存（画符号不写字）。
+    #   （2026-10-29 实测「水源 10 → 0」）。无名的按坐标容忍共存（若保留符号则共存）。
     _extras_named = [e for e in extras if e[2]]
-    _extras_anon = [e for e in extras if not e[2]]
+    _extras_anon = [e for e in extras if not e[2]] if _keep_anon_sym else []
     extras = (_dedupe_by_name(_extras_named, max(300.0, size[0] * 0.12) * SEP_SS, 2,
                               near_fn=_NEAR, near_sep=_near_sep)
               + _extras_anon)

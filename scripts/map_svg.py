@@ -44,7 +44,8 @@ FONT_STACK = "Microsoft YaHei,PingFang SC,Noto Sans CJK SC,Source Han Sans SC,sa
 PS_BASE = 0.66        # 点位符号／标注基准缩放（0.85 → 0.74 → 0.66：图钉再收两档）
 # ---- 线条与符号默认口径（2026-11-03 用户定；均为**逻辑 px**，与页面内嵌图同一坐标系，
 #      所以换 map_ss 只会改变字面像素数、不改变视觉权重）----
-ROUTE_W_DEF = 2.0       # 当日色主线
+ROUTE_W_DEF = 3.0       # 当日色主线（2026-11-17 用户定案：2.0→3.0 逻辑 px；
+                        # 出图 = 3.0 × min(SS,cap)，cap=3 时 9 px，白晕仍每侧 1 px）
 ROUTE_HALO_SIDE_DEF = 1.0   # 主线**每侧**白色描边宽度（总衬底 = 主线 + 2×此值）
 DAY_DASH_W_DEF = 1.0    # 分日界虚线
 PIN_D_DEF = 5.0         # 图钉可见外径（起点/终点/营地/水源/海子/垭口同尺寸）

@@ -403,6 +403,11 @@ def t_zh_name_supply_peak():
     check("draw_osm 有 supply_symbol_dot 开关", "supply_symbol_dot" in do)
     check("draw_osm 有 peak_ele_top_only 开关", "peak_ele_top_only" in do)
     check("draw_osm 有 _route_near_km（按 km 的补给点走廊）", "def _route_near_km" in do)
+    # 无意义 OSM 标注：无名/纯数字要素连符号带名字都舍弃（2026-11-17 用户）
+    check("无名符号默认舍弃（label_keep_anon_symbol 默认 False）",
+          'GC.cfg_flag("label_keep_anon_symbol", False)' in do)
+    check("无名的地名/垭口/POI 在收集阶段过滤",
+          '_snm' in do and '_pnm' in do and '_tnm' in do)
     check("补给点走廊只过滤 supply（水源/营地不过滤）",
           't["_kind"] == "supply" and _SUPPLY_NEAR is not None' in do)
     # 等高线：基准 (1,2)、k 上限 2 → 出图封顶 2/4 px（技能默认，2026-11-12 起）
@@ -512,14 +517,21 @@ def t_aspect_leader_numeric():
           all(abs(a - b) < 2e-3 * max(1.0, abs(b)) for a, b in zip(wide, snap2)),
           (wide, snap2))
 
-    # 引线：默认阈值 30 逻辑 px，可由线路 CFG 覆盖；代码里不再写死 5
-    check("引线默认阈值常量", "LABEL_LEADER_MIN_PX = 30.0" in gc)
+    # 引线：默认阈值 5 逻辑 px（2026-11-17 用户定案：落位贴近锚点 + 引线阈值回到 5），
+    # 可由线路 CFG 覆盖；代码里不再写死 5
+    check("引线默认阈值常量回到 5", "LABEL_LEADER_MIN_PX = 5.0" in gc)
     check("map_svg 读引线阈值", 'GC.cfg("label_leader_min_px"' in svg)
     check("引线不再写死 5 px", "> 5:" not in svg)
 
     # 纯数字：无名峰默认不标高程，OSM name 为纯数字按垃圾名滤掉
     check("无名峰高程默认关", "PEAK_UNNAMED_ELE = False" in do)
     check("纯数字正则存在", "NAME_NUMERIC_RE" in do)
+    # 海面补刷：sea_level 触发，且在 draw_overlay 之前（公路画在海面之上）
+    check("海面补刷有 sea_level 开关", 'GC.cfg("sea_level", None)' in mt or '_route_cfg("sea_level", None)' in mt)
+    check("海面补刷在 draw_overlay 之前",
+          mt.index("sea_mask is not None") < mt.index("from draw_osm import draw_overlay"))
+    check("sea_mask 来自 fill_voids 之前的原始 DEM",
+          mt.index("sea_mask = np.clip") < mt.index("dem = fill_voids(dem)"))
     old_flag = GC.cfg_flag
     try:
         GC.cfg_flag = lambda k, d=False: d
@@ -1440,15 +1452,14 @@ def t_contour_width_absolute():
     check("absolute 口径：出图放大 4× 后覆盖率约降为 1/4（输出 px 固定）",
           0.17 * cov0 < cov_b < 0.36 * cov0,
           f"{cov0 * 100:.2f}% → {cov_b * 100:.2f}%（期望 ≈{cov0 * 100 / 4:.2f}%）")
-    # ⚠ 别直接读当前项目 CFG：项目按用户口径显式打开这个开关时（输出 px 固定），
-    #   读到的会是 True，把「技能缺省关闭」误判成失败（2026-11-07 尼泊尔四线实测）。
-    #   临时摘掉该键，测的才是「缺键 → 默认 False」这条不变量。
+    # ⚠ 别直接读当前项目 CFG：项目按用户口径显式关闭这个开关时，读到的会是 False，
+    #   把「技能缺省开启」误判成失败。临时摘掉该键，测的才是「缺键 → 默认 True」这条不变量。
     import route_def as _RD
     _saved = _RD.CFG.pop("contour_width_absolute", None)
     try:
-        check("contour_width_absolute 缺省时关闭（项目可显式启用）",
-              MT._route_cfg("contour_width_absolute", False) is False,
-              f"实际 {MT._route_cfg('contour_width_absolute', False)!r}")
+        check("contour_width_absolute 缺省时开启（出图固定 1/2 px）",
+              MT._route_cfg("contour_width_absolute", True) is True,
+              f"实际 {MT._route_cfg('contour_width_absolute', True)!r}")
     finally:
         if _saved is not None:
             _RD.CFG["contour_width_absolute"] = _saved
@@ -1519,15 +1530,17 @@ def t_default_render_params_v1():
           'GC.cfg("grid_line_ss", GC.GRID_LINE_W) or GC.GRID_LINE_W' in osm)
     check("V1 线宽折算 GRID_SS=2 时 k=1（W=round(v×2)）",
           "k = 0.55 if GRID_SS >= 3 else 1.0" in osm)
-    check("V1 小径与主干道共用 W()（trail 分支 W(w) / road 分支 W(w*_rs)）",
-          "_dashed(d, pts, core, W(w), dash * GRID_SS" in osm
+    check("V1 小径与主干道共用 W()（2026-11-17 小径再 ×0.5）",
+          "W(w) * _trail_scale" in osm
           and "d.line(pts, fill=core, width=W(w * _rs)" in osm)
     check("V1 draw_osm 符号烤栅格默认 True",
           '_cfg_flag("labels_symbol_on_raster", True)' in osm)
     check("V1 map_svg 字号基准 8 / POI 9 未变",
           'GC.cfg("label_fs_base", 8)' in svg and 'GC.cfg("label_fs_poi", _FS_BASE + 1)' in svg)
-    check("V1 map_svg 轨迹基准 2.0 / 白晕 1.0 未变",
-          "ROUTE_W_DEF = 2.0" in svg and "ROUTE_HALO_SIDE_DEF = 1.0" in svg)
+    check("V1 map_svg 轨迹基准 3.0 / 白晕 1.0（2026-11-17 主线加粗）",
+          "ROUTE_W_DEF = 3.0" in svg and "ROUTE_HALO_SIDE_DEF = 1.0" in svg)
+    check("小径线宽默认 ×0.5",
+          'GC.cfg("trail_line_scale", 0.5)' in osm)
 
 
 def main():

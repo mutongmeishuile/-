@@ -191,6 +191,11 @@ MDOW = ((225.0, 0.20), (270.0, 0.20), (315.0, 0.40), (360.0, 0.20))
 # 1.5–1.55 更接近「真山」；可按线路 CFG['z_factor'] 覆盖。
 Z_FACTOR = 1.5
 UNSHARP = (3, 45, 3)    # USM(半径, 强度%, 阈值)：给晕渲"提锐"，补偿 30 m DEM 的天然柔化
+# 海面补刷（2026-11-17 用户：公路过水系/海域缺失，要放在水面之上）。
+# CFG["sea_level"] 配了才启用（如 0.6 = DEM≤0.6 m 判海面）；None = 关闭，内陆线路零影响。
+# ⚠ 必须在 draw_overlay **之前**刷 —— 事后刷（旧 _paint_sea.py）会盖掉跨海公路。
+SEA_RGB       = (158, 196, 219)
+SEA_EDGE_RGB  = (104, 146, 180)
 # JPEG 参数：地图全是**彩色细线 + 小字**，必须关掉默认的 4:2:0 色度抽样（subsampling=0 → 4:4:4）。
 # 4:2:0 会把色度通道砍到 1/4 分辨率，彩色线条一律发虚发彩边 —— 这是"放大看不清"的隐形主因之一。
 # 质量可按线路调高（`CFG["jpg_quality"]`，默认 86）：线和小字多的图，
@@ -2352,13 +2357,36 @@ def _drop_high_alt_water(osm_path, dem, bbox, snow_m, out_path):
 
 
 # ------------------------------------------------------------------ 主流程
-def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m):
-    """把 OSM 矢量层叠到地形层上（含水面过滤 / 峰点修正与吸附）并返回 pil。
+def _overlay(pil, m, dem, meta, bbox, SS, scale_raster, seed_cells, snow_m, sea_mask=None):
+    """把 OSM 矢量层叠到地形层上（含海面补刷 / 水面过滤 / 峰点修正与吸附）并返回 pil。
 
     抽成函数是为了让 `--osm-only` 能复用已经算好的地形层：改注记、线宽、类别口径时
     不必重跑 DEM 下载、分层设色、晕渲、雪线（那几步占一次出图的 ~80% 时间）。
+
+    sea_mask：原始 DEM（fill_voids 之前）算出的海面掩膜（float32 / 归一化 0–1），
+    非 None 时**先刷海面再画 OSM** —— 保证公路/水系画在海面之上（2026-11-17 用户）。
     """
     LON0, LAT0, LON1, LAT1 = bbox
+    if sea_mask is not None:
+        try:
+            from PIL import ImageFilter as _IF
+            rw, rh = pil.size
+            _sea = Image.fromarray((np.clip(np.asarray(sea_mask, np.float32), 0, 1) * 255)
+                                    .astype(np.uint8), "L").resize((rw, rh), Image.BILINEAR)
+            _alpha = _sea.filter(_IF.GaussianBlur(1.0))
+            _sea_rgb = Image.new("RGB", (rw, rh), SEA_RGB)
+            pil = Image.composite(_sea_rgb, pil, _alpha)
+            # 海岸线：内缘描边（原 mask - 腐蚀）
+            _inner = _sea.point(lambda v: 255 if v > 128 else 0).filter(_IF.MinFilter(3))
+            _edge = Image.fromarray(np.clip(np.asarray(_sea, np.int16)
+                                            - np.asarray(_inner, np.int16), 0, 255)
+                                    .astype(np.uint8), "L").filter(_IF.MaxFilter(3))
+            _eg = Image.new("RGB", (rw, rh), SEA_EDGE_RGB)
+            pil = Image.composite(_eg, pil, _edge.point(lambda v: int(v * 0.55)))
+            print(f"   海面补刷：DEM≤{sea_mask.shape} 掩膜已刷（在 OSM 之前，公路不被盖）")
+            del _sea, _alpha, _sea_rgb, _inner, _edge, _eg
+        except Exception as _e:                                       # noqa
+            print(f"   （海面补刷跳过：{_e}）")
     try:
         sys.path.insert(0, str(HERE))
         from draw_osm import draw_overlay
@@ -2509,6 +2537,17 @@ def build_terrain():
               f"（约 {_window_px(z_use, LON0, LAT0, LON1, LAT1) / 1e6:.0f} M px）")
     print(f"[1/6] 下载 DEM（terrarium z{z_use}）…")
     dem, meta = load_dem(z_use, LON0, LAT0, LON1, LAT1)
+    # 海面掩膜必须在 fill_voids **之前**算：fill_voids 把 dem<0 当空洞填平，
+    # 事后只剩 _paint_sea.py 那种"补刷"，会盖掉跨海公路（2026-11-17 用户）。
+    _sea_lv = _route_cfg("sea_level", None)
+    sea_mask = None
+    if _sea_lv is not None:
+        _lv = float(_sea_lv)
+        # 平滑的 0–1 软掩膜：海面 1、陆地 0，边缘 1px 过渡避免锯齿
+        sea_mask = np.clip((_lv - dem) / 1.0 + 0.5, 0.0, 1.0).astype(np.float32)
+        _frac = float((dem <= _lv).mean())
+        print(f"   海面判定：DEM≤{_lv:g} m 占 {_frac * 100:.1f}%"
+              + ("（内陆线路，掩膜近乎空）" if _frac < 0.005 else ""))
     dem = fill_voids(dem)
     lat_c = (LAT0 + LAT1) / 2
     lo, hi = float(np.nanmin(dem)), float(np.nanmax(dem))
@@ -2650,10 +2689,11 @@ def build_terrain():
         # 两种线宽口径（2026-11-07 用户先选「逻辑宽恒定」，随后改为「输出 px 固定」）：
         #   · 默认 False → `contour_width` 单位是**基准栅格 px**，出图时掩膜整体放大 ×SS/3，
         #     所以逻辑宽恒定（4512 图 1/2 px，19552 图 4.33/8.66 px，换算逻辑宽仍 1/3、2/3）。
-        #   · True       → `contour_width` 单位是**最终图上的实际像素**，无论 SS 多大都恒
-        #     为首 1 / 计 2 px。代价：线覆盖率 ∝ 1/放大倍数（缩图会变淡），且与选档判据
-        #     （在基准栅格上测）脱钩。默认关，别影响既有线路。
-        _abs_px = bool(_route_cfg("contour_width_absolute", False))
+        #   · True（2026-11-17 起**技能默认**）→ `contour_width` 单位是**最终图上的实际像素**
+        #     无论 SS 多大都恒为首 1 / 计 2 px（用户：「固定不变，不随超采变动」）。代价：
+        #     线覆盖率 ∝ 1/放大倍数（缩图会变淡）。线路可显式 CFG["contour_width_absolute"]=False
+        #     退回逻辑宽恒定口径。
+        _abs_px = bool(_route_cfg("contour_width_absolute", True))
         _k = RASTER_W / _ref_w
         # ---- k 上限（2026-11-12 用户：k = 出图宽 ÷ 4512，最多 ×2）----
         # 超过上限时线宽不再等比加粗，改走"出图固定 px"路径：宽度 = 设计基准 × k_max
@@ -2770,7 +2810,7 @@ def build_terrain():
                                         encoding="utf-8")
 
     pil = _overlay(pil, m, dem, meta, (LON0, LAT0, LON1, LAT1),
-                   SS, scale_raster, seed_cells, snow_m)
+                   SS, scale_raster, seed_cells, snow_m, sea_mask=sea_mask)
     # 署名水印（栅格层）：烧在最终底图上 —— HTML 内嵌地图与长图都吃这一张，
     # 所以在渲染期加，而不是让人事后用图片工具去盖。高清图另有独立一份（render_map_hi）。
     pil = GC.burn_watermark(pil)
@@ -2795,11 +2835,17 @@ def build_overlay_only():
     print(f"[osm-only] 复用地形层 {pil.size} · 逻辑 {m['size'][0]}×{m['size'][1]}"
           f" · bbox {m['bbox']}")
     dem, meta = load_dem(int(m["z"]), LON0, LAT0, LON1, LAT1)
+    _sea_lv = _route_cfg("sea_level", None)
+    sea_mask = None
+    if _sea_lv is not None:
+        _lv = float(_sea_lv)
+        sea_mask = np.clip((_lv - dem) / 1.0 + 0.5, 0.0, 1.0).astype(np.float32)
     dem = fill_voids(dem)
     scale_raster = m["raster"][0] / dem.shape[1]
     t0 = time.time()
     pil = _overlay(pil, m, dem, meta, (LON0, LAT0, LON1, LAT1),
-                   int(m.get("ss", 1)), scale_raster, set(), float(m["snowline"]))
+                   int(m.get("ss", 1)), scale_raster, set(), float(m["snowline"]),
+                   sea_mask=sea_mask)
     pil = GC.burn_watermark(pil)
     pil.save(OUT / "base_map.jpg", **JPG)
     print(f"[osm-only] 完成 → base_map.jpg {pil.size}  "
