@@ -207,7 +207,11 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
     ⚠ 旧实现只沿纵向往复试 0/±1h/±2h…：标注一多（本线 26 个）就互相压。
     """
     h = fs * 1.6
-    plans = [(dx, dy, anc)]
+    # 2026-11-18 用户定案：POI 标注**优先正右 / 正左、垂直居中**。
+    # 旧实现把作者配置的 (dx, dy) 无条件排第一 → dy=±24 的斜向微调总被采用，
+    # 实测「浪茄湾营地」(30,24) 落在右下方 38 逻辑 px，用户："太远、不在正左右"。
+    # 现在：(dx, 0) 正位优先 → (dx, dy) 作者微调位 → 8 方向递远。
+    plans = [(dx, 0.0, anc), (dx, dy, anc)]
     if anc == "middle":
         plans += [(w / 2 + 34, dy, "start"), (-w / 2 - 34, dy, "end")]
     for r in (0.7 * h, 1.4 * h, 2.1 * h, 2.8 * h):
@@ -225,7 +229,7 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
         return max(max(box[0] - x, 0, x - box[2]), max(box[1] - y, 0, y - box[3]))
 
     free, loose = None, None
-    for ox, oy, a in plans:
+    for _pi, (ox, oy, a) in enumerate(plans):
         tx, ty, box = boxof(ox, oy, a)
         x0, y0, x1, y1 = box
         if x0 < _PAD or x1 > IW - _PAD or y0 < _PAD or y1 > IH - _PAD:
@@ -237,9 +241,8 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
         if area == 0 and _TRK and _near_track(box, _TRK, _TRK_HW):
             area = 1e6
         if area == 0:
-            # 完美落位里也排个序：配置位 > 离点位近 > 离配置位近
-            key = (0 if (ox, oy, a) == (dx, dy, anc) else 1, round(dist(box)),
-                   round((ox - dx) ** 2 + (oy - dy) ** 2))
+            # 完美落位里按 plans 顺序取（正右 > 作者微调位 > 8 方向递远）
+            key = (_pi, round(dist(box)))
             if free is None or key < free[0]:
                 free = (key, tx, ty, a, box, 0.0)
         elif loose is None or (area, round(dist(box))) < loose[0]:

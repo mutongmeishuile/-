@@ -553,6 +553,9 @@ def t_aspect_leader_numeric():
           < svg.index("(gap + r, vmid - r)"))
     check("地名候选有旧集兜底（不减少落位数）",
           "_legacy = []" in svg and "_seen = set(tried)" in svg)
+    # POI 标注：正右/正左优先，作者 dy 只在正位放不下时用（2026-11-18）
+    check("POI 标注正右/正左优先（dy 只在退路）",
+          "plans = [(dx, 0.0, anc), (dx, dy, anc)]" in svg)
     # 海面上的 OSM waterbody 不盖 C_WATER（大灘海假水面）
     check("draw_overlay 接 sea_mask", "sea_mask=None" in do)
     check("waterbody 落在海面则跳过", "_in_sea" in do and "if len(pts) > 2 and not _in_sea:" in do)
