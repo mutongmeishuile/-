@@ -1357,6 +1357,7 @@ def t_default_render_params_v1():
     check("V1 DEM 默认 z15", GC.DEM_Z_DEFAULT == 15, str(GC.DEM_Z_DEFAULT))
     check("V1 DEM 下限 z13", GC.DEM_Z_MIN == 13, str(GC.DEM_Z_MIN))
     check("V1 超采样默认 10（15040px）", GC.MAP_SS == 10, str(GC.MAP_SS))
+    check("V1 栅格线宽默认 2（W=round(v×2)，不含 SS）", GC.GRID_LINE_W == 2.0, str(GC.GRID_LINE_W))
 
     g = lambda name: (HERE / name).read_text(encoding="utf-8")
     mt, hi, osm, svg = g("make_terrain.py"), g("render_map_hi.py"), g("draw_osm.py"), g("map_svg.py")
@@ -1370,6 +1371,13 @@ def t_default_render_params_v1():
     check("V1 render_map_hi jpg 默认走 GC.JPG_QUALITY", "GC.JPG_QUALITY" in hi)
     check("V1 draw_osm 字号 cap 默认走 GC.VIS_CAP",
           'GC.cfg("label_font_cap", GC.VIS_CAP)' in osm)
+    check("V1 draw_osm 线宽默认走 GC.GRID_LINE_W（2，不含 SS）",
+          'GC.cfg("grid_line_ss", GC.GRID_LINE_W) or GC.GRID_LINE_W' in osm)
+    check("V1 线宽折算 GRID_SS=2 时 k=1（W=round(v×2)）",
+          "k = 0.55 if GRID_SS >= 3 else 1.0" in osm)
+    check("V1 小径与主干道共用 W()（trail 分支 W(w) / road 分支 W(w*_rs)）",
+          "_dashed(d, pts, core, W(w), dash * GRID_SS" in osm
+          and "d.line(pts, fill=core, width=W(w * _rs)" in osm)
     check("V1 draw_osm 符号烤栅格默认 True",
           '_cfg_flag("labels_symbol_on_raster", True)' in osm)
     check("V1 map_svg 字号基准 8 / POI 9 未变",

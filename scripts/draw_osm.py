@@ -821,14 +821,19 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   S       字体 / 符号 / 占位网格倍率 = min(S_IN, label_font_cap)。
     #           画幅仍按 S_IN 出，但字体不该跟着画幅一起放大；倍数由线路 CFG
     #           决定（GHT 全线 2026-11-11 起为 3），这里不写死。
-    #   GRID_SS 栅格**线宽**的固定基准（CFG["grid_line_ss"]，默认 = S_IN → 老线路不变）。
-    #           全线配 8：W(v) = round(v×8×0.55)，与画幅倍率、字体倍率都无关。
+    #   GRID_SS 栅格**线宽**的固定倍率（CFG["grid_line_ss"]，默认 GC.GRID_LINE_W=2）。
+    #           2026-11-17 用户定案：默认 W(v) = round(v×2)，**与画幅倍率 SS 无关**；
+    #           小径 / 主干道 / 水系 / 国界都走同一个 W()，线宽不再随出图放大而变粗。
+    #           老线路仍可用 CFG["grid_line_ss"] 覆盖（如麦理浩径显式 8 → W=round(v×8×0.55)）。
     #   SEP_SS  按名去重间距的倍率（CFG["label_dedupe_sep_scale"]，默认 = S）。
     #           sep 里的 `size[0]*比例` 已经是**栅格 px**，再乘一个 S 会超过图宽
     #           （全线 SS=13 时水系 sep=63544 px > 19552 图宽 → 同名河全图只留 1 个）。
     _font_cap = float(GC.cfg("label_font_cap", GC.VIS_CAP) or GC.VIS_CAP)
     S = min(S_IN, _font_cap) if _font_cap > 0 else S_IN
-    GRID_SS = float(GC.cfg("grid_line_ss", S_IN) or S_IN)
+    # 默认线宽倍率从「画幅倍率 S_IN」改为固定 2（2026-11-17 用户定案）：
+    # W(v) = round(v×2)，不含 SS。小径 / 主干道 / 水系 / 国界共用此 W()。
+    # 线路仍可用 CFG["grid_line_ss"] 覆盖，老线路显式配了值的行为逐字不变。
+    GRID_SS = float(GC.cfg("grid_line_ss", GC.GRID_LINE_W) or GC.GRID_LINE_W)
     SEP_SS = float(GC.cfg("label_dedupe_sep_scale", S) or S)
     # 道路线宽缩放（CFG["road_scale"]）：大窗口线路要压细，见 road 分支说明。
     _rs_scale = float(GC.cfg("road_scale", 1.0) or 1.0)
@@ -872,12 +877,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         ⚠ 2026-10-21 用户：水系/公路线太粗。总览图 ss=4（10000 px）时，
         5.0 的公路芯线乘 4 就是 20 px —— 比轨迹还宽。大栅格统一乘 0.55，
         小栅格（ss=2）保持不变。
-        ⚠ 2026-11-10 GHT 全线：线宽基准与出图倍率解耦，固定 GRID_SS=8
-        （W(v)=round(v×8×0.55)），画幅仍 19552 px、字体走线路级 cap。
-        老线路 GRID_SS 默认 = S，行为逐字不变。
-        ⚠ 2026-11-10 二次定案：全线配 `grid_line_scale=0.5`，
-        W(v)=round(v×8×0.55×0.5)，river 6 → 3 px、trunk 7 → 3 px。
-        未配该键的线路 `_grid_scale=1.0`，行为不变。
+        ⚠ 2026-11-17 用户定案（新默认）：GRID_SS 默认固定 2，W(v)=round(v×2)，
+        **不再随画幅倍率 SS 放大**；小径、主干道、水系、国界共用此 W()。
+        ⚠ 老线路可用 CFG["grid_line_ss"] 覆盖：如麦理浩径显式 8 → 走 ×0.55 折算；
+        GHT 全线再叠 CFG["grid_line_scale"]=0.5 → round(v×8×0.55×0.5)。
         """
         k = 0.55 if GRID_SS >= 3 else 1.0
         return max(1, int(round(v * GRID_SS * k * _grid_scale)))
