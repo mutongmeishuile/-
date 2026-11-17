@@ -1102,3 +1102,14 @@ def fix_invalid_ele(ele):
             out[i] = ele[a] + (ele[b] - ele[a]) * (i - a) / (b - a)
         n += 1
     return out, n
+
+# ============================================================ 全局默认成图参数 V1
+# DEFAULT_PARAMS_V1（2026-11-17 用户定案）：以后所有出图统一这套口径。
+# 线路仍可用 route_def.CFG 覆盖；但 K（VIS_CAP）是**上限**，字号/符号 = 基准 × min(SS, K)，
+# 出图倍率 SS 低于上限时自动按 SS 缩小（"根据出图情况动态调整、上限为 3"）。
+VIS_CAP        = 3.0    # 统一系数 K 上限：字号/符号/轨迹 = 设计基准 × min(SS, K)
+HALO_OUT_PX    = 1.0    # 白晕外围固定输出 px（不随 SS 放大）
+JPG_QUALITY    = 82
+DEM_Z_DEFAULT  = 15     # DEM 默认档（区间 13–15；大窗口由 pick_dem_z 降档到 13）
+DEM_Z_MIN      = 13
+MAP_SS         = 10     # 默认超采样倍率：1504 × 10 = 15040 px 长边（≈15000）

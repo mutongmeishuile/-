@@ -1342,6 +1342,42 @@ def t_ele_valid_lowalt():
     check("高海拔线路：有效下界仍是 500", lo2 == 500, f"{lo2}")
 
 
+# ---------------------------------------------------------------- 全局默认成图参数 V1
+def t_default_render_params_v1():
+    """2026-11-17 用户定案：以后所有出图统一这套默认（DEFAULT_PARAMS_V1）。
+
+    10 条：长边≈15000 / cap=K=3(上限,动态) / 底图字 8×k / POI 9×k / 轨迹 2×k+1px白 /
+    halo_out=1.0 / 图钉符号烤栅格+cap3 / 等高线数字 8×k(上限3) / DEM z15(13-15) / jpg 82。
+    逐字断言源码默认值（不 import 大模块、不跑 DEM），防止被改回去。
+    """
+    import guide_common as GC
+    check("V1 统一系数 K 上限=3", GC.VIS_CAP == 3.0, str(GC.VIS_CAP))
+    check("V1 白晕外围=1.0", GC.HALO_OUT_PX == 1.0, str(GC.HALO_OUT_PX))
+    check("V1 jpg 质量=82", GC.JPG_QUALITY == 82, str(GC.JPG_QUALITY))
+    check("V1 DEM 默认 z15", GC.DEM_Z_DEFAULT == 15, str(GC.DEM_Z_DEFAULT))
+    check("V1 DEM 下限 z13", GC.DEM_Z_MIN == 13, str(GC.DEM_Z_MIN))
+    check("V1 超采样默认 10（15040px）", GC.MAP_SS == 10, str(GC.MAP_SS))
+
+    g = lambda name: (HERE / name).read_text(encoding="utf-8")
+    mt, hi, osm, svg = g("make_terrain.py"), g("render_map_hi.py"), g("draw_osm.py"), g("map_svg.py")
+    check("V1 make_terrain SS 走 GC.MAP_SS", "SS = GC.MAP_SS" in mt)
+    check("V1 make_terrain DEM 走 GC.DEM_Z_DEFAULT", "GC.DEM_Z_DEFAULT" in mt)
+    check("V1 等高线数字字号吃 cap", "_label_cap_scale()" in mt)
+    check("V1 render_map_hi cap 默认走 GC.VIS_CAP",
+          'CFG.get("vector_symbol_cap", GC.VIS_CAP)' in hi)
+    check("V1 render_map_hi halo 默认走 GC.HALO_OUT_PX",
+          'CFG.get("halo_out_px", GC.HALO_OUT_PX)' in hi)
+    check("V1 render_map_hi jpg 默认走 GC.JPG_QUALITY", "GC.JPG_QUALITY" in hi)
+    check("V1 draw_osm 字号 cap 默认走 GC.VIS_CAP",
+          'GC.cfg("label_font_cap", GC.VIS_CAP)' in osm)
+    check("V1 draw_osm 符号烤栅格默认 True",
+          '_cfg_flag("labels_symbol_on_raster", True)' in osm)
+    check("V1 map_svg 字号基准 8 / POI 9 未变",
+          'GC.cfg("label_fs_base", 8)' in svg and 'GC.cfg("label_fs_poi", _FS_BASE + 1)' in svg)
+    check("V1 map_svg 轨迹基准 2.0 / 白晕 1.0 未变",
+          "ROUTE_W_DEF = 2.0" in svg and "ROUTE_HALO_SIDE_DEF = 1.0" in svg)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1355,7 +1391,8 @@ def main():
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
-               t_contour_width_absolute, t_logging, t_ele_valid_lowalt):
+               t_contour_width_absolute, t_logging, t_ele_valid_lowalt,
+               t_default_render_params_v1):
         try:
             if VERBOSE:
                 fn()

@@ -1496,7 +1496,7 @@ def _embed_jpeg(max_w=EMBED_MAX):
     if max_w and im.width > max_w:
         im = im.resize((max_w, round(im.height * max_w / im.width)), Image.LANCZOS)
     b = io.BytesIO()
-    _q = int(GC.cfg("embed_quality", GC.cfg("jpg_quality", 86) or 86) or 86)
+    _q = int(GC.cfg("embed_quality", GC.cfg("jpg_quality", GC.JPG_QUALITY) or GC.JPG_QUALITY) or GC.JPG_QUALITY)
     im.save(b, "JPEG", quality=_q, optimize=True, progressive=True, subsampling=0)
     return base64.b64encode(b.getvalue()).decode()
 

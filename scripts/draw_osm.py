@@ -826,7 +826,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   SEP_SS  按名去重间距的倍率（CFG["label_dedupe_sep_scale"]，默认 = S）。
     #           sep 里的 `size[0]*比例` 已经是**栅格 px**，再乘一个 S 会超过图宽
     #           （全线 SS=13 时水系 sep=63544 px > 19552 图宽 → 同名河全图只留 1 个）。
-    _font_cap = float(GC.cfg("label_font_cap", 0) or 0)
+    _font_cap = float(GC.cfg("label_font_cap", GC.VIS_CAP) or GC.VIS_CAP)
     S = min(S_IN, _font_cap) if _font_cap > 0 else S_IN
     GRID_SS = float(GC.cfg("grid_line_ss", S_IN) or S_IN)
     SEP_SS = float(GC.cfg("label_dedupe_sep_scale", S) or S)
@@ -898,7 +898,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         不随超采变化；stroke 居中绘制，所以 stroke 宽 = 2 × 外围增量。
         未配该键的线路逐字保持旧的 v*S 口径。
         """
-        o = GC.cfg("halo_out_px", None)
+        o = GC.cfg("halo_out_px", GC.HALO_OUT_PX)
         if o is not None:
             return max(1, int(round(2.0 * float(o))))
         return v * S
@@ -1163,7 +1163,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     lab = Labeller(size, cell=14 * S_IN, near_fn=_NEAR)
     lab.draw_pixels = not _cfg_flag("labels_vector", LABELS_VECTOR)
     # 符号默认跟文字同进退（矢量模式交给 map_svg 补画）；总览通道显式开这个开关。
-    lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", False)
+    lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster", True)
     if seed_cells:
         lab.grid |= set(seed_cells)
 

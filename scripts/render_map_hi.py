@@ -45,7 +45,7 @@ def _rm_quiet(p):
 STEM = CFG.get("file_stem", "线路")
 OUT_JPG = GC.ROOT / f"{STEM}-全线地图.jpg"
 
-_SS = max(2, int(CFG.get("map_ss", 3) or 3))
+_SS = max(2, int(CFG.get("map_ss", GC.MAP_SS) or GC.MAP_SS))
 # 与 make_terrain.py 同一个一次性倍率开关：只跑这一次超大图时用，
 # 不改项目 CFG。两边必须一致，否则高清图画布与底图像素对不上。
 _env_ss = os.environ.get("HIKING_MAP_SS", "").strip()
@@ -249,11 +249,11 @@ def _assert_seams(im, parts):
 def main():
     # 2026-11-10 GHT 全线：画幅按 _SS 超采，但字体 / 符号只按 min(_SS, cap) 放大，
     # 白色描边恒为「外围 +halo_out_px 输出 px」。未配 cap 的线路 k=1、白晕走旧口径。
-    _cap = CFG.get("vector_symbol_cap")
+    _cap = CFG.get("vector_symbol_cap", GC.VIS_CAP)
     _visual = {
         "ss": float(_SS),
         "k": (min(float(_SS), float(_cap)) / float(_SS)) if _cap else 1.0,
-        "halo_out_px": CFG.get("halo_out_px"),
+        "halo_out_px": CFG.get("halo_out_px", GC.HALO_OUT_PX),
     }
     if _visual["k"] != 1.0 or _visual["halo_out_px"] is not None:
         print(f"  视觉倍率 k={_visual['k']:.4f}（画幅 ×{_SS}，符号上限 ×{_cap}）"
@@ -294,7 +294,7 @@ def main():
         # 高清图是**重渲 SVG**、不复用 base_map.jpg —— 水印必须在这里再烧一次，
         # 否则高清图会裸奔（只加 base_map 的话，长图有、高清图没有）。
         im = GC.burn_watermark(im)
-        im.save(OUT_JPG, quality=int(CFG.get("jpg_quality", 88) or 88),
+        im.save(OUT_JPG, quality=int(CFG.get("jpg_quality", GC.JPG_QUALITY) or GC.JPG_QUALITY),
                 optimize=True, progressive=True, subsampling=0,
                 **GC.jpg_meta(f'{CFG.get("title", STEM)} · 全线地图 · 非导航用图'))
         print(f"  {im.size} -> {OUT_JPG.name}  {OUT_JPG.stat().st_size/1048576:.2f} MB  "

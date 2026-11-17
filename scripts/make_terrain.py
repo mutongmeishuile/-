@@ -78,7 +78,7 @@ def _window_px(z, lon0, lat0, lon1, lat1):
 # 而 z15 的像素数是 z14 的 4 倍 —— 长线窗口动辄十几分钟、几 GB 内存，收益却是零
 # （4512–6016 px 的成品上，z14 的 8 m/px 已经有 1.5–2 倍余量）。
 # 需要更细的线路仍可用 CFG["dem_z"]=15 显式要，**但要知道自己在干什么**。
-DEM_Z_DEFAULT = min(DEM_Z, 14)
+DEM_Z_DEFAULT = min(DEM_Z, GC.DEM_Z_DEFAULT)   # 15（用户 2026-11-17 定：DEM 区间 13–15）
 
 
 def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z_DEFAULT):
@@ -88,7 +88,7 @@ def pick_dem_z(lon0, lat0, lon1, lat1, z=DEM_Z_DEFAULT):
       122×102 km 的窗口在 z14 是 171 M px（约 9 分钟），在 z12 只有 11 M px。
       确实需要 z14 的长线，用 CFG["dem_z"]=14 绕过本函数（见 build_terrain 的分支）。
     """
-    while z > 12 and _window_px(z, lon0, lat0, lon1, lat1) > DEM_MAX_PX:
+    while z > GC.DEM_Z_MIN and _window_px(z, lon0, lat0, lon1, lat1) > DEM_MAX_PX:
         z -= 1
     return z
 
@@ -133,7 +133,7 @@ LOGICAL_W = 1504
 # 放大窗口后"每公里像素变少 → 看着糊"的唯一正解是提高这个倍率：
 #   · 只影响栅格与独立高清图，HTML 内嵌仍降到 EMBED_MAX(1600)，页面体积不变；
 #   · 代价是 make_terrain 耗时/内存按像素数走（SS=3 约 2.2 倍）。
-SS = 4
+SS = GC.MAP_SS   # 默认 10 → 15040 px 长边（用户 2026-11-17 定）
 try:
     SS = max(2, int(GC.cfg("map_ss", SS) or SS))
 except Exception:                                              # noqa
@@ -218,6 +218,15 @@ CONTOUR_DILATE = (0, 0)
 # 线路级覆盖：CFG["contour_width"] = (2, 3)；显式写 None 退回旧行为
 # （首线恒 1 px、计线 max(0, 3-2) 补偿）。
 CONTOUR_WIDTH = (1, 2)
+# k 上限（2026-11-12 用户定口径）：出图 k = 出图宽 ÷ 基准宽（4512），线宽最多放大到 ×2。
+#   k ≤ 2 的线路（SS ≤ 6）线宽仍是 1×k / 2×k，行为逐字不变；
+#   超过上限就封顶成「出图 2 / 4 px 固定宽」，不再随画幅等比加粗。
+#   0 = 关掉上限（退回旧口径）。线路级覆盖：CFG["contour_width_k_max"]。
+CONTOUR_WIDTH_K_MAX = 2.0
+# 注记（等高线高程数字 / 雪线注记）的白描边：固定**外围 1 输出 px**，不随画幅放大
+# （2026-11-12 用户定口径）。旧口径 1.7×S 在 SS=10/13 时是 17–22 px 的白边，
+# 数字被包成一块白方块、把底下整片地形压掉 —— 纸质地形图的"断线画法"只要 1 px 纸色。
+CONTOUR_LABEL_HALO_OUT = 1.0
 # ---- 等高线几何基准栅格（2026-11-07 用户：「等高线不随超采变动」）----
 # 超采样 SS 只该是"清晰度旋钮"，不该改等高线的**几何**。但旧实现把一切建在
 # `dem_out`（= RASTER_W 宽）上：选档覆盖率 ∝ 1/画幅高度、线宽是固定栅格 px、
@@ -270,7 +279,13 @@ LABEL_GAP = 560          # 同一条等高线上相邻标注的最小弧长间�
 LABEL_SEP = 130          # 任意两个标注之间的最小间距（防聚成堆）
 LABEL_MAX_ANGLE = 62     # 局部倾角超过此值就不标（斜着读不出来的不如不标）
 LABEL_WINDOW = 26        # 估计局部走向的采样窗口（±窗口长度）
-LABEL_FONT = 8.2         # 字号（逻辑像素）：9.5→8.2（2026-10-21 用户：等高线字太粗太大）
+LABEL_FONT = 8.0         # 字号基准：8×k（2026-11-17 用户定，k=min(SS, VIS_CAP) 上限 3）
+
+
+def _label_cap_scale():
+    """计曲线数字 / 雪线注记字号倍率 = min(画幅倍率 SS, 统一系数上限 K 默认 3)。"""
+    cap = float(GC.cfg("label_font_cap", GC.VIS_CAP) or GC.VIS_CAP)
+    return min(float(SS), cap)
 #   ⚠ 2026-10-17 希夏邦马：11 → 9.5。本窗口 25 m 首曲线下等高线数字约 100+ 个，
 #     11 px 时与峰名/湖名在同一片山脊上争位（用户反馈"字太大、重叠"）。
 #     别再往下压：低于 9 后缩到长图（~0.4×）里就只剩一个色点了。
@@ -1214,7 +1229,20 @@ def contour_plan(dem, lat_c, z, verbose=True):
     # m_per_px 必须**先算**：选档判据要用它复刻陡坡省略（2026-10-25），否则算出来的
     # 覆盖率是"没省略的线数"，高山线会系统性低估实际密度、选粗一档。
     m_per_px = (156543.03392 * math.cos(math.radians(lat_c)) / (2 ** z)) / (ref_w / dem.shape[1])
-    minor, major, cov = pick_contour_interval(dem_ref, verbose=verbose, m_per_px=m_per_px)
+    # 覆盖率补偿（2026-11-12 用户口径「线宽 k 上限 2 + 覆盖率仍要 0.15/0.20」）：
+    # 线宽被封顶后，出图覆盖率 = 基准覆盖率 × k_max/k，会掉出区间；
+    # 把选档目标**反向放大**同样倍数，就会落到更密的档位，出图正好回到区间内。
+    # k ≤ k_max 的常规出图 → cov_scale = 1.0，行为逐字不变。
+    _kmax = float(_route_cfg("contour_width_k_max", CONTOUR_WIDTH_K_MAX) or 0)
+    _cov_scale = 1.0
+    _k_ss = float(SS) / float(CONTOUR_REF_SS)          # = 出图宽 / 基准宽
+    if _kmax > 0:
+        _cov_scale = max(1.0, _k_ss / _kmax)
+    minor, major, cov = pick_contour_interval(dem_ref, verbose=verbose, m_per_px=m_per_px,
+                                              cov_scale=_cov_scale)
+    if verbose and _cov_scale != 1.0:
+        print(f"   覆盖率补偿：k={_k_ss:.2f} > 上限 {_kmax:g} → 目标区间 ×{_cov_scale:.2f}"
+              f"（出图实际线覆盖 ≈ {cov * 100 / _cov_scale:.1f}%）")
     return dem_ref, m_per_px, minor, major, cov, ref_w
 
 
@@ -1282,7 +1310,7 @@ def nice_major(minor, ratio=5):
     return minor * ratio
 
 
-def pick_contour_interval(dem_out, verbose=True, m_per_px=None):
+def pick_contour_interval(dem_out, verbose=True, m_per_px=None, cov_scale=1.0):
     """按窗口自适应选等高距（首曲线, 计曲线, 覆盖率）。
 
     ⚠ 这是"比例尺越大、等高线越密、地图越难看"的正解（2026-10-10 狼塔 C+V 踩坑）：
@@ -1313,6 +1341,12 @@ def pick_contour_interval(dem_out, verbose=True, m_per_px=None):
     —— 6 条高山线本该进更细一档、3 条该退档，都是它算错的。
     """
     target = float(_route_cfg("contour_target_cov", CONTOUR_TARGET_COV))
+    # 覆盖率补偿（2026-11-12 用户口径「k 上限 2 + 覆盖率仍要 0.15/0.20」）：
+    # 线宽被 k_max 封顶后，出图覆盖率 = 基准覆盖率 × k_max/k，会掉出去。
+    # 把目标区间**反向放大**同样的倍数，选档就会落到更密的档位上，出图正好回到区间内。
+    # cov_scale=1.0（k ≤ k_max 的常规出图）→ 行为逐字不变。
+    if cov_scale and cov_scale != 1.0:
+        target = min(1.0, target * float(cov_scale))
     forced = _route_cfg("contour_minor", None)
     if forced:
         iv = float(forced)
@@ -1339,6 +1373,8 @@ def pick_contour_interval(dem_out, verbose=True, m_per_px=None):
     lo = _route_cfg("contour_cov_min", CONTOUR_COV_MIN)
     if lo is not None:
         lo = float(lo)
+        if cov_scale and cov_scale != 1.0:
+            lo = min(1.0, lo * float(cov_scale))   # 与上限同步补偿，区间宽度不变
         if 0 < lo < target:
             # 上限带容忍：`target + COV_OVER_TOL` 也算候选（见该常量注释）。
             hi = target + COV_OVER_TOL
@@ -1661,9 +1697,9 @@ def draw_snowline_label(pil, dem, level=SNOWLINE_LEVEL, scale=(1.0, 1.0), avoid=
     S = SS
     # 注记文案按**实际画的这条线的高度**生成，杜绝"线在新高度、字写旧米数"。
     _lab, _note = _snowline_texts(level)
-    f = _label_font(max(11, int(round(LABEL_FONT * 1.25 * S))))
-    fn = _label_font(max(8, int(round(LABEL_FONT * 0.8 * S))))
-    stroke = max(2, int(round(1.15 * S)))   # 白描边 1.7→1.15*S
+    f = _label_font(max(11, int(round(LABEL_FONT * 1.25 * _label_cap_scale()))))
+    fn = _label_font(max(8, int(round(LABEL_FONT * 0.8 * _label_cap_scale()))))
+    stroke = max(2, int(round(2 * CONTOUR_LABEL_HALO_OUT)))   # 外围固定 1 px（同高程注记）
     W, H = pil.size
     cell = 14.0 * S
     avoid_cells = set()
@@ -1941,10 +1977,10 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     # 可按线路覆写（逻辑 px）—— 大等高距合幅（500 m 档）里 8.2 会与峰名同大、
     # 比 OSM 地名还抢眼，全线实测收到 6.4 后层次恢复（2026-11-08）。
     _lf = _route_cfg("contour_label_font", None)
-    f = _label_font(max(7, int(round((float(_lf) if _lf else LABEL_FONT) * S))))
-    # 白描边收细：2.0*S（≈字号 18%）在浅色地形上会糊成"白阴影"（用户反馈），
-    # 收到 1.7*S ≈ 14%，读起来是干净的描边；再细就会在深色晕渲上失去可读性。
-    stroke = max(2, int(round(1.7 * S)))
+    f = _label_font(max(7, int(round((float(_lf) if _lf else LABEL_FONT) * _label_cap_scale()))))
+    # 白描边：**外围固定 1 输出 px**（2026-11-12 用户定，见 CONTOUR_LABEL_HALO_OUT）。
+    # 旧口径 1.7*S 是"字号的 17%"，SS=10/13 时白边 17–22 px，数字被包成白方块。
+    stroke = max(2, int(round(2 * CONTOUR_LABEL_HALO_OUT)))
     gap, sep, win = LABEL_GAP * S, LABEL_SEP * S, LABEL_WINDOW * S
     W, H = pil.size
 
@@ -2620,6 +2656,19 @@ def build_terrain():
         #     （在基准栅格上测）脱钩。默认关，别影响既有线路。
         _abs_px = bool(_route_cfg("contour_width_absolute", False))
         _k = RASTER_W / _ref_w
+        # ---- k 上限（2026-11-12 用户：k = 出图宽 ÷ 4512，最多 ×2）----
+        # 超过上限时线宽不再等比加粗，改走"出图固定 px"路径：宽度 = 设计基准 × k_max
+        # （1/2 → 2/4 px）。为什么不能在基准栅格上"少加宽"：基准栅格只有 1 px 粒度，
+        # 0.6 px 表示不出来（_widen 只处理整数），只能到出图栅格重算 band edges ——
+        # 这正是 contour_width_absolute 那条成熟路径（珠峰东坡 19552 用过）。
+        _kmax = float(_route_cfg("contour_width_k_max", CONTOUR_WIDTH_K_MAX) or 0)
+        if not _abs_px and _kmax > 0 and _k > _kmax + 1e-6:
+            _abs_px = True
+            _bw = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
+            _w_px = (max(1, int(round(_bw[0] * _kmax))),
+                     max(1, int(round(_bw[1] * _kmax))))
+            print(f"   等高线 k={_k:.2f} 超上限 {_kmax:g} → 线宽封顶 "
+                  f"{_w_px[0]}/{_w_px[1]} px@出图（不再按画幅等比加粗）")
         if _abs_px:
             _wp = _w_px or (int(CONTOUR_WIDTH[0]), int(CONTOUR_WIDTH[1]))
             print(f"[4/7] 等高线（首曲线 {c_minor:g} m / 计曲线 {c_major:g} m，"
