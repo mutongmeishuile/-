@@ -658,6 +658,25 @@ def _clean_name(s):
 #   `name:en`（受 CFG["label_foreign_names"] / name_map 控制，默认不自动音译）。
 _NAME_KEYS = ("name", "name:zh", "name:zh-Hans", "name:zh-CN")
 
+_CJK_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def _strip_latin(s):
+    """中英混排名只留中文 token（2026-11-17 用户：香港 OSM 名是
+    「水尾村 Shui Mei Tsuen」连写，一个标签占两倍宽；中文图只留中文 =
+    不减信息量却省 ~40% 标注面积）。
+
+    ⚠ 只对**含中文**的名字动手：纯外文名（尼泊尔/GHT 的拉丁名、天城文）
+    原样返回，否则境外线路会整片失去地名。数字/括号里的编号 token 保留。
+    CFG["label_strip_latin"]=False 可关掉（默认 True）。"""
+    if not s or not _CJK_RE.search(s):
+        return s
+    toks = [t for t in s.split()
+            if _CJK_RE.search(t) or not _LATIN_RE.search(t)]
+    out = " ".join(toks).strip(" ·-")
+    return out or s
+
 # 占位名 / 消歧后缀：`湖泊KW`、`湖泊ks`、`湖泊12` 这类名字**一个地理信息都没有**，
 # 画在图上就是噪声，而且排在图例旁边极易被误读成正经地名。
 # 2026-11-03 梅里-他念两区总览实测：窗口内 16 个湖是「湖泊+1~3 位 ASCII」，
@@ -705,6 +724,9 @@ def _pick_name(t):
             # 本名是画不出的文字（天城文/藏文…）时**继续试下一个键**，不要直接返回 ——
             # 否则加德满都这类 ``name=काठमाडौं`` 的城市会在图上彻底没有名字。
             if _clean_name(v):
+                # 中文图只留中文：砍掉「水尾村 Shui Mei Tsuen」的拉丁尾巴（默认开）。
+                if GC.cfg_flag("label_strip_latin", True):
+                    v = _strip_latin(v)
                 return v
             continue
         if v:
@@ -775,6 +797,54 @@ def _route_corridor(proj, size, meta, bars, verbose=True):
     if verbose:
         print(f"   近轨迹标注加密：走廊半径 {radius:.0f} 栅格 px "
               f"（{km:g} km × {bars:g} 条比例尺）· 轨迹抽稀 {len(Q)} 点")
+    return near
+
+
+def _route_near_km(proj, size, meta, near_km, verbose=True):
+    """按**实地公里**判「点是否距轨迹 ≤ near_km」；给补给点走廊过滤用。
+
+    与 `_route_corridor` 同源（同一套抽稀 + 4 px 量化 + lru_cache），区别只是
+    半径直接按 km 给、不绕「比例尺条数」—— 补给点过滤要的是确定的 2–3 km，
+    不该受出图比例尺长度影响。
+    """
+    if near_km <= 0:
+        return None
+    pts = GC.track_pts()
+    if not pts:
+        if verbose:
+            print("   ⚠ 补给点走廊过滤：找不到 out/track_real.json，已跳过")
+        return None
+    mpp = GC.m_per_px(meta)
+    iw = float((meta.get("size") or (1504, 0))[0]) or 1504.0
+    radius = (near_km * 1000.0 / mpp) * (size[0] / iw)
+    step = max(6.0, radius / 160.0)
+    xy = []
+    for p in pts:
+        try:
+            q = proj(float(p["lon"]), float(p["lat"]))
+        except Exception:                                          # noqa
+            continue
+        if not xy or math.hypot(q[0] - xy[-1][0], q[1] - xy[-1][1]) >= step:
+            xy.append(q)
+    if not xy:
+        return None
+    import numpy as np
+    from functools import lru_cache
+    Q = np.asarray(xy, dtype=np.float32)
+    r2 = float(radius * radius)
+
+    @lru_cache(maxsize=80000)
+    def _hit(gx, gy):
+        dx = Q[:, 0] - gx * 4.0
+        dy = Q[:, 1] - gy * 4.0
+        return bool(np.min(dx * dx + dy * dy) <= r2)
+
+    def near(x, y):
+        return _hit(round(float(x) / 4.0), round(float(y) / 4.0))
+
+    if verbose:
+        print(f"   补给点近轨迹过滤：半径 {near_km:g} km（{radius:.0f} 栅格 px）"
+              f" · 轨迹抽稀 {len(Q)} 点")
     return near
 
 
@@ -1159,6 +1229,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     _near_sep = float(GC.cfg("label_near_route_sep_mul", 0.35) or 0.35)
     _NEAR = (_route_corridor(proj, size, meta, _near_bars, verbose=verbose)
              if _near_bars > 0 else None)
+    # 补给点（shop=* / 餐饮 / 加油站）在市区能上千个，密到盖住地形（2026-11-17
+    # 麦理浩径：九龙市区整片橙方块）。CFG["supply_near_km"] > 0 时只留距轨迹
+    # ≤ N km 的补给点；默认 0 = 全留（老行为，内陆线路几乎没这类点）。
+    _supply_km = float(GC.cfg("supply_near_km", 0) or 0)
+    _SUPPLY_NEAR = (_route_near_km(proj, size, meta, _supply_km, verbose=verbose)
+                    if _supply_km > 0 else None)
+    # 补给点符号：dot = 小实心点（默认，降低视觉重量）；square = 老方块样式。
+    _supply_dot = GC.cfg_flag("supply_symbol_dot", True)
 
     # 近轨迹走廊：只加密走廊内的落位机会，不改候选的原有顺序 ——
     # 把 near 提到前面会抢占远处同名/格子（实测走廊外地名 -101 条），
@@ -1271,6 +1349,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             # 徒步参考点（2026-10-29 贡嘎总览图）：水源 / 营地 / 补给。
             # 数据由 scripts/_fetch_extra.py 单独抓并打 _kind 标记 ——
             # 主 QUERY 不含这些标签，所以**没有 _kind 的老缓存完全不受影响**。
+            # 补给点按走廊过滤：市区其余全丢（2026-11-17 用户）；水源/营地不过滤。
+            if (t["_kind"] == "supply" and _SUPPLY_NEAR is not None
+                    and not _SUPPLY_NEAR(x, y)):
+                continue
             extras.append((x, y, _pick_name(t), t["_kind"],
                            t.get("ele") or t.get("capacity") or ""))
 
@@ -1472,7 +1554,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             forced = True            # 全量模式：具名峰一律允许挤放，尽量都出
         tri = [(x, y - 6 * S * tri_k), (x - 5.4 * S * tri_k, y + 3.6 * S * tri_k),
                (x + 5.4 * S * tri_k, y + 3.6 * S * tri_k)]
-        txt = f"{name} {ele}m" if ele else name
+        # 峰名三段式（2026-11-17 用户）：「观音山 Kwun Yam Shan 546m」——只有
+        # p88 以上（主峰档）带高程，中低档只留名字。CFG["peak_ele_top_only"]=True 开启；
+        # 默认 False = 老行为（所有具名峰都带 ele）。_top_names 强制进顶级。
+        _ele_top_only = GC.cfg_flag("peak_ele_top_only", False)
+        _top_tier = (ev is not None and q_hi is not None and ev >= q_hi) or (name in _top_names)
+        txt = f"{name} {ele}m" if (ele and not (_ele_top_only and not _top_tier)) else name
         # ⚠ 三角必须跟注记一起出生：矢量模式下 map_svg 会丢掉挤不下的峰名
         #   （本窗口 199 → 49），旧写法先画三角再试注记 → 图上 150 个无字三角
         #   （2026-11-05 用户「没有标注的 osm 地名标记符号也去掉」）。
@@ -1641,8 +1728,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
                     n_extra[kind] += 1
         else:                                   # supply：小卖部 / 补给 / 餐饮
-            r = 2.6 * S
-            d.rectangle([x - r, y - r, x + r, y + r], fill=(206, 168, 96), outline=(255, 255, 255))
+            if _supply_dot:
+                # 2026-11-17：改成更小的实心点，降低视觉重量（旧方块 2.6*S 半宽
+                # + 白描边，市区密集时像橙地毯）。1.15*S 半宽、无描边。
+                r = 1.15 * S
+                d.ellipse([x - r, y - r, x + r, y + r], fill=(190, 150, 88))
+            else:
+                r = 2.6 * S
+                d.rectangle([x - r, y - r, x + r, y + r], fill=(206, 168, 96), outline=(255, 255, 255))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (122, 92, 40), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):

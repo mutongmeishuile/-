@@ -387,6 +387,48 @@ def t_pick_name():
         GC.cfg, GC.cfg_flag = old_cfg, old_flag
 
 
+# ---------------------------------------------------------------- ⑨b 中文名/补给点/峰名高程（2026-11-17）
+def t_zh_name_supply_peak():
+    """中文图只留中文 / 补给点近轨迹过滤 / 峰名只主峰带高程 / 等高线线宽封顶。
+
+    前三项是 draw_osm 的 CFG 旋钮（label_strip_latin 默认开，其余默认关，
+    由线路显式启），第四项是技能既有默认（基准 1/2、k 上限 2 → 2/4 px）。
+    """
+    print("⑨b 中文名去拉丁 / 补给点过滤 / 峰名高程 / 等高线封顶")
+    me = Path(__file__).resolve().parent
+    do = (me / "draw_osm.py").read_text(encoding="utf-8")
+    mt = (me / "make_terrain.py").read_text(encoding="utf-8")
+    check("draw_osm 有 label_strip_latin 开关", "label_strip_latin" in do)
+    check("draw_osm 有 supply_near_km 开关", "supply_near_km" in do)
+    check("draw_osm 有 supply_symbol_dot 开关", "supply_symbol_dot" in do)
+    check("draw_osm 有 peak_ele_top_only 开关", "peak_ele_top_only" in do)
+    check("draw_osm 有 _route_near_km（按 km 的补给点走廊）", "def _route_near_km" in do)
+    check("补给点走廊只过滤 supply（水源/营地不过滤）",
+          't["_kind"] == "supply" and _SUPPLY_NEAR is not None' in do)
+    # 等高线：基准 (1,2)、k 上限 2 → 出图封顶 2/4 px（技能默认，2026-11-12 起）
+    check("等高线基准线宽 (1,2)", "CONTOUR_WIDTH = (1, 2)" in mt)
+    check("等高线 k 上限 2", "CONTOUR_WIDTH_K_MAX = 2.0" in mt)
+    check("等高线封顶按基准×k_max 算", "_bw[0] * _kmax" in mt and "_bw[1] * _kmax" in mt)
+
+    import guide_common as GC
+    import draw_osm as DO
+    # 纯函数：只砍"含中文名字"里的拉丁 token；纯外文/纯中文原样（境外线路不受影响）
+    check("_strip_latin 砍中英混排的拉丁尾巴",
+          DO._strip_latin("水尾村 Shui Mei Tsuen") == "水尾村",
+          DO._strip_latin("水尾村 Shui Mei Tsuen"))
+    check("_strip_latin 纯拉丁名原样",
+          DO._strip_latin("Kwun Yam Shan") == "Kwun Yam Shan")
+    check("_strip_latin 纯中文名原样", DO._strip_latin("大帽山") == "大帽山")
+    # 集成：_pick_name 默认（label_strip_latin 开）只留中文
+    old_flag = GC.cfg_flag
+    try:
+        GC.cfg_flag = lambda k, d=False: (True if k == "label_strip_latin" else d)
+        got = DO._pick_name({"name": "观音山 Kwun Yam Shan"})
+        check("_pick_name 开启时只留中文", got == "观音山", got)
+    finally:
+        GC.cfg_flag = old_flag
+
+
 # ---------------------------------------------------------------- ⑩ 峰点校正
 def t_peak_snap():
     """OSM 峰点该不该被吸到 DEM 山顶，判据要能被离线验证。
@@ -1394,7 +1436,7 @@ def main():
     buf = io.StringIO()
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
-               t_pick_name, t_peak_snap, t_contour_cov_min, t_snowline_legend,
+               t_pick_name, t_zh_name_supply_peak, t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,
