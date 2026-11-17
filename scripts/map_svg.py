@@ -772,7 +772,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # 近轨迹走廊（2026-11-10 GHT 全线）：**不插队**。near 项只多试几个零重叠位置，
     # 顺序仍按原来的 rank；一旦把 near 提前，会抢占走廊外地名的位置
     # （用户口径：其他地区保持不变）。
-    out, dropped = [], 0
+    out, dropped, n_placed = [], 0, 0
     _drop_names = []
     # 落位诊断（MAP_LBL_DUMP=1）：把每个地名的「锚点 / 最终字位 / 命中第几个候选」
     # dump 成 JSON，用于回答"为什么这个字离锚点这么远"——不靠肉眼猜。
@@ -880,6 +880,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                     _rs["trk"] += 1
                 continue
             _OCC.append(box)
+            n_placed += 1
             if _dbg is not None:
                 _dbg.append({"t": it["t"], "ax": it["x"], "ay": it["y"],
                              "x": x0, "y": yb, "dx": dx, "dy": dy, "try": _ti,
@@ -945,7 +946,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             dropped += 1
             _drop_names.append(it["t"])
     if dropped:
-        print(f"   底图地名：落位 {len(out)} 条 · 拥挤丢弃 {dropped} 条")
+        # ⚠ 统计必须用 n_placed（真实落位条数），不能用 len(out)：out 是 SVG 片段列表，
+        #   每个名字可能含「符号 + 引线 + text」多个元素，开着矢量符号时会翻倍。
+        print(f"   底图地名：落位 {n_placed} 条 · 拥挤丢弃 {dropped} 条")
         # 丢的是谁？"落位 131 / 丢弃 11" 这种汇总数看不出丢掉的是主峰还是次要湖名 ——
         # 用户报「图上怎么没有珠峰」时，第一件事就是确认它是否在这一行里。
         if os.environ.get("MAP_LBL_DEBUG"):
