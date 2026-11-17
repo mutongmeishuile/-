@@ -713,6 +713,25 @@ def _is_peak_item(it):
     return f[0] - f[2] > 12 and f[0] < 110
 
 
+def _base_label_sym(fill, sym_on_raster):
+    """底图地名锚点由谁画什么符号 —— 返回 'peak' / 'dot' / None。
+
+    · sym_on_raster=True（V1 默认，2026-11-17 起）：返回 None。符号已由 draw_osm
+      烤进栅格底图（峰三角 / 垭口倒三角 / 地名圆点），map_svg 不再补画 —— 否则
+      栅格倒三角 + 矢量圆点两套不同口径叠在一起，成"倒三角里戳个点"的脏符号
+      （麦理浩径 2026-11-17 实测）。⚠ 引线不受此开关影响，照常画（独立的"字指哪"功能）。
+    · sym_on_raster=False：沿用 2026-11-05 起的矢量补画 —— 峰名画矢量三角、其余画
+      小圆点，符号与注记同生同灭（栅格层此时不画符号）。用于符号不进栅格的通道。
+
+    与 draw_osm 的口径对应：`lab.draw_symbols = lab.draw_pixels or labels_symbol_on_raster`。
+    两边必须读同一个 CFG 键，否则又回到"栅格画 + 矢量补"的双画。
+    """
+    if sym_on_raster:
+        return None
+    f = tuple(fill)
+    return "peak" if (f[0] - f[2] > 12 and f[0] < 110) else "dot"
+
+
 def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     """OSM 地名：矢量层 + 动态避让。
 
@@ -745,6 +764,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # （用户口径：其他地区保持不变）。
     out, dropped = [], 0
     _drop_names = []
+    # 符号归属：V1 默认 True = 符号只在栅格画一遍（见 _base_label_sym 说明）。
+    # 与 draw_osm 的 lab.draw_symbols 读同一个键，保证栅格/矢量不会双画。
+    _sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", True)
     for it in items:
         fs = it["fs"]
         w = GC.text_w(it["t"], fs) + 4 * _vk()
@@ -786,27 +808,27 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
             # 2026-10-24 用户反馈「看不出这个地名标的是哪个地方」：避让把字推离锚点后，
             # 图上一根线都没有，读者无从对应。→ 位移 > 5 px 就补一条 0.5 px 细引线。
-            # 峰/垭口本身有三角符号（栅格层画的），不再叠圆点，否则像脏点。
             _ax, _ay = it["x"], it["y"]
             _cx = min(max(_ax, box[0]), box[2])
             _cy = min(max(_ay, box[1]), box[3])
-            _is_peak = f[0] - f[2] > 12 and f[0] < 110     # 棕色系 = 峰名
-            if _is_peak:
-                # 三角改由矢量层画（2026-11-05）：draw_osm 在矢量模式下不再把三角烤进栅格
-                # ——它先画三角再去试注记，挤不下的峰名被丢，图上就留一堆无字三角。
-                # 现在三角与字同生同灭，锚点也统一有符号。
+            # 符号：V1 默认走栅格（_sym_on_raster=True）→ 这里不补画，只留引线。
+            # 只有显式 labels_symbol_on_raster=False 的通道才由矢量层补画符号。
+            _sym = _base_label_sym(f, _sym_on_raster)
+            if _sym == "peak":
+                # 三角由矢量层画：draw_osm 在矢量模式下不把三角烤进栅格时，
+                # 符号与注记同生同灭，锚点也统一有符号。
                 _tr_ = 2.9 * _vk()      # 峰三角与字号同走「× min(SS, cap)」口径
                 out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} '
                            f'L {_ax + _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} '
                            f'L {_ax - _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} Z" '
                            f'fill="{c1}" stroke="#FFFFFF" stroke-width="{_halo_sw_sym():.4f}" '
                            f'stroke-linejoin="round"/>')
-            if not _is_peak:
-                # **每个**地名都在锚点上打一个小圆 —— 这是"这个字标的是哪"最直接的答案。
-                # 只给被推远的那几个画圆是不够的：紧贴锚点的名字反而更让人怀疑它指哪儿。
+            elif _sym == "dot":
+                # 矢量补画通道下，每个地名在锚点打一个小圆 —— "这个字标的是哪"的答案。
                 out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="{1.3 * _vk():.3f}" '
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
                            f'stroke-width="{_halo_sw_sym():.4f}"/>')
+            # 引线独立于符号归属：符号在栅格时同样需要它指认"字标的是哪"。
             if math.hypot(_cx - _ax, _cy - _ay) > 5:
                 out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
                            f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.5" '

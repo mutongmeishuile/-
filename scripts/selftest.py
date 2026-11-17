@@ -429,6 +429,54 @@ def t_zh_name_supply_peak():
         GC.cfg_flag = old_flag
 
 
+# ---------------------------------------------------------------- ⑨c 符号只画一遍（2026-11-17）
+def t_symbol_single_layer():
+    """符号归属：栅格与矢量不能双画，且引线独立于符号不受影响。
+
+    背景：V1 把 labels_symbol_on_raster 默认翻成 True（符号烤栅格），但 map_svg
+    一直无条件补画 → 垭口栅格倒三角 + 矢量圆点叠成脏符号。修复：map_svg 读同一个
+    CFG 键，True 时不补画。这里用纯函数钉住三种返回值，并查两边读写同键。
+    """
+    print("⑨c 符号单图层（栅格画则矢量不补，引线照常）")
+    me = Path(__file__).resolve().parent
+    do = (me / "draw_osm.py").read_text(encoding="utf-8")
+    svg = (me / "map_svg.py").read_text(encoding="utf-8")
+
+    # 两边必须读同一个 CFG 键，否则又会回到双画
+    check("draw_osm 用 labels_symbol_on_raster 决定栅格是否画符号",
+          'lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster"' in do)
+    check("map_svg 用同一键决定是否补画",
+          '_sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", True)' in svg)
+    check("map_svg 调 _base_label_sym 分流符号",
+          "_sym = _base_label_sym(f, _sym_on_raster)" in svg)
+
+    # map_svg 在 import 期就要求轨迹数据（SystemExit），不能像别的模块那样直接 import。
+    # 用 ast 抠出这个纯函数的源码单独 exec —— 既真正跑到了函数体，又不触发模块级副作用。
+    import ast
+    tree = ast.parse(svg)
+    fn_src = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_base_label_sym":
+            fn_src = ast.get_source_segment(svg, node)
+            break
+    check("map_svg 定义了 _base_label_sym 纯函数", fn_src is not None)
+    if fn_src:
+        ns = {}
+        exec(fn_src, ns)                                            # noqa: S102
+        sym = ns["_base_label_sym"]
+        peak = (84, 60, 40)      # 棕色系 = 峰名
+        saddle = (150, 78, 24)   # 橙色 = 垭口
+        place = (62, 62, 62)     # 灰 = 地名
+        # 栅格画（V1 默认）：一律 None —— 矢量层不补任何符号，避免双画
+        check("栅格符号模式下峰名不补三角", sym(peak, True) is None)
+        check("栅格符号模式下垭口不补圆点", sym(saddle, True) is None)
+        check("栅格符号模式下地名不补圆点", sym(place, True) is None)
+        # 矢量补画模式（显式 False）：峰名三角、其余圆点 —— 老行为不回归
+        check("矢量模式下峰名画三角", sym(peak, False) == "peak")
+        check("矢量模式下垭口画圆点", sym(saddle, False) == "dot")
+        check("矢量模式下地名画圆点", sym(place, False) == "dot")
+
+
 # ---------------------------------------------------------------- ⑩ 峰点校正
 def t_peak_snap():
     """OSM 峰点该不该被吸到 DEM 山顶，判据要能被离线验证。
@@ -1436,7 +1484,8 @@ def main():
     buf = io.StringIO()
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
-               t_pick_name, t_zh_name_supply_peak, t_peak_snap, t_contour_cov_min, t_snowline_legend,
+               t_pick_name, t_zh_name_supply_peak, t_symbol_single_layer,
+               t_peak_snap, t_contour_cov_min, t_snowline_legend,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,
