@@ -40,6 +40,12 @@ agent_created: true
 >    要开必须按线路显式写 `CFG["glacier_layer"]=True`（判据见 `references/pitfalls-terrain.md` §12 ①）。
 
 **画完之后还有五件事最容易翻车**（都别等用户来提）：步道**色相**要和等高线错开、主线路线宽与点位符号要成比例、**图例样本必须由出图参数生成**、**文字灰阶要过 4.5:1**、**地图「三件套」（图例 / 指北针 / 比例尺）必须缩小并动态避让，不许压住轨迹**。
+
+> **图例样本 = 图上符号，逐像素同尺寸同样式**（2026-11-18 用户定）。三种图例（标题带 / 图面内 / 底部带）
+> 一律 `mk_pin(..., k=_vk())`、**不再乘任何缩放系数**（旧写法的 `scale(0.52)` / `LG_GLYPH=0.55`
+> 会让图例里的钉子是图面上的 0.5×，读起来像另一个符号）。槽位/文字偏移必须按 `_pin_d()`
+> 实际直径算，写死的 16/22/34 px 是当年给缩小的色点留的，换了尺寸就会撞字。
+> 标题带放不下时由外层 `k`（`avail / total` 与 `_avail_h / h` 取小）整块等比缩，符号跟着缩。
 见 `references/legend-and-color.md` 与 `references/pitfalls-map-svg.md` §9。
 
 **线条与符号默认口径（2026-11-03 用户定，均为逻辑 px —— 页面内嵌图与高清图共用同一 viewBox，
@@ -194,6 +200,7 @@ agent_created: true
 | map | `render_map_hi.py` | `<file_stem>-全线地图.jpg` |
 | gpx | `make_gpx.py` | `<file_stem>.gpx` |
 | qa | `qa_guide.py` | 数值化自检（不产文件，只判成败） |
+| **labels** | `preflight_labels.py` | **出图前**把字号/注记密度算成数字（不渲染）：各档注记的逻辑 px → 出图 px → 缩到 1504 宽的等效 px、每字压住多少米，再读 `out/osm.json` 数候选、粗估容量，超阈值给建议值。改 `map_ss` / `label_font_cap` / `label_fs_*` 之后先跑它 |
 | — | `check_window.py` | 窗口自检：名峰是否被切在图外（exit 1 = 图外有个比图里更高的峰）。线路名带峰名的线必跑 |
 | osm2 | `_fetch_extra.py` | **补抓水源 / 营地 / 补给 / 山屋**（主 QUERY 不含这些 node，见 `pitfalls-terrain §32`）。跑一次合并进 `osm.json`，图上多出蓝点（水源）· 绿三角（营地）· 沙色方块（补给）。徒步线建议跑 |
 | osm3 | 项目本地 `_fetch_window.py`（模板见 `pitfalls-terrain §38`） | **按窗口补区域性数据空洞**：整窗要素齐全但某个子区域稀疏时，0.9° 分片 Overpass 抓该窗口、按 `(type,id)` 并集追加进 `osm.json`。⚠ 不用 `fetch_osm --force`（半截数据 + `_cache_covers` 假命中）；抓前备份、全块成功才合并、数百 MB 缓存走字节追加，之后跑 `make_terrain --osm-only` 重出 |
@@ -235,6 +242,11 @@ terrarium 老老实实把千里之外的另一座山渲了出来 —— 页面�
 - `--skip-qa`：跳过末尾 QA 自检（约 4 s 的双浏览器截图）；**定稿前务必再跑一次** `qa_guide` 确认 0 问题。
 - 热缓存下整链路约 **47 s**；`--skip-dem` 后约 **15 s**。**更大的省时来自"自主生成"消除了人工往返**——
   过去卡在"人改文案"那一步，现在模型按 `research_route` 的清单联网回填，人无需在中间守着。
+- **字号先算、再出图**：`python scripts/preflight_labels.py`（不渲染、不下 DEM、不启浏览器，秒级）
+  用**和出图完全相同的公式**把 `map_ss / label_font_cap / label_fs_base / label_fs_poi` 的实际效果
+  算成一张表（逻辑 px → 出图 px → 缩到 1504 宽时的等效 px → 每字压住多少米），并读 `out/osm.json`
+  数注记候选、估算容量，超阈值直接给建议值。**字号相关的返工（实测一次地图重出 4–5 遍）
+  就是靠这一步消掉的**：调参 → 预检 → 一次出图，而不是"出图 → 肉眼看 → 再出图"。
 
 
 ```bash

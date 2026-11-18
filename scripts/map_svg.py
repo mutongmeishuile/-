@@ -464,8 +464,8 @@ def _legend_w():
         need.append(x + 18)
     syms = _legend_symbols()
     if syms:
-        # 两列网格：每列 = 符号 34 + 间距 22 + 名称
-        half = max(34 + 22 + GC.text_w(nm, 17) for _k, nm in syms)
+        # 两列网格：每列 = 符号（按真实图钉直径）+ 间距 + 名称
+        half = max(_pin_d() + 14 + GC.text_w(nm, 17) for _k, nm in syms)
         need.append(2 * half + 36)
     foot = GC.author_legend(_CFG.get("legend_foot", "仅供参考 · 非导航用途"))
     if foot:
@@ -1575,14 +1575,15 @@ def build_map_overlay(mobile=False):
             g.append(f'<line x1="{lx+18*S:.0f}" y1="{sy:.0f}" x2="{lx+LG_W-18*S:.0f}" y2="{sy:.0f}" '
                      f'stroke="#E2DACD" stroke-width="{1.4*S:.1f}"/>')
             col_w = (LG_W - 36 * S) / 2.0
-            glyph_scale = LG_GLYPH
+            # 符号样本与图面**同尺寸**（2026-11-18 用户口径）：走 `k=_vk()`、不再乘 LG_GLYPH。
+            # 旧写法 `scale(0.55)` + `k=1.0` 会让图例里的钉子是图面上的 0.55×，读起来像另一个符号。
+            _glyph_i = _pin_d()
             for i, (kind, nm) in enumerate(syms):
                 cx = lx + 34 * S + (i % 2) * col_w
                 cy = sy + (LG_SYM0 + LG_SYM_PITCH * (i // 2)) * S
-                # 复用真实符号：整体 scale 缩小，保证"图例样本 = 图上符号"
-                g.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale({glyph_scale})">'
-                         f'{mk_pin(0, 0, kind, k=1.0)}</g>')
-                g.append(f'<text x="{cx+22*S:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
+                g.append(f'<g transform="translate({cx:.1f},{cy:.1f})">'
+                         f'{mk_pin(0, 0, kind, k=_vk())}</g>')
+                g.append(f'<text x="{cx + _glyph_i / 2 + 7:.0f}" y="{cy+7*S:.0f}" font-size="{round(17*S)}" '
                          f'font-weight="700" fill="#4A5261">{nm}</text>')
         g.append(f'<text x="{lx+18*S:.0f}" y="{ly+LG_H-14*S:.0f}" font-size="{round(16.5*S)}" '
                  f'font-weight="600" fill="#7A8290">{GC.author_legend(_CFG.get("legend_foot", "仅供参考 · 非导航用途"))}</text>')
@@ -1837,7 +1838,12 @@ def _title_legend(x_right, y_bottom, outer_k=1.0):
     sym_cols = min(4, max(1, -(-len(syms) // max(1, nrow_all)))) if syms else 1
     sym_cols = min(sym_cols, max(1, len(syms)))
     sym_rows = -(-len(syms) // sym_cols)
-    sym_cell = max([16 + 6 + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
+    # 符号占位**按图钉实际直径算**（2026-11-18）：符号改成 `mk_pin(k=_vk())` 后与图面
+    # 逐像素同尺寸，写死的 16 px 槽位（当年给 0.52 倍色点留的）会让图钉撞上名字。
+    # 槽位 = 半个图钉 + 间隙 + 文字 + 列距。
+    _glyph = _pin_d()                     # = PIN_D × _vk()，与 mk_pin(k=_vk()) 一致
+    _txt_dx = _glyph / 2.0 + 6.0
+    sym_cell = max([_txt_dx + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
     sym_w = sym_cell * sym_cols
 
     grid_w = max(day_w, ext_w)
@@ -1864,14 +1870,15 @@ def _title_legend(x_right, y_bottom, outer_k=1.0):
     o = [f'<g transform="translate({ox:.1f},{oy:.1f}) scale({k:.3f})">']
 
     for i, (kind, nm) in enumerate(syms):
-        cx = (i % sym_cols) * sym_cell + 7
+        cx = (i % sym_cols) * sym_cell + _glyph / 2.0 + 4
         cy = (nrow_all - sym_rows + i // sym_cols) * PITCH + 15
         # 2026-11-18 用户：图例符号必须**和图上符号同尺寸、同样式**。
         # 旧写法 `scale(0.52)` + `k=1.0`：符号被缩到 0.52 倍、且 k 不随画幅走，
         # 于是大画幅上地图里是 76 px 的图钉、图例里只剩一个 27 px 的色点（用户截图）。
         # 改成和 POI 绘制同一条路：`k=_vk()`、不额外缩放 —— 图例与图面逐像素同尺寸。
+        # 放不下由外层 `k`（按 avail / _avail_h 算）整块等缩，符号跟着一起缩。
         o.append(f'<g transform="translate({cx:.1f},{cy:.1f})">{mk_pin(0, 0, kind, k=_vk())}</g>')
-        o.append(f'<text x="{cx + 16:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
+        o.append(f'<text x="{cx + _txt_dx:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
 
     def _entry(row, lx, base, w_col):
@@ -2129,13 +2136,13 @@ def _legend_band_svg():
         cx = x0 + (i % cols) * cw
         ry = BD_PADT + BD_ROW0 + BD_PITCH * (i // cols)
         if kind == "sym":
-            # 符号按 mk_pin 的**原生尺寸**（外径 PIN_D=15 逻辑 px）画，不再 ×0.42：
-            # 0.42 是当年按"图面内小图标"定的，放进下方图例带后直径只剩 6.3 逻辑 px，
-            # 与 13.5 px 的说明文字并排时缩成一个小点（2026-11-09 GHT 全线实测：
-            # 缩略后"起点/终点"左侧几乎看不到标记）。图例符号本来就该与文字同量级。
-            o.append(f'<g transform="translate({cx + 10:.1f},{ry - 5:.1f})">'
-                     f'{mk_pin(0, 0, glyph, k=1.0)}</g>')
-            o.append(f'<text x="{cx + 30:.0f}" y="{ry}" font-size="13.5" font-weight="700" '
+            # 符号与图面**同尺寸**（2026-11-18）：走 `k=_vk()`，不再固定 k=1.0。
+            # 说明：旧注释说 0.42 会让符号只剩小点，现在统一以图面尺寸为准，
+            #       `pin_d` 小于 8 时 mk_pin 本就退化成「白环 + 实心点」，图面与图例一致。
+            _glyph_b = _pin_d()
+            o.append(f'<g transform="translate({cx + _glyph_b / 2 + 2:.1f},{ry - 5:.1f})">'
+                     f'{mk_pin(0, 0, glyph, k=_vk())}</g>')
+            o.append(f'<text x="{cx + _glyph_b + 10:.0f}" y="{ry}" font-size="13.5" font-weight="700" '
                      f'fill="#4A5261">{_esc(text)}</text>')
             continue
         dash = ' stroke-dasharray="7 4"' if kind == "line" else ""
