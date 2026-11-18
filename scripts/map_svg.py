@@ -679,14 +679,14 @@ def _load_base_labels():
     out.sort(key=lambda d: -d["rank"])
     # 2026-11-18 用户：同名标注不该重复出现。
     # OSM 同一地物常被 way+node 各标一次（「歌連臣角砲台探射燈碉堡」两条锚点只差
-    # 0.7 逻辑 px，实测 82 组同名里 12 组是这种近距离重复）。
-    # 规则：**同名且锚点相距 < 3 逻辑 px** 只留 rank 最高的一条；
-    # 不同山头的同名（相距远）照常保留。
+    # 0.7 逻辑 px）；也有同一山头被标成两个点、相距十几 px（「標尖角頂」26 px）。
+    # 规则：**同名且锚点相距 < 30 逻辑 px** 只留 rank 最高的一条；
+    # 不同山头的同名（相距远，通常 >50 px）照常保留。
     _kept = {}
     _uniq = []
     for d in out:
-        _prev = _kept.setdefault(d["t"], [])
-        if any(math.hypot(d["x"] - px, d["y"] - py) < 3.0 for px, py in _prev):
+        _prev = _kept.setdefault(_norm_name(d["t"]), [])
+        if any(math.hypot(d["x"] - px, d["y"] - py) < 30.0 for px, py in _prev):
             continue
         _prev.append((d["x"], d["y"]))
         _uniq.append(d)
@@ -702,6 +702,23 @@ def _near_track(box, track, half_w):
     return False
 
 
+_T2S = {"灣": "湾", "營": "营", "頂": "顶", "嶺": "岭", "觀": "观", "龍": "龙",
+        "鳳": "凤", "島": "岛", "崗": "岗", "頭": "头", "徑": "径", "環": "环",
+        "錦": "锦", "鉛": "铅", "礦": "矿", "瀝": "沥", "燈": "灯", "碉": "碉",
+        "門": "门", "園": "园", "場": "场", "橋": "桥", "鐵": "铁", "銀": "银",
+        "銅": "铜", "廟": "庙", "壇": "坛", "墳": "坟", "墻": "墙", "樹": "树",
+        "灣": "湾", "灘": "滩", "溝": "沟", "澗": "涧", "瀉": "泻", "滙": "汇"}
+
+
+def _norm_name(s):
+    """把常见繁体地名用字收敛成简体，仅用于**重名判定**（不改变显示文字）。
+
+    2026-11-18 用户实测：POI「浪茄湾营地」与 OSM「浪茄灣營地」是同一处，
+    但 `_poi_dup` 的名字包含/相似度都因为简繁差异没命中，图上印了两行。
+    """
+    return "".join(_T2S.get(c, c) for c in s)
+
+
 def _poi_dup(it, pois, pin_xy):
     """底图地名与攻略 POI 是同一个地方？→ 丢掉底图那条。
 
@@ -710,13 +727,17 @@ def _poi_dup(it, pois, pin_xy):
     图上就会在同一个点上印两行名字 —— 2026-10-21 实测一处不落。
     判据：名字互相包含（≥2 字）且锚点相距 < 60 逻辑 px。
     """
-    t = it["t"].split(" ")[0]
+    t = _norm_name(it["t"].split(" ")[0])
     if len(t) < 2:
         return False
     for d, (px, py) in zip(pois, pin_xy):
-        nm = d["name"].split(" · ")[-1]
+        nm = _norm_name(d["name"].split(" · ")[-1])
         if not (t in nm or nm in t):
-            continue
+            if len(t) < 3 or len(nm) < 3:
+                continue
+            _sa, _sb = set(t), set(nm)
+            if len(_sa & _sb) / max(len(_sa), len(_sb)) < 0.55:
+                continue
         if (it["x"] - px) ** 2 + (it["y"] - py) ** 2 < 60 ** 2:
             return True
     return False
@@ -1173,7 +1194,10 @@ def build_map_overlay(mobile=False):
     M = MFS_M if mobile else 1.0
     _DBG_TAG = "mobile" if mobile else "desk"
     PS = PS_BASE * M
-    _PIN_R = 19 * M
+    # 图钉占位半径 = **符号实际半径**（2026-11-18）。原来写死 19*M，与 mk_pin
+    # 真正的半径（_pin_d()/2，高清图 k=3 → 22.5）不一致：框比符号小 → 文字能压到
+    # 图钉上；框比符号大 → 正位被冤枉挡掉、标注被推远。统一取实际半径。
+    _PIN_R = _pin_d() / 2.0
     _PAD = 22
     _OCC.clear()
     global _TRK, _TRK_HW
@@ -1472,12 +1496,13 @@ def build_map_overlay(mobile=False):
         for sc in FS_LADDER:
             fs = base * sc
             w = GC.text_w(txt, fs) + 26 * M
-            # 首选偏移（作者的 dx/dy）：**不乘 _vk()**（原来乘视觉倍率，高清图 k=3
-            # 时 dx=30 变成 90 px）。另外**上限 22 逻辑 px**（图钉半径 15 + 7 间隙）：
-            # 作者手调的 30/32 在高清图上仍显得"甩出去"，2026-11-18 用户实测
-            # 「浪茄湾营地离标注点太远」。超出上限按 22 收。
-            _dxo = math.copysign(min(abs(dx), 22.0), dx) if dx else 0.0
-            _dyo = math.copysign(min(abs(dy), 22.0), dy) if dy else 0.0
+            # 首选偏移（作者的 dx/dy）：**跟着图钉实际尺寸走**。
+            # 图钉半径 = _pin_d()/2（高清图 k=3 → 22.5、HTML k=1 → 7.5），
+            # 文字左缘 = 半径 + 6 间隙。写死 22 时比高清图钉半径(22.5)还小，
+            # 正位永远被占位框挡掉 → 标注被甩到远处（2026-11-18 用户："还是这么远"）。
+            _gap_poi = _PIN_R + 6.0
+            _dxo = math.copysign(min(abs(dx) * M, _gap_poi), dx) if dx else 0.0
+            _dyo = math.copysign(min(abs(dy) * M, _gap_poi), dy) if dy else 0.0
             r = _layout(x, y, _dxo * M, _dyo * M, anc, w, fs * 0.86, commit=False)
             # 优先零重叠；都不零重叠时取面积最小、并列取字号大
             if best is None or r[4] < best[4] - 1e-6 or \
