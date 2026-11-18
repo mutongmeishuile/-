@@ -556,6 +556,14 @@ def t_aspect_leader_numeric():
     # POI 标注：正右/正左优先，作者 dy 只在正位放不下时用（2026-11-18）
     check("POI 标注正右/正左优先（dy 只在退路）",
           "plans = [(dx, 0.0, anc), (dx, dy, anc)]" in svg)
+    # 2026-11-18 三修：同名近距离去重 / 符号占位 / 无名字符号不画
+    check("底图地名同名且锚点重合只留一条",
+          "_kept = {}" in svg and "_uniq = []" in svg and "_prev.append((d[\"x\"], d[\"y\"]))" in svg)
+    check("地名符号本身登记占位（防 POI 文字压符号）",
+          "_sr = 3.4 * _vk()" in svg and "_OCC.append((_ax - _sr, _ay - _sr" in svg)
+    check("水源/营地/补给符号只在名字落位后画",
+          do.count("_draw_supply()") >= 2
+          and "d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168)," in do)
     # 海面上的 OSM waterbody 不盖 C_WATER（大灘海假水面）
     check("draw_overlay 接 sea_mask", "sea_mask=None" in do)
     check("waterbody 落在海面则跳过", "_in_sea" in do and "if len(pts) > 2 and not _in_sea:" in do)

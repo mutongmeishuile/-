@@ -677,7 +677,20 @@ def _load_base_labels():
     for d in out:
         d["rank"] = _rank(d)
     out.sort(key=lambda d: -d["rank"])
-    return out
+    # 2026-11-18 用户：同名标注不该重复出现。
+    # OSM 同一地物常被 way+node 各标一次（「歌連臣角砲台探射燈碉堡」两条锚点只差
+    # 0.7 逻辑 px，实测 82 组同名里 12 组是这种近距离重复）。
+    # 规则：**同名且锚点相距 < 3 逻辑 px** 只留 rank 最高的一条；
+    # 不同山头的同名（相距远）照常保留。
+    _kept = {}
+    _uniq = []
+    for d in out:
+        _prev = _kept.setdefault(d["t"], [])
+        if any(math.hypot(d["x"] - px, d["y"] - py) < 3.0 for px, py in _prev):
+            continue
+        _prev.append((d["x"], d["y"]))
+        _uniq.append(d)
+    return _uniq
 
 
 def _near_track(box, track, half_w):
@@ -903,6 +916,12 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             # 符号：2026-11-18 默认由矢量层在**落位成功处**补画（_sym_on_raster=False），
             # 符号与字同生同灭 —— 栅格层那套多落位的符号不再单独出现（无字孤三角）。
             _sym = _base_label_sym(f, _sym_on_raster)
+            if _sym:
+                # 2026-11-18 用户实测：POI 标注压在峰三角上，看起来"营地被标成了山峰"。
+                # 原因是 _OCC 里只有文字框，符号画在锚点却从不占位。补一个小方框，
+                # 让后续的 POI 标注 / 其他地名绕开已画出的符号。
+                _sr = 3.4 * _vk()
+                _OCC.append((_ax - _sr, _ay - _sr, _ax + _sr, _ay + _sr))
             if _sym == "peak":
                 # 峰：正三角（与栅格 tri 同口径：半宽 5.4 逻辑 px、高 9.6）
                 _tr_ = 2.9 * _vk()      # 峰三角与字号同走「× min(SS, cap)」口径

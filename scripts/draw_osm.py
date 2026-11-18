@@ -1765,36 +1765,55 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                               near_fn=_NEAR, near_sep=_near_sep)
               + _extras_anon)
     for x, y, name, kind, sub in extras:
+        # 2026-11-18 用户定案：符号**只在名字落位成功时**才画。
+        # 旧写法先无条件画点/帐篷/黄方块、再试注记 → 放不下名字的点留在图上，
+        # 成了"无名字的黄点/蓝点"（用户："黄色的没有名称的标注符号舍弃"）。
+        # 无名条目只有在 CFG["label_keep_anon_symbol"]=True 时才会进 extras。
         if kind in ("spring", "water"):
             r = 2.0 * S
-            d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168), outline=(255, 255, 255))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (26, 84, 138), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
+                    d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168),
+                              outline=(255, 255, 255))
                     n_extra[kind] += 1
             else:
+                d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168),
+                          outline=(255, 255, 255))
                 n_extra[kind] += 1
         elif kind == "camp":
             r = 3.4 * S
-            d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8), (x + r * 1.15, y + r * 0.8)],
-                      fill=(226, 238, 224), outline=(74, 118, 74))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (60, 92, 60), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
+                    d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8),
+                               (x + r * 1.15, y + r * 0.8)],
+                              fill=(226, 238, 224), outline=(74, 118, 74))
                     n_extra[kind] += 1
-        else:                                   # supply：小卖部 / 补给 / 餐饮
-            if _supply_dot:
-                # 2026-11-17：改成更小的实心点，降低视觉重量（旧方块 2.6*S 半宽
-                # + 白描边，市区密集时像橙地毯）。1.15*S 半宽、无描边。
-                r = 1.15 * S
-                d.ellipse([x - r, y - r, x + r, y + r], fill=(190, 150, 88))
             else:
-                r = 2.6 * S
-                d.rectangle([x - r, y - r, x + r, y + r], fill=(206, 168, 96), outline=(255, 255, 255))
+                d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8),
+                           (x + r * 1.15, y + r * 0.8)],
+                          fill=(226, 238, 224), outline=(74, 118, 74))
+                n_extra[kind] += 1
+        else:                                   # supply：小卖部 / 补给 / 餐饮
+            def _draw_supply(_x=x, _y=y):
+                if _supply_dot:
+                    # 2026-11-17：改成更小的实心点，降低视觉重量（旧方块 2.6*S 半宽
+                    # + 白描边，市区密集时像橙地毯）。1.15*S 半宽、无描边。
+                    _r = 1.15 * S
+                    d.ellipse([_x - _r, _y - _r, _x + _r, _y + _r], fill=(190, 150, 88))
+                else:
+                    _r = 2.6 * S
+                    d.rectangle([_x - _r, _y - _r, _x + _r, _y + _r],
+                                fill=(206, 168, 96), outline=(255, 255, 255))
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (122, 92, 40), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
+                    _draw_supply()
                     n_extra[kind] += 1
+            else:
+                _draw_supply()
+                n_extra[kind] += 1
 
     # ---- 海子 / 水系名：蓝色斜体感（用深青蓝 + 白描边），动态避让已有注记 ----
     n_water = 0
