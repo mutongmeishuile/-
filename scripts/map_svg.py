@@ -1866,7 +1866,11 @@ def _title_legend(x_right, y_bottom, outer_k=1.0):
     for i, (kind, nm) in enumerate(syms):
         cx = (i % sym_cols) * sym_cell + 7
         cy = (nrow_all - sym_rows + i // sym_cols) * PITCH + 15
-        o.append(f'<g transform="translate({cx:.1f},{cy:.1f}) scale(0.52)">{mk_pin(0, 0, kind, k=1.0)}</g>')
+        # 2026-11-18 用户：图例符号必须**和图上符号同尺寸、同样式**。
+        # 旧写法 `scale(0.52)` + `k=1.0`：符号被缩到 0.52 倍、且 k 不随画幅走，
+        # 于是大画幅上地图里是 76 px 的图钉、图例里只剩一个 27 px 的色点（用户截图）。
+        # 改成和 POI 绘制同一条路：`k=_vk()`、不额外缩放 —— 图例与图面逐像素同尺寸。
+        o.append(f'<g transform="translate({cx:.1f},{cy:.1f})">{mk_pin(0, 0, kind, k=_vk())}</g>')
         o.append(f'<text x="{cx + 16:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
 
