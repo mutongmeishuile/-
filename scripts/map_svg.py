@@ -1797,72 +1797,87 @@ def _title_legend(x_right, y_bottom, outer_k=1.0):
             w += 16 + GC.text_w(km, FS_K)   # 里程与描述之间留 16 px：8 px 时中文描述的实际字形宽会把空隙吃掉
         return w
 
-    # ---- 分日格子：最多 4 列；附加行（雪线 / 步道）单独占最后一行 ----
+    # ---- 分日格子：附加行（雪线 / 步道）自成一行，不参与列宽 ----
     # ⚠ 早先把附加行也塞进同一网格：它们的描述特别长（"OSM 测绘的既有步道 / 牧道 /
-    #   机耕路（非本次轨迹）"），会把整列撑宽 —— 同列的 D1/D4 就跟里程数字拉开一大截空，
-    #   博格达实测 100+ px，看着像漏打了个字。现在附加行自成一行，列宽只由分日行决定。
+    #   机耕路（非本次轨迹）"），会把整列撑宽 —— 同列的 D1/D4 就跟里程数字拉开一大截空。
     days = list(day_rows)
-    # ---- 每行放几天：**动态算，不写死 4 列** ----
-    # 用户口径（2026-10-23）："较多空白，可以动态调整每行放的天数，最后整体右移"。
-    # 5 天按 4 列排 → 第二行只剩 D5，右边 3 格全空（博格达实测一大片空白）；
-    # 按 3 列排 → 3 + 2，只空 1 格，且整块窄了、右对齐后自然整体右移。
-    # 判据：先在**行数预算**内（多了会顶到数据行）挑"空格最少"的列数，同分再挑列多的（更矮）。
-    _avail_h = y_bottom - 68 * outer_k           # 68 = 数据行基线 52 + 下缘 16（随带子同步缩）
-    _max_rows = max(1, int(_avail_h // PITCH))
-    best = None
-    for _c in range(1, 5):
-        if not days:
-            break
-        _rows = -(-len(days) // _c)
-        if _rows + (1 if extra_rows else 0) > _max_rows:
-            continue
-        _score = (_rows * _c - len(days), _rows)   # ①空格少 ②行少
-        if best is None or _score < best[0]:
-            best = (_score, _c)
-    ncol = best[1] if best else min(4, max(1, len(days))) if days else 1
-    nrow = -(-len(days) // ncol) if days else 0
-    cols = [[] for _ in range(ncol)]
-    for i, r in enumerate(days):
-        cols[i % ncol].append(r)                        # 列优先：横读是 D1 → D2 → D3 → D4
-    col_w = [max([entry_w(r) for r in c] or [0]) for c in cols]
-    day_w = sum(col_w) + GAP_COL * (ncol - 1)
-
     ext_w = 0.0
     for i, r in enumerate(extra_rows):
         ext_w += entry_w(r) + (GAP_COL * 2 if i else 0)
 
-    nrow_all = nrow + (1 if extra_rows else 0)
-    # 符号簇的列数**跟着分日格子的行数走**：两簇行数不一致时（比如 5 类符号 3 列 2 行、
-    # 分日 2 行 + 附加 1 行 = 3 行），底边对齐会让符号簇孤零零吊在下面、上方一片空。
-    # 按 "ceil(符号数 / 行数)" 反算列数，两簇就等高，读起来是一个整体。
-    sym_cols = min(4, max(1, -(-len(syms) // max(1, nrow_all)))) if syms else 1
-    sym_cols = min(sym_cols, max(1, len(syms)))
-    sym_rows = -(-len(syms) // sym_cols)
-    # 符号占位**按图钉实际直径算**（2026-11-18）：符号改成 `mk_pin(k=_vk())` 后与图面
-    # 逐像素同尺寸，写死的 16 px 槽位（当年给 0.52 倍色点留的）会让图钉撞上名字。
-    # 槽位 = 半个图钉 + 间隙 + 文字 + 列距。
-    _glyph = _pin_d()                     # = PIN_D × _vk()，与 mk_pin(k=_vk()) 一致
-    _txt_dx = _glyph / 2.0 + 6.0
-    sym_cell = max([_txt_dx + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
-    sym_w = sym_cell * sym_cols
-
-    grid_w = max(day_w, ext_w)
-    total = sym_w + GAP_BLOCK + grid_w
-    h = max(nrow_all, sym_rows) * PITCH
-
-    # 标题块右缘：只算**和图例同高**的两行（主标题 82 / 副题 112）。
-    # badge 在 y=30、图例顶边在 y≈50 以下，纵向不重叠，不必为它让宽 ——
-    # 早先把 badge 也算进来（且 `&nbsp;` 被当成 6 个字量宽），avail 直接被压到 535 px。
+    # ---- 可用宽 / 可用高（列数枚举要用，先算） ----
     x_left = 40
     t = _CFG.get("title") or _CFG.get("file_stem") or ""
     sub = _CFG.get("title_lite") or ""
-    # 标题块宽度要按**缩后**的字号量（outer_k 是带高被 band_max_ratio 压出来的系数），
-    # 否则带子缩小时会误判"没地方"，把图例多缩一档。
+    # 标题块宽度要按**缩后**的字号量（outer_k 是带高被 band_max_ratio 压出来的系数）。
+    # ⚠ badge 不参与让宽：它基线在 y≈0.18×带高（≤28），图例顶边最低也在
+    #   y_bottom - 4×26 ≈ 46，纵向天然错开。曾把它算进来（27 字×15 px）把 avail
+    #   从 420 压到 309、k 从 0.66 掉到 0.58，纯属自伤（2026-11-18 实测回退）。
     _right = x_left + max(GC.text_w(t, 44 * outer_k) + 2, GC.text_w(sub, 16 * outer_k))
     avail = x_right - (_right + 26)
-    # 宽度和高度都要过：行数多到顶住数据行时，也等比缩下去（别只按宽度算）
-    # 下限 0.62 → 0.45（2026-11-08）：带高被硬压到 0.6 档时，0.62 的下限会让图例溢出带子。
-    k = max(0.45, min(1.0, avail / total, _avail_h / h)) if total else 1.0
+    # ⚠ 标题带图例模式下**不画数据行**（_title_band 里明确跳过），旧写法却仍扣
+    #   `68 * outer_k`（数据行基线 52 + 下缘 16），白扔掉六成带高 → k 被压到下限、
+    #   图钉糊成小点（2026-11-18 缙磐四尖实测：k=0.45、块高只剩 23 px）。
+    #   现在只留 3 px 给带下沿横线（脚注在左下，与右下角图例横向不重叠）。
+    # ⚠ 顶边硬下限：badge 那行（"全线地图 · …"）基线在 y≈0.18×带高、字号 15×outer_k，
+    #   图例顶边必须降到它下面，否则符号会压在"顺时针环线"上（2026-11-18 实测：
+    #   去掉 badge 让宽后枚举选了"符号 1 列 8 行"，顶边 y=3 正好撞 badge）。
+    #   注意这是**顶边**约束、不是把 badge 算进宽度：后者把 avail 从 432 压到 309。
+    _top_floor = 0.18 * _title_h() + 15 * outer_k + 4 * outer_k
+    avail_h = max(1.0, y_bottom - _top_floor)
+
+    # ---- 符号槽位：按图钉实际直径算（与 mk_pin(k=_vk()) 同尺寸） ----
+    _glyph = _pin_d()                     # = PIN_D × _vk()
+    _txt_dx = _glyph / 2.0 + 6.0
+    sym_cell = max([_txt_dx + GC.text_w(nm, FS) for _k, nm in syms] or [0]) + 14
+
+    # ---- 动态枚举列数：联合优化「分日列数 × 符号列数」，取缩放系数 k 最大的 ----
+    # 旧写法只按"空格少/行少"选分日列数，符号列数再跟着行数反推，完全不看宽度：
+    # 近方画幅（IW=846）下符号 4 列吃 404 px、分日 2 列吃 767 px，total=1204
+    # 对 avail≈530 → k 触底 0.45，图钉出图只剩 11 px（图面是 25 px）。
+    # 现在让"少列换高度"参与竞争，同时每块顶边必须 ≥ _top_floor（避开 badge）。
+    # 两轮：第一轮带顶边约束；极端窄带无解时第二轮放宽（总比不画图例强）。
+    best = None
+    for _floor in (_top_floor, 0.0):
+        _ah = max(1.0, y_bottom - _floor)
+        for _nc in range(1, 5):
+            if days and _nc > len(days):
+                break
+            _cols = [[] for _ in range(_nc)]
+            for i, r in enumerate(days):
+                _cols[i % _nc].append(r)                   # 列优先：横读 D1 → D2 → D3
+            _cw = [max([entry_w(r) for r in c] or [0]) for c in _cols]
+            _gw = max(sum(_cw) + GAP_COL * (_nc - 1), ext_w)
+            _dr = -(-len(days) // _nc) if days else 0
+            for _sc in range(1, 5):
+                if syms and _sc > len(syms):
+                    break
+                _nr = max(_dr + (1 if extra_rows else 0),
+                          -(-len(syms) // _sc) if syms else 0)
+                _tt = sym_cell * _sc + GAP_BLOCK + _gw
+                _hh = _nr * PITCH
+                _kk = min(1.0, avail / _tt, _ah / _hh) if _tt and _hh else 1.0
+                if y_bottom - _hh * _kk < _floor:
+                    continue
+                _score = (_kk, -_hh)                        # ①字号尽量大 ②同号取更矮
+                if best is None or _score > best[0]:
+                    best = (_score, dict(ncol=_nc, scol=_sc, cols=_cols, col_w=_cw,
+                                         nrow=_dr, nrow_all=_nr, sym_w=sym_cell * _sc,
+                                         grid_w=_gw, total=_tt, h=_hh, k=_kk))
+        if best is not None:
+            break
+    _L = best[1]
+    ncol, sym_cols = _L["ncol"], _L["scol"]
+    cols, col_w = _L["cols"], _L["col_w"]
+    nrow, nrow_all = _L["nrow"], _L["nrow_all"]
+    sym_w, grid_w, total, h = _L["sym_w"], _L["grid_w"], _L["total"], _L["h"]
+    sym_rows = -(-len(syms) // sym_cols) if syms else 0
+    # 下限 0.45（2026-11-08）：极端长标题 / 超多天时仍要塞进带子，不能溢出。
+    k = max(0.45, _L["k"])
+    # 符号对外层 k 反向补偿：外层 scale(k) 之后，图例图钉直径回到 _pin_d()，
+    # 与图面逐像素同尺寸（2026-11-18 用户定案）——"放不下"缩的是整块版式，
+    # 不是让符号单独缩成点。槽位仍按 _glyph（=图面尺寸）算，二者在缩放后一致。
+    _sym_k = _vk() / k
 
     # 本地坐标原点 = 块左上角；整块 translate 到右下角落点再 scale
     ox = x_right - total * k
@@ -1875,9 +1890,9 @@ def _title_legend(x_right, y_bottom, outer_k=1.0):
         # 2026-11-18 用户：图例符号必须**和图上符号同尺寸、同样式**。
         # 旧写法 `scale(0.52)` + `k=1.0`：符号被缩到 0.52 倍、且 k 不随画幅走，
         # 于是大画幅上地图里是 76 px 的图钉、图例里只剩一个 27 px 的色点（用户截图）。
-        # 改成和 POI 绘制同一条路：`k=_vk()`、不额外缩放 —— 图例与图面逐像素同尺寸。
-        # 放不下由外层 `k`（按 avail / _avail_h 算）整块等缩，符号跟着一起缩。
-        o.append(f'<g transform="translate({cx:.1f},{cy:.1f})">{mk_pin(0, 0, kind, k=_vk())}</g>')
+        # 现在 `k=_sym_k = _vk()/外层k`：外层 scale(k) 之后正好回到 _vk()，
+        # 图例符号与图面符号逐像素同尺寸（外层缩的是整块版式，不单独缩符号）。
+        o.append(f'<g transform="translate({cx:.1f},{cy:.1f})">{mk_pin(0, 0, kind, k=_sym_k)}</g>')
         o.append(f'<text x="{cx + _txt_dx:.1f}" y="{cy + 4:.1f}" font-size="{FS:.1f}" '
                  f'font-weight="700" fill="#4A5261">{_esc(nm)}</text>')
 
