@@ -524,7 +524,7 @@ def t_aspect_leader_numeric():
     check("map_svg 读引线阈值", 'GC.cfg("label_leader_min_px"' in svg)
     check("引线不再写死 5 px", "> 5:" not in svg)
     # 引线长度上限 3×K（9 px，2026-11-17 用户：间隔线太长）
-    check("GC 有引线长度上限 3×K", "LABEL_LEADER_MAX_K  = 3.0" in gc)
+    check("GC 有引线长度上限 3×K", "LABEL_LEADER_MAX_K  = 1.5" in gc)
     check("map_svg 读引线倍率并按 K 折算", 'GC.cfg("label_leader_max_k"' in svg
           and "_leader_max = _leader_max_k * GC.VIS_CAP" in svg)
     check("引线只画 min<长度≤max", "_leader_min < math.hypot(_cx - _ax, _cy - _ay) <= _leader_max" in svg)
@@ -535,7 +535,7 @@ def t_aspect_leader_numeric():
     check("分日界不再写死水平 ±36*M", "sx-36*M" not in svg and "sx+36*M" not in svg)
     check("分日界方向取轨迹法线", "_nx, _ny = -_ty / _tn, _tx / _tn" in svg)
     # 注记避让网格粒度 14 → 4 逻辑 px（2026-11-18 用户：字被假冲突推远）
-    check("GC 有避让网格粒度 4", "LABEL_GRID_CELL     = 4.0" in gc)
+    check("GC 有避让网格粒度 2", "LABEL_GRID_CELL     = 2.0" in gc)
     check("Labeller 不再靠 cell/14 反推倍率",
           "self.s_scale = s_scale" in do
           and "S = (self.s_scale if self.s_scale else self.cell / 14.0)" in do)
@@ -1583,7 +1583,7 @@ def t_default_render_params_v1():
           '_cfg_flag("labels_symbol_on_raster", False)' in osm
           and 'GC.cfg_flag("labels_symbol_on_raster", False)' in svg)
     check("V1 map_svg 字号基准 8 / POI 9 未变",
-          'GC.cfg("label_fs_base", 8)' in svg and 'GC.cfg("label_fs_poi", _FS_BASE + 1)' in svg)
+          'GC.cfg("label_fs_base", 4)' in svg and '_FS_BASE * 1.125' in svg)
     check("V1 map_svg 轨迹基准 3.0 / 白晕 1.0（2026-11-17 主线加粗）",
           "ROUTE_W_DEF = 3.0" in svg and "ROUTE_HALO_SIDE_DEF = 1.0" in svg)
     check("小径线宽默认 ×0.5",

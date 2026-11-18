@@ -84,7 +84,11 @@ def _sw(old):
 
 def _halo_sw_text(fs):
     """文字白晕描边宽度（逻辑 px）。"""
-    return _sw(max(0.8, fs * 0.13))
+    ho = _halo_out()
+    if ho is not None:
+        # 2026-11-18 用户：底图地名白描边 = 1×halo_out（原来 2×，JPG 里 20 px 太糊）
+        return 1.0 * ho
+    return max(0.8, fs * 0.13)
 
 
 def _halo_sw_sym():
@@ -623,8 +627,8 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
 # ---- 全局字号口径（2026-10-24）----
 # 用户要求：① 全图字体统一（底图地名 8 px）；② 轨迹标注只比底图地名大 1 px。
 # 两个值都可在 route_def.CFG 覆盖。深度/层级改由**颜色与白晕**承担，不再靠字号拉开。
-_FS_BASE = float(GC.cfg("label_fs_base", 8) or 8)
-_FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE + 1) or (_FS_BASE + 1))
+_FS_BASE = float(GC.cfg("label_fs_base", 4) or 4)
+_FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE * 1.125) or (_FS_BASE * 1.125))
 
 
 def _load_base_labels():
@@ -976,7 +980,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             # 短引线看着像脏线，反而干扰阅读（2026-11-17 用户）。
             if _leader_min < math.hypot(_cx - _ax, _cy - _ay) <= _leader_max:
                 out.append(f'<line x1="{_ax:.1f}" y1="{_ay:.1f}" x2="{_cx:.1f}" '
-                           f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.5" '
+                           f'y2="{_cy:.1f}" stroke="{c1}" stroke-width="0.1" '
                            f'stroke-opacity="0.55"/>')
             t = it["t"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             wt = 700          # 字号统一后不再靠字重区分主次（白晕 + 颜色承担）
