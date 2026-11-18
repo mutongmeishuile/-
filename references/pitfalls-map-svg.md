@@ -913,3 +913,17 @@ def _use_band(with_title):
    宽屏线路（实走 187 km，ss=13 → 254 MP）没问题。
 2. `shot_max_mp` 与 `shot_band_min_logical` 必须成对改（见 SKILL.md 出图清晰度表）。
    只改前者不生效：`band_logical = max(600, band_px//ss)` 会把带高钉死在 600 逻辑 px。
+
+## §40 `preflight_labels` 的底图字号要按 **labels_vector 模式**算（2026-11-18 天目山七尖）
+
+`preflight_labels` 早先固定用 `draw_osm` 的七档（城镇 15.5 / 村庄 14 / 小地名 12.5 /
+高峰 14 / 一般峰 13 / 次级峰 11 / 水系 11.5 逻辑 px）报"底图地名"。
+
+但 **`labels_vector=True`（默认）时这七档根本不进图**：文字由 `map_svg` 用
+`label_fs_base × _vk()` 一档统一重画，七档只在 `labels_vector=False`（烤像素）时才可见。
+后果是预检得出"POI 名 7.6 px < 底图一般峰名 11.0 px → 主次颠倒"的**假警报**，
+照着它去抬 `label_fs_poi`，出图后会发现 POI 名反而比地名大一倍。
+
+现在按模式分叉：矢量模式只报一行「底图 · 地名（矢量统一档）= `label_fs_base`」，
+烤像素模式仍报七档；后面按**名字**取行下标（原先写死 `rows[5]/rows[7]/rows[8]`，
+行数一变就取错行，报警文字会张冠李戴）。

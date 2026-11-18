@@ -77,18 +77,35 @@ def main(quiet=False):
         """出图 px → 缩到 1504 宽时的等效 CSS px。"""
         return px * REF_W / W_px
 
-    rows = [
-        # 名称, 逻辑 px, 出图 px
-        ("底图 · 城镇", 15.5, max(6, round(15.5 * S))),
-        ("底图 · 村庄", 14, max(6, round(14 * S))),
-        ("底图 · 小地名", 12.5, max(6, round(12.5 * S))),
-        ("底图 · 高峰名", 14, max(6, round(14 * S))),
-        ("底图 · 一般峰名", 13, max(6, round(13 * S))),
-        ("底图 · 次级峰名", 11, max(6, round(11 * S))),
-        ("底图 · 水系/兴趣点", 11.5, max(6, round(11.5 * S))),
+    # ⚠ 底图地名有两套口径，别混：
+    #   · labels_vector=True（默认）→ 文字不烤进栅格，由 map_svg 用**统一档**
+    #     `label_fs_base × _vk()` 重画（`draw_osm` 的 15.5/14/12.5… 七档只在栅格里生效，
+    #     也就是 labels_vector=False 时才看得到）。矢量模式下底图七档全部塌成 fs_base 一档，
+    #     预检必须按同一口径算，否则会得出「POI 名比底图小、主次颠倒」的假警报。
+    #   · labels_vector=False → 走下面这七档。
+    _vec = str(cfgv("labels_vector", True)).lower() not in ("false", "0", "no", "")
+    if _vec:
+        _base_rows = [("底图 · 地名（矢量统一档）", fs_base, max(6, round(fs_base * S)))]
+    else:
+        _base_rows = [
+            ("底图 · 城镇", 15.5, max(6, round(15.5 * S))),
+            ("底图 · 村庄", 14, max(6, round(14 * S))),
+            ("底图 · 小地名", 12.5, max(6, round(12.5 * S))),
+            ("底图 · 高峰名", 14, max(6, round(14 * S))),
+            ("底图 · 一般峰名", 13, max(6, round(13 * S))),
+            ("底图 · 次级峰名", 11, max(6, round(11 * S))),
+            ("底图 · 水系/兴趣点", 11.5, max(6, round(11.5 * S))),
+        ]
+    rows = _base_rows + [
         ("攻略 POI 名", fs_poi, max(3, round(fs_poi * S))),
         ("计曲线高程数字", MT.LABEL_FONT, max(6, round(MT.LABEL_FONT * S))),
     ]
+    # 后面按固定下标取行（次级峰名 / POI / 计曲线）——矢量模式下下标整体前移，改用名字查
+    _ri = {r[0]: i for i, r in enumerate(rows)}
+    i_osm_min = _ri.get("底图 · 次级峰名", _ri.get("底图 · 地名（矢量统一档）", 0))
+    i_poi = _ri["攻略 POI 名"]
+    i_cont = _ri["计曲线高程数字"]
+    i_peak = _ri.get("底图 · 一般峰名", _ri.get("底图 · 地名（矢量统一档）", 0))
 
     print(f"窗口  {lon0:.5f}, {lat0:.5f} → {lon1:.5f}, {lat1:.5f}")
     print(f"      {src}")
@@ -104,9 +121,9 @@ def main(quiet=False):
               f"{eq(px):>11.1f}px{m_per_px * px:>9.0f}m")
 
     warn = []
-    osm_min = eq(rows[5][2])          # 次级峰名 = 最小一档
-    poi_eq = eq(rows[7][2])
-    cont_eq = eq(rows[8][2])
+    osm_min = eq(rows[i_osm_min][2])   # 最小一档：次级峰名（矢量模式 = 统一档）
+    poi_eq = eq(rows[i_poi][2])
+    cont_eq = eq(rows[i_cont][2])
     if osm_min < OK_LO:
         warn.append(f"底图最小一档只有 {osm_min:.1f} px（1504 宽）→ 缩略后读不清；"
                     f"`label_font_cap` 提到 {cap * OK_LO / max(osm_min, .1):.1f} 或 `map_ss` 调小")
@@ -115,7 +132,7 @@ def main(quiet=False):
                     f"`label_font_cap` 降到 {cap * OK_HI / osm_min:.1f}")
     # 层级判据：攻略 POI 必须 ≥ 底图「一般峰名」那一档，否则图上主次颠倒
     # （2026-11-18 缙磐四尖实测：POI 27 px < 村庄 42 px，看图像底图地名才是主角）。
-    ref_peak = eq(rows[4][2])
+    ref_peak = eq(rows[i_peak][2])
     if poi_eq < POI_LO:
         warn.append(f"POI 名只有 {poi_eq:.1f} px（1504 宽），太小 → "
                     f"`label_fs_poi` 提到 {fs_poi * POI_LO / max(poi_eq, .1):.1f}")
@@ -137,8 +154,8 @@ def main(quiet=False):
             print(f"上次实测：落位 {gap.get('落位', '?')} · 挤放 {gap.get('挤放', '?')} · "
                   f"抑制 {gap.get('抑制', '?')}（来自 make_terrain 日志）")
         # 容量粗估：每个字标的占位 ≈ (1.25×字号)²，全图可用面积按 35% 算（轨迹/家具/空白）
-        area_cell = (eq(rows[5][2]) * 1.25 * REF_W / W_px * W_px / REF_W) ** 2
-        area_cell = (rows[5][2] * 1.25) ** 2
+        area_cell = (eq(rows[i_osm_min][2]) * 1.25 * REF_W / W_px * W_px / REF_W) ** 2
+        area_cell = (rows[i_osm_min][2] * 1.25) ** 2
         cap_est = int(0.35 * W_px * (W_px / ratio) / max(area_cell, 1))
         print(f"容量粗估：{cap_est} 个（字号越大越少）"
               f"　候选/容量 = {cand['总'] / max(cap_est, 1):.2f}"

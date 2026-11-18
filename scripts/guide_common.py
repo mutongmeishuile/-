@@ -1135,31 +1135,60 @@ def ele_valid_bounds(vals):
     return (-400.0 if med < 500 else 500.0), 9000.0
 
 
-def fix_invalid_ele(ele):
-    """把 0 / -32768 / 越界高程按前后有效点线性插值补上。返回 (新列表, 修正点数)。"""
-    lo_ok, hi_ok = ele_valid_bounds(ele)
+def fix_invalid_ele(ele, local_w=21, local_d=400.0):
+    """把哨兵值 / 局部离群高程按前后有效点线性插值补上。返回 (新列表, 修正点数)。
 
-    def ok(v):
-        return v != 0 and v != -32768 and lo_ok <= v <= hi_ok
-
-    idx = [i for i, v in enumerate(ele) if ok(v)]
-    if not idx or len(idx) == len(ele):
+    判据演进（三次踩坑，别再退回全局上下界）：
+      ① 2026-10-27：全局写死 `[500, 9000]` → 低海拔海岸线（麦理浩径 0–914 m）
+         87% 的点被判无效、互相插值 → 剖面压平在 500.9 m、累计爬升 741 m（真值 5027）。
+      ② 2026-11-16：改成"中位 < 500 就用 -400" → 只救回**整条线都低**的情况。
+      ③ 2026-11-18 天目山七尖实测：中位 1200 m 的中高山线，两端谷底（288–500 m）
+         仍被 500 m 下界判无效 → 1994 个点被插值压平到 500 m，剖面两端各起一道假台阶，
+         累计升降少报 190 m（3640 vs 3833），**全程不报错**。
+    现在用**局部**判据：只抓"与前后 ±local_w 个点的中位数相差 > local_d"的孤立离群值。
+    GPS 高程极少与邻居差 400 m，而「恰好 0」「-32768」「单点跳变」都会被抓住；
+    连续的低海拔段因为邻居同样低，整体保留。
+    """
+    n = len(ele)
+    if not n:
         return list(ele), 0
+
+    def _sentinel_ok(v):
+        return v != 0 and v != -32768 and -400.0 <= v <= 9000.0
+
+    base_idx = [i for i, v in enumerate(ele) if _sentinel_ok(v)]
+    if not base_idx:
+        return list(ele), 0
+    pos = {j: k for k, j in enumerate(base_idx)}
+    valid = []
+    for i in base_idx:
+        k = pos[i]
+        win = sorted(ele[j] for j in base_idx[max(0, k - local_w):k + local_w + 1])
+        if abs(ele[i] - win[len(win) // 2]) <= local_d:
+            valid.append(i)
+    if not valid:
+        return list(ele), 0
+    if len(valid) == n:
+        return list(ele), 0
+
     out = list(ele)
-    n = 0
-    for i in range(len(out)):
-        if ok(out[i]):
+    n_fix = 0
+    vi = 0
+    for i in range(n):
+        if vi < len(valid) and valid[vi] == i:
+            vi += 1
             continue
-        a = max([j for j in idx if j < i], default=None)
-        b = min([j for j in idx if j > i], default=None)
+        # 前后最近的有效点
+        a = valid[vi - 1] if vi > 0 else None
+        b = valid[vi] if vi < len(valid) else None
         if a is None:
             out[i] = ele[b]
         elif b is None:
             out[i] = ele[a]
         else:
             out[i] = ele[a] + (ele[b] - ele[a]) * (i - a) / (b - a)
-        n += 1
-    return out, n
+        n_fix += 1
+    return out, n_fix
 
 # ============================================================ 全局默认成图参数 V1
 # DEFAULT_PARAMS_V1（2026-11-17 用户定案）：以后所有出图统一这套口径。

@@ -104,37 +104,19 @@ def main():
     #   **有效点线性插值**补上；整条轨迹都无效时退回原值。
     #   ⚠ 下界 lo **不能写死 500**（2026-11-16 麦理浩径踩坑）：那条线全程 0–914 m，
     #     写死 500 会把 87% 的点判成无效、再互相插值 → 整条剖面被压平在 500.9 m、
-    #     累计爬升只剩 741 m（真值约 4000）且**不报错**。改为按中位数自适应下界：
-    #     中位高程 < 500 m 的低海拔线路用 -400（保留 0 以下的海平面点），否则沿用 500。
-    #     两种情况都把「恰好 0」当哨兵值 —— GPS 不会给出 float 精确 0 的真高程。
+    #     累计爬升只剩 741 m（真值约 4000）且**不报错**。之后改成"按中位数自适应"，
+    #     但**仍然错**：中位数只看整条线，低起终点的中高山线（天目山七尖 288–1586 m，
+    #     中位 ~1200 m）会把两端谷底 1994 个点判成无效、插值压平到 500 m ——
+    #     剖面两端各起一道假台阶，累计升降也少报，全程不报错。
+    #   ✅ 2026-11-18 定案：判据**只写一份**在 guide_common.fix_invalid_ele()
+    #     （哨兵值 + 局部离群：与前后 ±21 点的中位数差 > 400 m 才算无效）。
+    #     原先这里与 build_guide 各写一份，改了一处另一处还是旧的 → 页面数据条
+    #     与时间表的累计升降对不上（实测 3833 vs 3640），属于"数字口径不一致"。
+    import guide_common as _GC
     raw_ele = [p[2] for p in raw]
-    _srt = sorted(v for v in raw_ele if -32768 < v < 9000)
-    _med = _srt[len(_srt) // 2] if _srt else 0.0
-    lo_ok = -400.0 if _med < 500 else 500.0
-
-    def _ele_ok(v):
-        return (v != 0) and (v != -32768) and (lo_ok <= v <= 9000)
-
-    ok = [i for i, v in enumerate(raw_ele) if _ele_ok(v)]
-    if ok and len(ok) < len(raw_ele):
-        ele = list(raw_ele)
-        n_fix = 0
-        for i in range(len(ele)):
-            if _ele_ok(ele[i]):
-                continue
-            lo = max([j for j in ok if j < i], default=None)
-            hi = min([j for j in ok if j > i], default=None)
-            if lo is None:
-                ele[i] = raw_ele[hi]
-            elif hi is None:
-                ele[i] = raw_ele[lo]
-            else:
-                t = (i - lo) / (hi - lo)
-                ele[i] = raw_ele[lo] + (raw_ele[hi] - raw_ele[lo]) * t
-            n_fix += 1
-        print(f"⚠ 修正无效高程 {n_fix} 点（0 / -32768 / 越界值 → 前后有效点插值）")
-    else:
-        ele = raw_ele
+    ele, n_fix = _GC.fix_invalid_ele(raw_ele)
+    if n_fix:
+        print(f"⚠ 修正无效高程 {n_fix} 点（哨兵值 / 局部离群 → 前后有效点插值）")
     sm = []
     for i in range(len(ele)):
         a, b = max(0, i - 5), min(len(ele), i + 6)

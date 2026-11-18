@@ -576,6 +576,9 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 |---|---|
 | 地图画成"别的山" / 轨迹跑到画布外 | `guide_common.resolve_bbox()` + `assert_bbox_covers()`（窗口写死是根源） |
 | 解析出 0 个点 | `preflight.py` 会替你数 gx:coord / trkpt / LineString；KML 与 GPX 都走 `parse_track_kml.py` |
+| **低海拔起终点被判无效、剖面两端起假台阶** / 页面数据条与时间表累计升降对不上 | `references/track-prep.md` §11（高程有效性只认「局部离群」；判据只能有一处实现） |
+| **同一座山顶出现两条名字**（底图「三尖药王峰」+ 攻略「药王峰（第3尖）」） | `references/pitfalls-terrain.md` §39（skip 要从 `label_boxes.json` 反查，且跳过一条会放出下一条） |
+| **预检说 POI 名比底图小、出图却相反** | `references/pitfalls-map-svg.md` §40（矢量模式下底图七档不生效，统一走 `label_fs_base`） |
 | 长线（>100 km）渲底图特别慢 / 内存爆 | `references/self-hosted-terrain.md` §2.1（`pick_dem_z()` 降档，25 min → 1 min） |
 | 图例压住山体 / 占比过大 | `references/pitfalls-map-svg.md` §21（`CFG["legend_outside"]=True`） |
 | **写了 `legend_place="band"` 却一个图例都没有** / 通栏图例带串列 | `references/pitfalls-map-svg.md` §25（`_use_band` 修好前只有旧键 `legend_outside` 出带子；4 列每列仅 356 px，`legend_band_cols=3`） |

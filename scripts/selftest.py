@@ -1547,8 +1547,15 @@ def t_ele_valid_lowalt():
           max(fixed) - min(fixed) > 300, f"range={max(fixed) - min(fixed):.0f} m")
     lo, hi = GC.ele_valid_bounds([5, 300, 900])
     check("低海拔线路：有效下界自适应到 -400", lo == -400 and hi == 9000, f"{lo}–{hi}")
-    lo2, _ = GC.ele_valid_bounds([3500, 4200, 5000])
-    check("高海拔线路：有效下界仍是 500", lo2 == 500, f"{lo2}")
+    # 中高山线 + 低起终点（天目山七尖 288–1586 m，中位 1200 m）：
+    # 2026-11-18 实测，全局 500 m 下界会把两端谷底 1994 点判无效、压平到 500 m。
+    # 局部判据必须只修正那 1 个哨兵值，其余低海拔点原样保留。
+    ele2 = [300 + 1200 * min(i, 399 - i) / 199.0 for i in range(400)]
+    ele2[200] = 0
+    fixed2, n2 = GC.fix_invalid_ele(ele2)
+    check("中高山线：只修哨兵值，谷底不判无效", n2 == 1, f"修正 {n2} 点（应为 1）")
+    check("中高山线：起点 300 m 原样保留", abs(fixed2[0] - 300) < 1, f"{fixed2[0]:.1f} m")
+    check("中高山线：峰值仍在 1500 m 附近", abs(max(fixed2) - 1500) < 3, f"{max(fixed2):.1f} m")
 
 
 # ---------------------------------------------------------------- 全局默认成图参数 V1
