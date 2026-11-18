@@ -65,6 +65,20 @@ def _vk():
     return float(_VIS["k"])
 
 
+def _label_lead_max():
+    """标注引线 / 标注到锚点距离的硬上限（逻辑 px）= K × 倍数。
+
+    K = GC.VIS_CAP（统一系数上限，默认 3）。2026-11-18 用户定案倍数 2 → 6 px。
+    线路可 CFG["label_leader_max_k"] 覆盖；与底图地名引线同一口径。
+    """
+    try:
+        _k = float(GC.cfg("label_leader_max_k", GC.LABEL_LEADER_MAX_K)
+                   or GC.LABEL_LEADER_MAX_K)
+    except Exception:                                              # noqa
+        _k = GC.LABEL_LEADER_MAX_K
+    return _k * GC.VIS_CAP
+
+
 def _halo_out():
     """白底单侧外扩量（逻辑 px）= halo_out_px 输出 px / SS，固定不随超采。
 
@@ -197,31 +211,33 @@ def _upright_text(svg, phi):
 
 # ---------------------------------------------------------------- 标注避让（动态定位）
 def _layout(x, y, dx, dy, anc, w, fs, commit=True):
-    """给标注找一个位置，返回 (tx, ty, anchor, box, overlap_area)。
+    """给 POI 标注找一个位置，返回 (tx, ty, anchor, box, overlap_area)。
 
     `area == 0` = 完全不压任何已占用矩形（完美落位）；`> 0` = 压到的面积（px²）。
     **纯函数**（除 commit 外无副作用）：调用方（build_map_overlay 的字号阶梯）
     需要反复试探不同字号，若每次试探都往 _OCC 里登记，落选的方案会把后来的
     标注全部挤走——2026-10-17 北天山中线实测踩过这个坑。
 
-    位置候选（"动态合理"）：
-      ① route_def 里配置的 (dx, dy, anchor) 永远排最前 —— 作者意图优先；
-      ② 其后是 8 方向 × 4 档半径的搜索，锚向随所在侧自动选（右侧 start /
-         左侧 end / 正上下 middle），半径以行高 h 为单位，最多外扩 ~2.8h。
-    ⚠ 旧实现只沿纵向往复试 0/±1h/±2h…：标注一多（本线 26 个）就互相压。
+    位置候选（2026-11-18 用户二次定案）：
+      ① 正右侧、垂直居中；② 正左侧、垂直居中；
+      ③ 作者 dy 斜向微调（仍受上限约束）；④ 四周（上/右上/下/右下/左上/左下）。
+    ⚠ 所有候选「锚点到字框最近距离」硬限 K×2 逻辑 px（K=VIS_CAP=3 → 6 px），
+      从源头杜绝「字被避让甩到另一个山头、一根长引线横穿图面」。
     """
     h = fs * 1.6
-    # 2026-11-18 用户定案：POI 标注**优先正右 / 正左、垂直居中**。
-    # 旧实现把作者配置的 (dx, dy) 无条件排第一 → dy=±24 的斜向微调总被采用，
-    # 实测「浪茄湾营地」(30,24) 落在右下方 38 逻辑 px，用户："太远、不在正左右"。
-    # 现在：(dx, 0) 正位优先 → (dx, dy) 作者微调位 → 8 方向递远。
-    plans = [(dx, 0.0, anc), (dx, dy, anc)]
-    if anc == "middle":
-        plans += [(w / 2 + 34, dy, "start"), (-w / 2 - 34, dy, "end")]
-    for r in (0.7 * h, 1.4 * h, 2.1 * h, 2.8 * h):
-        for sx, sy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)):
+    _cap = _label_lead_max()
+    # 正位紧贴图钉：图钉半径 + 2 px，不越上限
+    _gap = min(max(_PIN_R + 2.0, 2.0), _cap)
+    plans = [(_gap, 0.0, "start"), (-_gap, 0.0, "end")]
+    if dx or dy:
+        plans.append((math.copysign(min(abs(dx), _cap), dx),
+                      math.copysign(min(abs(dy), _cap), dy), anc))
+    # 四周：半径按上限分三档，不再用 h 的倍数（h≈1.6×字号，必然远越上限）
+    for r in (_cap * 0.45, _cap * 0.75, _cap):
+        for sx, sy in ((0, -1), (1, -1), (0, 1), (-1, -1),
+                       (1, 1), (-1, 1), (1, 0), (-1, 0)):
             a = "start" if sx > 0 else ("end" if sx < 0 else "middle")
-            plans.append((sx * r, sy * r + (h * 0.5 if sy else 0.0), a))
+            plans.append((sx * r, sy * r, a))
 
     def boxof(ox, oy, a):
         tx, ty = x + ox, y + oy
@@ -235,22 +251,26 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
     free, loose = None, None
     for _pi, (ox, oy, a) in enumerate(plans):
         tx, ty, box = boxof(ox, oy, a)
+        # 硬上限：字离锚点超过 K×2 px 的候选一律不参与（无论重叠多少）
+        if dist(box) > _cap + 0.5:
+            continue
         x0, y0, x1, y1 = box
         if x0 < _PAD or x1 > IW - _PAD or y0 < _PAD or y1 > IH - _PAD:
             continue
         area = sum(GC.rect_overlap_area(box, o) for o in _OCC)
-        # 压到轨迹（含白晕）= 不可接受：2026-10-21 实测 POI 标注会正正落在
-        # 白色线道上（"措学仁玛营地"横穿白带），因为 _OCC 里只有图钉与家具，
-        # 线本身从来没进过占位表。给一个极大的罚值，让候选位一律先避开线。
-        if area == 0 and _TRK and _near_track(box, _TRK, _TRK_HW):
-            area = 1e6
+        # ⚠ 2026-11-18 用户二次定案：标注必须贴锚点（cap=K×2 逻辑 px），而轨迹线
+        # 本来就穿过图钉 —— 贴着摆必然压线。旧版给压轨迹 1e6 罚值，等于把所有
+        # 正右/正左候选全否掉，只能退到 loose 里缩字号/甩远（起点终点字号差一倍）。
+        # 现在压轨迹只做**同分软偏好**：绝不并入 `area`（那是硬重叠，>0 就进不了
+        # free），否则贴点候选全被误判成"有重叠"又退化成缩字号（高清 k=0.5 实测）。
+        _on_track = 1 if (area == 0 and _TRK and _near_track(box, _TRK, _TRK_HW)) else 0
         if area == 0:
-            # 完美落位里按 plans 顺序取（正右 > 作者微调位 > 8 方向递远）
-            key = (_pi, round(dist(box)))
+            # 完美落位里按 plans 顺序取（正右 > 正左 > 作者微调 > 四周），同序优先不压线
+            key = (_pi, _on_track, round(dist(box)))
             if free is None or key < free[0]:
                 free = (key, tx, ty, a, box, 0.0)
-        elif loose is None or (area, round(dist(box))) < loose[0]:
-            loose = ((area, round(dist(box))), tx, ty, a, box, area)
+        elif loose is None or (area, _on_track, round(dist(box))) < loose[0]:
+            loose = ((area, _on_track, round(dist(box))), tx, ty, a, box, area)
     best = free or loose
     if best is not None:
         _, tx, ty, a, box, area = best
@@ -258,13 +278,17 @@ def _layout(x, y, dx, dy, anc, w, fs, commit=True):
             _OCC.append(box)
             _LABELS.append(box)
         return round(tx, 1), round(ty, 1), a, box, area
-    # 一个候选都放不下（图太小）：退回配置位置，强行落位
-    tx = min(max(x + dx, _PAD + w if dx >= 0 else _PAD), IW - _PAD)
-    ty = min(max(y + dy, _PAD), IH - _PAD)
-    box = (tx - w, ty - h / 2, tx + w, ty + h / 2)
+    # 极端：所有候选越界 → 仍在 cap 内强行落位（右优先、左次之）
+    if x + _gap + w <= IW - _PAD:
+        tx, ty, a = x + _gap, y, "start"
+    elif x - _gap - w >= _PAD:
+        tx, ty, a = x - _gap, y, "end"
+    else:
+        tx, ty, a = min(max(x, _PAD), IW - _PAD), y, "middle"
+    box = boxof(tx - x, ty - y, a)[2]
     if commit:
         _LABELS.append(box)
-    return round(tx, 1), round(ty, 1), anc, box, 1e18
+    return round(tx, 1), round(ty, 1), a, box, 1e18
 
 
 # ---------------------------------------------------------------- 点位符号
@@ -1525,7 +1549,9 @@ def build_map_overlay(mobile=False):
         _LABELS.append(box)                   # ⚠ 自检读 _LABELS：漏登记会变成"0 标注 = 0 重叠"的假通过
         LABEL_OF[name] = box
         gap = max(max(box[0] - x, 0, x - box[2]), max(box[1] - y, 0, y - box[3]))
-        if gap > 34 * M:
+        # 2026-11-18 用户：引线长度硬上限 K×2 逻辑 px（默认 6 px）。
+        # 落位已被 _layout 限在 cap 内，这里再卡一道，杜绝旧版 34*M 无上限的长线。
+        if 2.0 * M < gap <= _label_lead_max():
             px = min(max(x, box[0]), box[2])
             py = min(max(y, box[1]), box[3])
             _lead_core = 1.4 * M * _vk()

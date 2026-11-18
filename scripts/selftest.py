@@ -523,11 +523,17 @@ def t_aspect_leader_numeric():
     check("引线默认阈值常量回到 5", "LABEL_LEADER_MIN_PX = 5.0" in gc)
     check("map_svg 读引线阈值", 'GC.cfg("label_leader_min_px"' in svg)
     check("引线不再写死 5 px", "> 5:" not in svg)
-    # 引线长度上限 3×K（9 px，2026-11-17 用户：间隔线太长）
-    check("GC 有引线长度上限 3×K", "LABEL_LEADER_MAX_K  = 1.5" in gc)
+    # 引线长度上限 2×K（6 px，2026-11-18 用户二次定案：线太长、标注离点太远）
+    check("GC 有引线长度上限 2×K", "LABEL_LEADER_MAX_K  = 2.0" in gc)
     check("map_svg 读引线倍率并按 K 折算", 'GC.cfg("label_leader_max_k"' in svg
           and "_leader_max = _leader_max_k * GC.VIS_CAP" in svg)
     check("引线只画 min<长度≤max", "_leader_min < math.hypot(_cx - _ax, _cy - _ay) <= _leader_max" in svg)
+    check("POI 落位与引线共用同一硬上限 K×2", "def _label_lead_max():" in svg
+          and "if dist(box) > _cap + 0.5:" in svg
+          and "if 2.0 * M < gap <= _label_lead_max():" in svg)
+    check("压轨迹只做软偏好、不并入硬重叠面积",
+          "_on_track = 1 if (area == 0 and _TRK and _near_track(box, _TRK, _TRK_HW)) else 0" in svg
+          and "key = (_pi, _on_track, round(dist(box)))" in svg)
     # 分日界短线限长 3×K 且方向垂直轨迹（2026-11-18 用户）
     check("GC 有分日界长度上限 3×K", "DAY_DASH_MAX_K      = 3.0" in gc)
     check("map_svg 读分日界倍率并按 K 折算", 'GC.cfg("day_dash_max_k"' in svg
@@ -553,9 +559,11 @@ def t_aspect_leader_numeric():
           < svg.index("(gap + r, vmid - r)"))
     check("地名候选有旧集兜底（不减少落位数）",
           "_legacy = []" in svg and "_seen = set(tried)" in svg)
-    # POI 标注：正右/正左优先，作者 dy 只在正位放不下时用（2026-11-18）
+    # POI 标注：正右 → 正左 → 作者微调 → 四周，且全部限在 K×2 内（2026-11-18）
     check("POI 标注正右/正左优先（dy 只在退路）",
-          "plans = [(dx, 0.0, anc), (dx, dy, anc)]" in svg)
+          'plans = [(_gap, 0.0, "start"), (-_gap, 0.0, "end")]' in svg
+          and svg.index('plans = [(_gap, 0.0, "start"), (-_gap, 0.0, "end")]')
+          < svg.index("for r in (_cap * 0.45, _cap * 0.75, _cap):"))
     # 2026-11-18 三修：同名近距离去重 / 符号占位 / 无名字符号不画
     check("底图地名同名且锚点重合只留一条",
           "_kept = {}" in svg and "_uniq = []" in svg and "_prev.append((d[\"x\"], d[\"y\"]))" in svg)
