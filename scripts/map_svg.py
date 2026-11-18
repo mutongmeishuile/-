@@ -1472,10 +1472,11 @@ def build_map_overlay(mobile=False):
         for sc in FS_LADDER:
             fs = base * sc
             w = GC.text_w(txt, fs) + 26 * M
-            # 首选偏移（作者的 dx/dy）要跟字号一起缩：k=1 时逐字不变，
-            # 高清图上字号只放大 ×min(SS,cap)，偏移却照旧 → 标签离图钉越来越远
-            # （2026-11-12 用户："poi 标注似乎离标注点比较远"）。
-            r = _layout(x, y, dx * M * _vk(), dy * M * _vk(), anc, w, fs * 0.86, commit=False)
+            # 首选偏移（作者的 dx/dy）：**不乘 _vk()**。原来乘了视觉倍率，
+            # 高清图 k=3 时 dx=30 实际变成 90 逻辑 px，标签被甩到图钉外两个身位
+            # （2026-11-18 用户："浪茄湾营地离标注点太远"；HTML k=1 时不明显，
+            # 只有看 15000px 高清图才暴露）。字号照常按 k 放大，偏移按作者值固定。
+            r = _layout(x, y, dx * M, dy * M, anc, w, fs * 0.86, commit=False)
             # 优先零重叠；都不零重叠时取面积最小、并列取字号大
             if best is None or r[4] < best[4] - 1e-6 or \
                (abs(r[4] - best[4]) <= 1e-6 and sc > best[5]):
