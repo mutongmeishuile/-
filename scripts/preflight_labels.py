@@ -78,7 +78,7 @@ def main(quiet=False):
     # 会被误报成 base=4「字太小」——实际出图是 6.8，预检必须跟渲染同值。
     fs_base, fs_poi = GC.label_fs_from_cfg(
         IW, (lon0, lat0, lon1, lat1), RD.CFG if hasattr(RD, "CFG") else {})
-    ground_m = float(cfgv("label_ground_m", 0) or 0)
+    ground_m = float(cfgv("label_ground_m", GC.LABEL_GROUND_M) or 0)
     # 计曲线高程数字的字号可被线路单独覆盖（华东K2 用 6 压到低于地名一档）
     contour_fs = float(cfgv("contour_label_font", 0) or MT.LABEL_FONT)
 

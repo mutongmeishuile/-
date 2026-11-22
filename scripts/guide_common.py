@@ -1212,13 +1212,14 @@ MAP_LONG_LOGICAL = 1504
 MAP_ASPECT_LAND  = 16.0 / 9.0
 MAP_ASPECT_PORT  = 9.0 / 16.0
 
-# ---- 「每个字压住 N 米」倒算字号（2026-11-22 用户定案，全线地图强制口径）----
+# ---- 「每个字压住 N 米」倒算字号（2026-11-22 用户定案，技能默认口径）----
 # 判据不是像素，而是**一个字盖住多少地面**：所有线路取同一个 N，换窗口时字号的
 # 绝对 px 自己变，图面文字密度（每公里几个字）保持一致。倒算关系：
 #     逻辑 px / 字 = N × 逻辑宽 / 窗口东西宽(m)
 # 逻辑宽 = 设计画幅宽（16:9 → 1504，9:16 → 846），出图物理 px = 逻辑 px × SS。
-# 0 = 关闭（老行为：route_def 里手填 label_fs_base）。
-LABEL_GROUND_M   = 0.0
+# 2026-11-22 起默认 150 m/字（用户把技能默认值从 0 改成 150）；
+# 显式 0 = 关闭（回到老行为：route_def 里手填 label_fs_base / label_fs_poi）。
+LABEL_GROUND_M   = 150.0
 
 
 def ground_width_m(bbox):
@@ -1243,10 +1244,12 @@ def label_fs_from_cfg(logical_w, bbox, cfg):
 
     map_svg 顶部与 preflight_labels 必须同值（矢量字与栅格避让框同源），
     所以把这段抽到共享库，避免两边各写一遍、日后改一边漏一边。
-    返回 (base, poi)，单位 = 逻辑 px。老项目没有 label_ground_m → 完全回到旧默认值。
+    返回 (base, poi)，单位 = 逻辑 px。
+    ⚠ 不传 label_ground_m 时走技能默认（LABEL_GROUND_M=150）；显式 0 才回老默认。
+    显式 label_fs_base / label_fs_poi 始终优先（老项目逐字不变）。
     """
     cfg = cfg or {}
-    g = label_fs_from_ground(logical_w, bbox, cfg.get("label_ground_m", 0))
+    g = label_fs_from_ground(logical_w, bbox, cfg.get("label_ground_m", LABEL_GROUND_M))
     base = float(cfg.get("label_fs_base", 0) or 0) or (g if g else 4.0)
     poi = float(cfg.get("label_fs_poi", 0) or 0) or ((g * 1.125) if g else base * 1.125)
     return base, poi

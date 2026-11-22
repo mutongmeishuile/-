@@ -21,7 +21,7 @@
 方式一（推荐，跟随更新）：
 
 ```bash
-git clone <本仓库地址> ~/.workbuddy/skills/hiking-route-guide-poster
+git clone git@github.com:mutongmeishuile/-.git ~/.workbuddy/skills/hiking-route-guide-poster
 ```
 
 方式二（离线分发）：把 `hiking-route-guide-poster.zip` 解压到 `~/.workbuddy/skills/` 下即可。

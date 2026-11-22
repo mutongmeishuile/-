@@ -660,15 +660,16 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
 _FS_BASE = float(GC.cfg("label_fs_base", 4) or 4)
 _FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE * 1.125) or (_FS_BASE * 1.125))
 
-# 「每个字压住 N 米」倒算（2026-11-22 用户定案，全线地图）：CFG["label_ground_m"]=700。
+# 「每个字压住 N 米」倒算（2026-11-22 用户定案，技能默认口径）：CFG["label_ground_m"] 默认 150。
 # 显式手填了 label_fs_base / label_fs_poi 的线路照旧优先（逐字保持旧行为）。
-_GROUND_FS = GC.label_fs_from_ground(IW, meta.get("bbox"), GC.cfg("label_ground_m", 0))
+_GROUND_FS = GC.label_fs_from_ground(IW, meta.get("bbox"),
+                                     GC.cfg("label_ground_m", GC.LABEL_GROUND_M))
 if _GROUND_FS:
     if not GC.cfg("label_fs_base", None):
         _FS_BASE = _GROUND_FS
     if not GC.cfg("label_fs_poi", None):
         _FS_POI = _GROUND_FS * 1.125
-    print(f"  字号（地面口径）：每字 {GC.cfg('label_ground_m', 0):g} m → "
+    print(f"  字号（地面口径）：每字 {GC.cfg('label_ground_m', GC.LABEL_GROUND_M):g} m → "
           f"底图 {_FS_BASE:.1f} / POI {_FS_POI:.1f} 逻辑 px "
           f"（出图 {_FS_BASE * min(_VIS['ss'], GC.cfg('label_font_cap', GC.VIS_CAP) or GC.VIS_CAP):.0f} px）")
 

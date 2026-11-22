@@ -1352,11 +1352,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 区域总览图这类「地名密、缩略图看得多」的画幅，分级会让同屏字号 11–15.5 显得杂乱，
     # 配 CFG["osm_label_size"]=13 即可全部拉平。
     _uni_sz = GC.cfg("osm_label_size", None)
-    # 2026-11-22 用户定案（全线地图）：「每个字压住 700 m」倒算字号，CFG["label_ground_m"]。
+    # 2026-11-22 用户定案（技能默认）：「每个字压住 150 m」倒算字号，CFG["label_ground_m"]。
     # 矢量注记模式下本模块只记避让框，字号必须与 map_svg 的 _FS_BASE 完全同值
     # （同为「逻辑 px」，物理 = ×F() 的 S），否则框比字大/小、避让全错。
     _fsg = GC.label_fs_from_ground(pil.size[0] / S_IN if S_IN else 0,
-                                   meta.get("bbox"), GC.cfg("label_ground_m", 0))
+                                   meta.get("bbox"),
+                                   GC.cfg("label_ground_m", GC.LABEL_GROUND_M))
     if _fsg:
         _uni_sz = _fsg
     if _uni_sz:
