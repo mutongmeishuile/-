@@ -1253,6 +1253,43 @@ def label_fs_from_cfg(logical_w, bbox, cfg):
     base = float(cfg.get("label_fs_base", 0) or 0) or (g if g else 4.0)
     poi = float(cfg.get("label_fs_poi", 0) or 0) or ((g * 1.125) if g else base * 1.125)
     return base, poi
+
+
+def ground_font_active(_cfg=None, logical_w=None, bbox=None):
+    """地面口径是否**真正生效**（字号由 label_ground_m 倒算而非手填 base/poi）。
+
+    与 label_fs_from_cfg 的判定一致：显式 label_fs_base 优先 → 地面口径让位。
+    显式 label_ground_m=0 视为关闭。logical_w / bbox 只用于兼容，不参与判定。
+    _cfg 可传 dict（selftest 用）；不传则走全局 cfg()（读 route_def.CFG）。
+    """
+    if _cfg is None:
+        d = {k: cfg(k, None) for k in ("label_ground_m", "label_fs_base")}
+    else:
+        d = _cfg
+    # None / 缺键 = 未配置 → 回退技能默认（LABEL_GROUND_M）；显式 0 才算关闭。
+    gm_v = d.get("label_ground_m")
+    gm = LABEL_GROUND_M if gm_v is None else float(gm_v or 0)
+    return bool(gm) and not d.get("label_fs_base")
+
+
+def font_scale(ss, cap_key="label_font_cap"):
+    """字号倍率 S 的**唯一口径**：`min(ss, cap)`，**地面口径下自动顶到 ss**。
+
+    2026-11-22 临安三尖踩坑：技能默认 150 m/字，但 VIS_CAP=3 把倍率截到 3，
+    倒算的字号只压住 45 m，预检报警、HTML 里地名缩成字毯。地面口径的定义是
+    「一个字盖住 N 米地面」，字号必须随画幅一起放大才成立；所以启用该口径时
+    cap 不再截断（S = ss）。显式配了 cap 的线路仍逐字按 `min(ss, cap)` 走 ——
+    千八线/华东K2 配的正是 cap=10=map_ss，行为与本函数一致，不会漂移。
+
+    draw_osm / make_terrain / preflight_labels / map_svg(经 render_map_hi 的 visual)
+    必须同调本函数，否则矢量字与栅格避让框错位。
+    """
+    ss = float(ss) if ss else 0.0
+    cap_v = cfg(cap_key, None)
+    if ground_font_active() and cap_v is None:
+        return ss
+    cap = float(cap_v or VIS_CAP)
+    return min(ss, cap) if cap > 0 else ss
 # 底图地名引线：位移超过该逻辑 px 才画（2026-11-17 用户定案）。
 # 落位贴近锚点 5 px（软偏好，不压避让规则）；引线阈值同步回到 5 px —— 文字一旦
 # 被避让推离锚点 >5 px 就补引线，保证「字指哪」一眼可辨。

@@ -671,7 +671,7 @@ if _GROUND_FS:
         _FS_POI = _GROUND_FS * 1.125
     print(f"  字号（地面口径）：每字 {GC.cfg('label_ground_m', GC.LABEL_GROUND_M):g} m → "
           f"底图 {_FS_BASE:.1f} / POI {_FS_POI:.1f} 逻辑 px "
-          f"（出图 {_FS_BASE * min(_VIS['ss'], GC.cfg('label_font_cap', GC.VIS_CAP) or GC.VIS_CAP):.0f} px）")
+          f"（出图 {_FS_BASE * GC.font_scale(_VIS['ss']):.0f} px）")
 
 
 def _load_base_labels():

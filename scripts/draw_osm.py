@@ -924,8 +924,9 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     #   SEP_SS  按名去重间距的倍率（CFG["label_dedupe_sep_scale"]，默认 = S）。
     #           sep 里的 `size[0]*比例` 已经是**栅格 px**，再乘一个 S 会超过图宽
     #           （全线 SS=13 时水系 sep=63544 px > 19552 图宽 → 同名河全图只留 1 个）。
-    _font_cap = float(GC.cfg("label_font_cap", GC.VIS_CAP) or GC.VIS_CAP)
-    S = min(S_IN, _font_cap) if _font_cap > 0 else S_IN
+    # 2026-11-22：字号倍率收敛到共享函数（地面口径自动顶到 S_IN，与 map_svg/preflight 同源）。
+    # 显式 label_font_cap 的老线路仍逐字走 min(S_IN, cap)。
+    S = GC.font_scale(S_IN, "label_font_cap")
     # 默认线宽倍率从「画幅倍率 S_IN」改为固定 2（2026-11-17 用户定案）：
     # W(v) = round(v×2)，不含 SS。小径 / 主干道 / 水系 / 国界共用此 W()。
     # 线路仍可用 CFG["grid_line_ss"] 覆盖，老线路显式配了值的行为逐字不变。

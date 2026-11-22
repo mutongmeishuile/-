@@ -65,7 +65,8 @@ def main(quiet=False):
     IH = int(round(IW / ratio)) if ratio > 0 else IW
     ss = float(cfgv("map_ss", GC.MAP_SS) or GC.MAP_SS)
     cap = float(cfgv("label_font_cap", GC.VIS_CAP) or GC.VIS_CAP)
-    S = min(ss, cap)
+    # 字号倍率与出图同源（2026-11-22）：地面口径下 cap 自动顶到 ss，否则 min(ss,cap)。
+    S = GC.font_scale(ss, "label_font_cap")
     W_px = IW * ss
 
     # 地面分辨率
@@ -121,6 +122,7 @@ def main(quiet=False):
     print(f"画幅  逻辑 {IW}×{IH} px　·　出图 {W_px}×{round(W_px / ratio)} px"
           f"　·　{km_w:.1f} km 宽　·　{m_per_px:.2f} m/px（逻辑 {m_per_logical:.2f} m/px）")
     print(f"倍率  map_ss={ss:g}　label_font_cap={cap:g}　→ 字号倍率 S={S:g}"
+          f"{'　（地面口径：cap 自动顶到 ss）' if ground_m and cfgv('label_font_cap', None) is None else ''}"
           f"{'　⚠ cap>ss，字会跟着画幅一起放大' if cap > ss else ''}")
     print(f"      label_fs_base={fs_base:g}　label_fs_poi={fs_poi:g}"
           f"　contour_label_font={contour_fs:g}")

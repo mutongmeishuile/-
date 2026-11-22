@@ -1595,8 +1595,8 @@ def t_default_render_params_v1():
     check("V1 render_map_hi halo 默认走 GC.HALO_OUT_PX",
           'CFG.get("halo_out_px", GC.HALO_OUT_PX)' in hi)
     check("V1 render_map_hi jpg 默认走 GC.JPG_QUALITY", "GC.JPG_QUALITY" in hi)
-    check("V1 draw_osm 字号 cap 默认走 GC.VIS_CAP",
-          'GC.cfg("label_font_cap", GC.VIS_CAP)' in osm)
+    check("V1 draw_osm 字号倍率走共享 font_scale（显式 cap 仍 min(ss,K)）",
+          'GC.font_scale(S_IN, "label_font_cap")' in osm)
     check("V1 draw_osm 线宽默认走 GC.GRID_LINE_W（2，不含 SS）",
           'GC.cfg("grid_line_ss", GC.GRID_LINE_W) or GC.GRID_LINE_W' in osm)
     check("V1 线宽折算 GRID_SS=2 时 k=1（W=round(v×2)）",
@@ -1662,6 +1662,46 @@ def t_preflight_ground_font():
           and 'cfgv("label_ground_m", GC.LABEL_GROUND_M)' in pf)
 
 
+def t_font_scale_ground():
+    """2026-11-22 临安三尖踩坑：默认 150 m/字被 VIS_CAP=3 截断成 45 m。
+
+    守三件事：
+      ① 共享 font_scale 在地面口径下顶到 ss（不封顶），显式 cap 仍 min(ss,cap)
+      ② 显式 label_fs_base / label_ground_m=0 关闭地面口径 → 回到 min(ss,3)
+      ③ 五个调用点（draw_osm/make_terrain/preflight/render_map_hi/map_svg）都走共享函数
+    """
+    import guide_common as GC
+    check("共享 font_scale 存在", hasattr(GC, "font_scale") and hasattr(GC, "ground_font_active"))
+    # 默认（地面口径，无显式 cap）：ss=10 → S=10（不再被 3 截断）
+    check("地面口径 S=ss 不封顶（150m 真生效）", GC.font_scale(10) == 10.0,
+          str(GC.font_scale(10)))
+    check("地面口径 ss=13 → S=13", GC.font_scale(13) == 13.0)
+
+    # 用临时 route_def 模拟显式 cap / base / ground=0（cfg() 从 route_def.CFG 读）
+    import route_def as RD
+    saved = dict(getattr(RD, "CFG", {}))
+    try:
+        RD.CFG["label_font_cap"] = 3
+        check("显式 cap=3 → 仍 min(ss,3)", GC.font_scale(10) == 3.0, str(GC.font_scale(10)))
+        del RD.CFG["label_font_cap"]
+        RD.CFG["label_fs_base"] = 5.0
+        check("显式 base 关地面口径 → min(ss,3)", GC.font_scale(10) == 3.0)
+        del RD.CFG["label_fs_base"]
+        RD.CFG["label_ground_m"] = 0
+        check("显式 ground=0 关地面口径 → min(ss,3)", GC.font_scale(10) == 3.0)
+        del RD.CFG["label_ground_m"]
+        RD.CFG["vector_symbol_cap"] = 3
+        check("vector cap 也走共享函数", GC.font_scale(10, "vector_symbol_cap") == 3.0)
+    finally:
+        RD.CFG.clear()
+        RD.CFG.update(saved)
+
+    for name in ("draw_osm.py", "make_terrain.py", "preflight_labels.py",
+                 "render_map_hi.py", "map_svg.py"):
+        src = (HERE / name).read_text(encoding="utf-8")
+        check(f"{name} 字号倍率走共享 font_scale", "GC.font_scale(" in src)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1671,7 +1711,8 @@ def main():
     for fn in (t_projection_consistency, t_roundtrip, t_distance,
                t_simplify_lat, t_cfg, t_font, t_todo_guard, t_clean_guard,
                t_pick_name, t_zh_name_supply_peak, t_symbol_single_layer,
-               t_aspect_leader_numeric, t_peak_snap, t_contour_cov_min, t_snowline_legend,
+               t_aspect_leader_numeric, t_peak_snap, t_contour_cov_min,                t_snowline_legend,
+               t_font_scale_ground,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,

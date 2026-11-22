@@ -288,9 +288,11 @@ LABEL_FONT = 8.0         # 字号基准：8×k（2026-11-17 用户定，k=min(SS
 
 
 def _label_cap_scale():
-    """计曲线数字 / 雪线注记字号倍率 = min(画幅倍率 SS, 统一系数上限 K 默认 3)。"""
-    cap = float(GC.cfg("label_font_cap", GC.VIS_CAP) or GC.VIS_CAP)
-    return min(float(SS), cap)
+    """计曲线数字 / 雪线注记字号倍率 —— 与 draw_osm/preflight 同源（2026-11-22）。
+
+    地面口径下 cap 自动顶到 SS（否则字只压住 45 m）；显式 cap 仍按 min(SS, cap)。
+    """
+    return GC.font_scale(float(SS), "label_font_cap")
 #   ⚠ 2026-10-17 希夏邦马：11 → 9.5。本窗口 25 m 首曲线下等高线数字约 100+ 个，
 #     11 px 时与峰名/湖名在同一片山脊上争位（用户反馈"字太大、重叠"）。
 #     别再往下压：低于 9 后缩到长图（~0.4×）里就只剩一个色点了。

@@ -250,9 +250,12 @@ def main():
     # 2026-11-10 GHT 全线：画幅按 _SS 超采，但字体 / 符号只按 min(_SS, cap) 放大，
     # 白色描边恒为「外围 +halo_out_px 输出 px」。未配 cap 的线路 k=1、白晕走旧口径。
     _cap = CFG.get("vector_symbol_cap", GC.VIS_CAP)
+    # 2026-11-22：地面口径下字体倍率自动顶到 _SS（见 GC.font_scale），符号必须同比，
+    # 否则 SVG 字与栅格避让框错位。显式配了 vector_symbol_cap 的老线路逐字不变。
+    _k = (GC.font_scale(float(_SS), "vector_symbol_cap") / float(_SS)) if _SS else 1.0
     _visual = {
         "ss": float(_SS),
-        "k": (min(float(_SS), float(_cap)) / float(_SS)) if _cap else 1.0,
+        "k": _k,
         "halo_out_px": CFG.get("halo_out_px", GC.HALO_OUT_PX),
     }
     if _visual["k"] != 1.0 or _visual["halo_out_px"] is not None:
