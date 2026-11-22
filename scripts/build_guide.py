@@ -357,6 +357,7 @@ svg{display:block;width:100%;height:auto}
 .dkey{flex:0 0 34px;font-weight:800;color:#0F6E5C}
 .dval{color:#4A5261;flex:1}
 .dnote{margin-top:auto;font-size:12.6px;line-height:1.66;color:#7A6357;background:#FBF3EC;border:1px solid #F1E2D5;border-radius:8px;padding:8px 11px}
+.tscwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -2px;padding:0 2px}
 table.tsc{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
 table.tsc th{text-align:left;font-size:12px;color:#5F6875;font-weight:700;padding:0 8px 7px;border-bottom:1px solid #E7E0D6}
 table.tsc td{padding:6.5px 8px;border-bottom:1px solid #F1ECE4;color:#3A4250}
@@ -418,7 +419,9 @@ MOBILE_CSS = """
   .rbox-lgm{display:grid;grid-template-columns:1fr;gap:9px}
   .lg{font-size:14px}
   .lg span{font-size:13.2px}
-  table.tsc{font-size:12.6px}
+  /* 8 列在 400 px 页面里必然挤成一团（数字连成 "0.00621+0"）——
+     窄屏改为卡内横向滚动，保持表格结构的可读性（2026-11-22） */
+  table.tsc{font-size:12.6px;min-width:560px}
   table.tsc th{font-size:11.6px}
   table.tsc td{padding:6px 4px}
   .src{grid-template-columns:1fr;gap:14px;font-size:13px;line-height:1.8}
@@ -725,14 +728,14 @@ def build_html():
   <section class="panel">
     <div class="ph" style="margin-bottom:12px"><h2>关键点时间表</h2>
       <span class="tagn">{CFG.get("sched_tag", "时刻取自轨迹时间戳")}</span></div>
-    <table class="tsc">
+    <div class="tscwrap"><table class="tsc">
       <colgroup><col style="width:17%"><col style="width:8%"><col style="width:8%">
         <col style="width:9%"><col style="width:9%"><col style="width:8%"><col style="width:9%"><col></colgroup>
       <thead><tr><th>点位</th><th>里程 km</th><th>海拔 m</th>
         <th>累计↑ m</th><th>累计↓ m</th><th>时刻</th><th>用时</th><th>说明</th></tr></thead>
       <tbody>{schedule_rows()}</tbody>
       {f"<tfoot>{sched_foot}</tfoot>" if sched_foot else ""}
-    </table>
+    </table></div>
   </section>
 
   <section class="notes">
