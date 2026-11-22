@@ -1236,6 +1236,20 @@ def label_fs_from_ground(logical_w, bbox, ground_m=None):
     if w <= 0:
         return None
     return float(gm) * float(logical_w) / w
+
+
+def label_fs_from_cfg(logical_w, bbox, cfg):
+    """字号解析的**唯一口径**：显式 base/poi 优先，否则按 label_ground_m 倒算。
+
+    map_svg 顶部与 preflight_labels 必须同值（矢量字与栅格避让框同源），
+    所以把这段抽到共享库，避免两边各写一遍、日后改一边漏一边。
+    返回 (base, poi)，单位 = 逻辑 px。老项目没有 label_ground_m → 完全回到旧默认值。
+    """
+    cfg = cfg or {}
+    g = label_fs_from_ground(logical_w, bbox, cfg.get("label_ground_m", 0))
+    base = float(cfg.get("label_fs_base", 0) or 0) or (g if g else 4.0)
+    poi = float(cfg.get("label_fs_poi", 0) or 0) or ((g * 1.125) if g else base * 1.125)
+    return base, poi
 # 底图地名引线：位移超过该逻辑 px 才画（2026-11-17 用户定案）。
 # 落位贴近锚点 5 px（软偏好，不压避让规则）；引线阈值同步回到 5 px —— 文字一旦
 # 被避让推离锚点 >5 px 就补引线，保证「字指哪」一眼可辨。

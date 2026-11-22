@@ -1615,6 +1615,40 @@ def t_default_render_params_v1():
           'GC.cfg("trail_line_scale", 0.5)' in osm)
 
 
+def t_preflight_ground_font():
+    """preflight_labels 必须和出图同源：认得 label_ground_m / contour_label_font。
+
+    2026-11-22 千八线踩坑：出图按地面口径算出 base=6.82，预检却只读 label_fs_base
+    报成 4「字太小」，白返工两轮。这里守三件事：
+      ① 共享解析函数存在且数值正确（显式优先 → 否则地面倒算 → 否则老默认 4）
+      ② preflight 调用共享函数、且用 contour_label_font 算高程数字行
+      ③ 地面口径下不再用 1504 舒适区误报字号大小
+    """
+    import guide_common as GC
+    bbox = (119.07094184, 27.676781, 119.25990916, 27.973879)  # 千八线实窗
+    fn = lambda c: GC.label_fs_from_cfg(846, bbox, c)
+    check("地面口径解析函数存在",
+          hasattr(GC, "label_fs_from_cfg") and hasattr(GC, "ground_width_m"))
+    base, poi = fn({"label_ground_m": 150})
+    check("地面口径 150 m → base≈6.82（与千八线出图同值）",
+          abs(base - 6.821) < 0.02, f"{base:.4f}")
+    check("POI = base×1.125", abs(poi - base * 1.125) < 1e-6, f"{poi:.4f}")
+    b2, p2 = fn({"label_ground_m": 150, "label_fs_base": 6.5})
+    check("显式 base 覆盖地面口径，POI 仍走 ground（与 map_svg 同源）",
+          abs(b2 - 6.5) < 1e-9 and abs(p2 - 7.6739317) < 1e-5, f"{b2:.4f}/{p2:.4f}")
+    b3, p3 = fn({})
+    check("老项目无 ground_m → 回到 4 / 4.5", abs(b3 - 4) < 1e-9 and abs(p3 - 4.5) < 1e-9)
+
+    src = (HERE / "preflight_labels.py").read_text(encoding="utf-8")
+    check("preflight 调用共享字号解析", "GC.label_fs_from_cfg(" in src)
+    check("preflight 认 contour_label_font", '"contour_label_font"' in src)
+    check("preflight 高程数字行用 contour_fs", '("计曲线高程数字", contour_fs' in src)
+    check("地面口径不报 1504 舒适区误报",
+          "if ground_m:" in src and "else:" in src and "OK_LO" in src)
+    svg = (HERE / "map_svg.py").read_text(encoding="utf-8")
+    check("map_svg 仍走共享地面口径（与预检同源）", "GC.label_fs_from_ground(IW" in svg)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1629,8 +1663,8 @@ def main():
                t_osm_reuse, t_labels_vector, t_label_knobs,
                t_near_route_corridor, t_pbf_nepal,
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
-               t_contour_width_absolute, t_logging, t_ele_valid_lowalt,
-               t_default_render_params_v1):
+               t_contour_width_absolute, t_logging,                t_ele_valid_lowalt,
+               t_default_render_params_v1, t_preflight_ground_font):
         try:
             if VERBOSE:
                 fn()

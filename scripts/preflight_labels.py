@@ -12,6 +12,9 @@
     · 画幅：横图 IW=MAP_LONG_LOGICAL，竖图 IW=MAP_LONG_LOGICAL×9/16（make_terrain.build_terrain）
     · 出图倍率：`SS = CFG["map_ss"]`（默认 GC.MAP_SS）
     · 字号倍率：`S = min(SS, CFG["label_font_cap"])`（draw_osm.draw_overlay）
+    · 字号解析：GC.label_fs_from_cfg() —— 显式 base/poi 优先，否则由 `label_ground_m`
+      按窗口地面宽度倒算（2026-11-22 与 map_svg/draw_osm 统一到共享库，禁止各自再写一遍）
+    · 计曲线数字：`CFG["contour_label_font"]`（默认 MT.LABEL_FONT）× S
     · 底图各档字号：draw_osm 里的字面量 15.5/14/12.5/14/13/11/11.5 → `F(v)=max(6,round(v*S))`
     · POI 标注：`F_poi = CFG["label_fs_poi"]（默认 base×1.125）× S`
     · 计曲线高程数字：`MT.LABEL_FONT(8.0) × S` → `max(6,round(8*S))`
@@ -70,8 +73,14 @@ def main(quiet=False):
     m_per_px = km_w * 1000.0 / W_px
     m_per_logical = km_w * 1000.0 / IW
 
-    fs_base = float(cfgv("label_fs_base", 4) or 4)
-    fs_poi = float(cfgv("label_fs_poi", fs_base * 1.125) or fs_base * 1.125)
+    # 字号解析与 map_svg 同源（2026-11-22）：显式 base/poi 优先，否则按
+    # CFG["label_ground_m"] 倒算。过去这里只读 label_fs_base，启用地面口径的线路
+    # 会被误报成 base=4「字太小」——实际出图是 6.8，预检必须跟渲染同值。
+    fs_base, fs_poi = GC.label_fs_from_cfg(
+        IW, (lon0, lat0, lon1, lat1), RD.CFG if hasattr(RD, "CFG") else {})
+    ground_m = float(cfgv("label_ground_m", 0) or 0)
+    # 计曲线高程数字的字号可被线路单独覆盖（华东K2 用 6 压到低于地名一档）
+    contour_fs = float(cfgv("contour_label_font", 0) or MT.LABEL_FONT)
 
     def eq(px):
         """出图 px → 缩到 1504 宽时的等效 CSS px。"""
@@ -98,7 +107,7 @@ def main(quiet=False):
         ]
     rows = _base_rows + [
         ("攻略 POI 名", fs_poi, max(3, round(fs_poi * S))),
-        ("计曲线高程数字", MT.LABEL_FONT, max(6, round(MT.LABEL_FONT * S))),
+        ("计曲线高程数字", contour_fs, max(6, round(contour_fs * S))),
     ]
     # 后面按固定下标取行（次级峰名 / POI / 计曲线）——矢量模式下下标整体前移，改用名字查
     _ri = {r[0]: i for i, r in enumerate(rows)}
@@ -113,7 +122,11 @@ def main(quiet=False):
           f"　·　{km_w:.1f} km 宽　·　{m_per_px:.2f} m/px（逻辑 {m_per_logical:.2f} m/px）")
     print(f"倍率  map_ss={ss:g}　label_font_cap={cap:g}　→ 字号倍率 S={S:g}"
           f"{'　⚠ cap>ss，字会跟着画幅一起放大' if cap > ss else ''}")
-    print(f"      label_fs_base={fs_base:g}　label_fs_poi={fs_poi:g}")
+    print(f"      label_fs_base={fs_base:g}　label_fs_poi={fs_poi:g}"
+          f"　contour_label_font={contour_fs:g}")
+    if ground_m:
+        print(f"      口径：每字压住 {ground_m:g} m 地面（label_ground_m）——"
+              f"这是定案判据，下面的「1504宽等效」仅作参考，不作为字号大小的建议依据")
     print()
     print(f"{'元素':<20}{'逻辑px':>8}{'出图px':>9}{'占图宽':>9}{'1504宽等效':>12}{'每字压住':>10}")
     for nm, lg, px in rows:
@@ -124,12 +137,21 @@ def main(quiet=False):
     osm_min = eq(rows[i_osm_min][2])   # 最小一档：次级峰名（矢量模式 = 统一档）
     poi_eq = eq(rows[i_poi][2])
     cont_eq = eq(rows[i_cont][2])
-    if osm_min < OK_LO:
-        warn.append(f"底图最小一档只有 {osm_min:.1f} px（1504 宽）→ 缩略后读不清；"
-                    f"`label_font_cap` 提到 {cap * OK_LO / max(osm_min, .1):.1f} 或 `map_ss` 调小")
-    if osm_min > OK_HI:
-        warn.append(f"底图最小一档 {osm_min:.1f} px 偏大（> {OK_HI:g}）→ 地名会互相挤、落位数下降；"
-                    f"`label_font_cap` 降到 {cap * OK_HI / osm_min:.1f}")
+    if ground_m:
+        # 地面口径是定案判据（用户 2026-11-22）：每字压住多少米才是字号对不对的标准。
+        # 1504 等效对竖幅/高倍率线会系统性偏大，旧在这里报「字太小/偏大」是误报。
+        actual_m = m_per_px * rows[i_osm_min][2]
+        if abs(actual_m - ground_m) > max(ground_m * 0.05, 1.0):
+            warn.append(f"实际每字压住 {actual_m:.0f} m ≠ 设定的 {ground_m:g} m —— "
+                        f"多半是显式 `label_fs_base` 覆盖了 `label_ground_m`；"
+                        f"想按地面口径走就删掉显式 base（当前 {fs_base:g}）")
+    else:
+        if osm_min < OK_LO:
+            warn.append(f"底图最小一档只有 {osm_min:.1f} px（1504 宽）→ 缩略后读不清；"
+                        f"`label_font_cap` 提到 {cap * OK_LO / max(osm_min, .1):.1f} 或 `map_ss` 调小")
+        if osm_min > OK_HI:
+            warn.append(f"底图最小一档 {osm_min:.1f} px 偏大（> {OK_HI:g}）→ 地名会互相挤、落位数下降；"
+                        f"`label_font_cap` 降到 {cap * OK_HI / osm_min:.1f}")
     # 层级判据：攻略 POI 必须 ≥ 底图「一般峰名」那一档，否则图上主次颠倒
     # （2026-11-18 缙磐四尖实测：POI 27 px < 村庄 42 px，看图像底图地名才是主角）。
     ref_peak = eq(rows[i_peak][2])
@@ -140,8 +162,13 @@ def main(quiet=False):
         warn.append(f"POI 名 {poi_eq:.1f} px < 底图一般峰名 {ref_peak:.1f} px → 主次颠倒；"
                     f"`label_fs_poi` 提到 {fs_poi * ref_peak / poi_eq:.1f} 左右")
     if cont_eq > poi_eq:
+        _suggest = (f"`contour_label_font` 降到 {contour_fs * poi_eq / max(cont_eq, .1):.1f}"
+                    if not cfgv("contour_label_font", 0)
+                    else f"`contour_label_font` 降到 {contour_fs * poi_eq / max(cont_eq, .1):.1f}"
+                         f"（当前 {contour_fs:g}）")
         warn.append(f"计曲线数字（{cont_eq:.1f} px）≥ POI 名（{poi_eq:.1f} px）→ 数字抢戏；"
-                    f"降 `label_font_cap` 或改用 `contour_label=False`")
+                    f"{_suggest} 或改用 `contour_label=False`"
+                    f"{'；降 label_font_cap 会把地面口径字号一起压小，勿用' if ground_m else ''}")
 
     # ---- 注记候选量（读 osm.json，不渲染）----
     cand = _candidates()
