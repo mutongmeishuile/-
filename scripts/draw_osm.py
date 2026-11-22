@@ -598,7 +598,7 @@ class Labeller:
             hits = self._hits(box)
             if hits == 0:                                  # 完美位置
                 self._emit(d, text, x, y, font, fill, stroke, stroke_w,
-                           ax=x0c, ay=y0c, near=near)
+                           ax=x0c, ay=y0c, near=near, kind=kind)
                 self._mark(box)
                 self.boxes.append(box)
                 return True
@@ -611,13 +611,13 @@ class Labeller:
         self.n_overlap += 1            # 命中"两害相权"分支：记录一次挤放，供自检核对
         _, x, y, box = best
         self._emit(d, text, x, y, font, fill, stroke, stroke_w,
-                   ax=x0c, ay=y0c, near=near)
+                   ax=x0c, ay=y0c, near=near, kind=kind)
         self._mark(box)
         self.boxes.append(box)
         return True
 
     def _emit(self, d, text, x, y, font, fill, stroke, stroke_w,
-              ax=None, ay=None, near=False):
+              ax=None, ay=None, near=False, kind=""):
         """画，或只记录（矢量模式）。位图用左上角，SVG 用基线 —— 两个都存。
 
         ax/ay：要素**真实锚点**（栅格 px），与落位后的文字框无关 —— 专门留给
@@ -639,6 +639,11 @@ class Labeller:
                "sw": round(float(stroke_w), 1),
                "ax": round(float(ax if ax is not None else x), 1),
                "ay": round(float(ay if ay is not None else y), 1)}
+        # 2026-11-19 用户报「G219 前面多了个山峰三角」：矢量层过去只按**字色**猜符号
+        #   （棕=峰三角），而道路编号/路名也是深棕 (88,60,40)/(104,78,58) → 每条道路
+        #   标注都被补了一个 ▲。现在把要素类别显式写进记录（k），map_svg 优先读它。
+        if kind:
+            rec["k"] = kind
         # 只给走廊内的记录打标：老线路 / 未开启功能时 records 逐字不变。
         if near:
             rec["near"] = 1
@@ -1347,6 +1352,13 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
     # 区域总览图这类「地名密、缩略图看得多」的画幅，分级会让同屏字号 11–15.5 显得杂乱，
     # 配 CFG["osm_label_size"]=13 即可全部拉平。
     _uni_sz = GC.cfg("osm_label_size", None)
+    # 2026-11-22 用户定案（全线地图）：「每个字压住 700 m」倒算字号，CFG["label_ground_m"]。
+    # 矢量注记模式下本模块只记避让框，字号必须与 map_svg 的 _FS_BASE 完全同值
+    # （同为「逻辑 px」，物理 = ×F() 的 S），否则框比字大/小、避让全错。
+    _fsg = GC.label_fs_from_ground(pil.size[0] / S_IN if S_IN else 0,
+                                   meta.get("bbox"), GC.cfg("label_ground_m", 0))
+    if _fsg:
+        _uni_sz = _fsg
     if _uni_sz:
         _funi = _font(F(float(_uni_sz)), True)
         f_town = f_vil = f_ham = f_peak_hi = f_peak = f_peak_lo = f_poi = f_water = _funi
@@ -1615,7 +1627,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         #   （本窗口 199 → 49），旧写法先画三角再试注记 → 图上 150 个无字三角
         #   （2026-11-05 用户「没有标注的 osm 地名标记符号也去掉」）。
         #   矢量模式下三角由 map_svg 在地名锚点补画，三角与字同生同灭。
-        if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True,
+        if lab.place(d, txt, (x, y), f_peak_use, tcol, anchor_right=True, kind="peak",
                      stroke_w=SW(2.1), pad=LBL_PAD * S, fallback=forced and not NO_CROWD,
                      gap=(5.4 * tri_k + 0.5) if _peak_tight else 5.0,
                      right_only=_peak_right):
@@ -1643,7 +1655,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if _skip(name):
                 continue
             if lab.place(d, name, (x, y + 6 * S), f_water, C_GLACIER_LB, anchor_center=False,
-                         stroke_w=SW(2.1), pad=LBL_PAD * S):
+                         kind="glacier", stroke_w=SW(2.1), pad=LBL_PAD * S):
                 d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
                           fill=(233, 244, 252), outline=C_GLACIER_LB)
                 n_glacier_lb += 1
@@ -1660,7 +1672,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         txt = f"{name} {ele}m" if ele else name
         # 符号跟注记一起出生（同 places / peaks）：矢量模式下 map_svg 只在落位的地名
         # 锚点补小圆，栅格这边再画就成了"没有名字的倒三角"。
-        if lab.place(d, txt, (x, y), f_water, (150, 78, 24), anchor_right=True,
+        if lab.place(d, txt, (x, y), f_water, (150, 78, 24), anchor_right=True, kind="saddle",
                      stroke_w=SW(2.1), pad=LBL_PAD * S, fallback=not NO_CROWD):
             if lab.draw_symbols:
                 d.polygon([(x - r, y - r * 0.9), (x + r, y - r * 0.9), (x, y + r * 1.1)],
@@ -1869,7 +1881,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                     acc += seg
             if lab.place(d, ref_clean, (mx, my),
                          f_road_name if _is_name else f_road_ref, col,
-                         anchor_right=True, stroke_w=SW(2.0),
+                         anchor_right=True, kind="road", stroke_w=SW(2.0),
                          pad=LBL_PAD * S, fallback=not NO_CROWD):
                     _ok = True
                     break

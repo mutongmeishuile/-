@@ -452,8 +452,8 @@ def t_symbol_single_layer():
           'lab.draw_symbols = lab.draw_pixels or _cfg_flag("labels_symbol_on_raster"' in do)
     check("map_svg 用同一键决定是否补画",
           '_sym_on_raster = GC.cfg_flag("labels_symbol_on_raster", False)' in svg)
-    check("map_svg 调 _base_label_sym 分流符号",
-          "_sym = _base_label_sym(f, _sym_on_raster)" in svg)
+    check("map_svg 调 _base_label_sym 分流符号（带要素类别 k）",
+          '_sym = _base_label_sym(f, _sym_on_raster, it.get("k"))' in svg)
 
     # map_svg 在 import 期就要求轨迹数据（SystemExit），不能像别的模块那样直接 import。
     # 用 ast 抠出这个纯函数的源码单独 exec —— 既真正跑到了函数体，又不触发模块级副作用。
@@ -481,6 +481,16 @@ def t_symbol_single_layer():
         check("矢量模式下垭口画倒三角", sym(saddle, False) == "saddle")
         check("矢量模式下冰川画菱形", sym((36, 84, 128), False) == "glacier")
         check("矢量模式下地名画圆点", sym(place, False) == "dot")
+        # 2026-11-19 用户报「G219 前面多了山峰三角」：道路编号/路名同是深棕色，
+        #   纯按字色判会被补 ▲。类别 k 必须压过字色。
+        check("道路标注不补三角（k=road 压过棕字色）", sym((88, 60, 40), False, "road") is None)
+        check("k=peak 时仍画三角", sym((88, 60, 40), False, "peak") == "peak")
+        check("k=saddle 时画倒三角", sym((104, 78, 58), False, "saddle") == "saddle")
+        check("栅格符号模式下 k=road 也不画", sym((88, 60, 40), True, "road") is None)
+    # k 必须由 draw_osm 写进 label_boxes.json，且 map_svg 读得到
+    check("draw_osm 把要素类别写进记录 k", 'rec["k"] = kind' in do)
+    check("draw_osm 道路编号传 kind=road", 'kind="road"' in do)
+    check("map_svg 把 k 带进底图条目", '"k": str(it.get("k") or "")' in svg)
 
 
 # ---------------------------------------------------------------- ⑨d 画幅/引线/纯数字（2026-11-17）

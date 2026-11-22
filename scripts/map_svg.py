@@ -76,7 +76,12 @@ def _label_lead_max():
                    or GC.LABEL_LEADER_MAX_K)
     except Exception:                                              # noqa
         _k = GC.LABEL_LEADER_MAX_K
-    return _k * GC.VIS_CAP
+    _lead = _k * GC.VIS_CAP
+    # 地面口径大字号（2026-11-22）：30 px 的字根本落不进 6 px 的硬上限，
+    # 引线上限至少给到 1.05 个字高，否则 POI 名全被 FS_LADDER 缩一半。
+    if _GROUND_FS:
+        _lead = max(_lead, 1.05 * _FS_BASE)
+    return _lead
 
 
 def _halo_out():
@@ -655,6 +660,18 @@ def _nice_bar_km(m_per_px, iw, target_frac=0.16):
 _FS_BASE = float(GC.cfg("label_fs_base", 4) or 4)
 _FS_POI = float(GC.cfg("label_fs_poi", _FS_BASE * 1.125) or (_FS_BASE * 1.125))
 
+# 「每个字压住 N 米」倒算（2026-11-22 用户定案，全线地图）：CFG["label_ground_m"]=700。
+# 显式手填了 label_fs_base / label_fs_poi 的线路照旧优先（逐字保持旧行为）。
+_GROUND_FS = GC.label_fs_from_ground(IW, meta.get("bbox"), GC.cfg("label_ground_m", 0))
+if _GROUND_FS:
+    if not GC.cfg("label_fs_base", None):
+        _FS_BASE = _GROUND_FS
+    if not GC.cfg("label_fs_poi", None):
+        _FS_POI = _GROUND_FS * 1.125
+    print(f"  字号（地面口径）：每字 {GC.cfg('label_ground_m', 0):g} m → "
+          f"底图 {_FS_BASE:.1f} / POI {_FS_POI:.1f} 逻辑 px "
+          f"（出图 {_FS_BASE * min(_VIS['ss'], GC.cfg('label_font_cap', GC.VIS_CAP) or GC.VIS_CAP):.0f} px）")
+
 
 def _load_base_labels():
     """读取 draw_osm 记下的地名锚点 + 样式（栅格 px → 逻辑 px）。
@@ -691,11 +708,17 @@ def _load_base_labels():
             # 近轨迹走廊标记（draw_osm 2026-11-10）：缺省 0 = 老缓存/老线路逐字不变。
             # 有标记的注记在 `_place_base_labels` 里多试几圈「零重叠」位置。
             "near": int(it.get("near", 0) or 0),
+            # 要素类别（draw_osm 2026-11-19）：peak / saddle / glacier / road。
+            # 缺省 "" = 老缓存，仍按字色判（向后兼容）。
+            "k": str(it.get("k") or ""),
         })
     # 重要度按"徒步关心什么"排（2026-10-21）：垭口 > 地名/湖 > 峰 > 河。
     # 拥挤时才需要取舍，所以这个顺序只在"实在没地方"时决定谁被丢。
     def _rank(d):
         f = tuple(d["fill"])
+        if d.get("k") == "road":
+            # 道路编号/路名：和峰名同在第一遍，但要排在峰名之后（峰锚点不可替代）
+            return 400.0 + d["pri"]
         if f == (150, 78, 24):
             return 1000.0                     # 垭口：路线必经点
         if f[0] == f[1] == f[2] or (abs(f[0] - f[1]) < 6 and abs(f[1] - f[2]) < 6):
@@ -776,12 +799,18 @@ def _is_peak_item(it):
     """这条底图地名是不是「山峰名」。
 
     判据与下面的引线判据同源：填充色是棕色系（draw_osm 给峰名的颜色），且比蓝色系暗。
+    ⚠ 2026-11-19：道路编号/路名也是深棕（88,60,40 / 104,78,58），纯按字色判会把
+      "G219""喀东线"当成峰名 —— 既抢"峰名优先"的位，又在前面补一个 ▲（用户截图
+      「G219 前面标记的是山峰三角」）。draw_osm 现在把类别写进记录 k，有 k 就听它的。
     """
+    k = str(it.get("k") or "")
+    if k:
+        return k == "peak"
     f = tuple(it["fill"])
     return f[0] - f[2] > 12 and f[0] < 110
 
 
-def _base_label_sym(fill, sym_on_raster):
+def _base_label_sym(fill, sym_on_raster, kind=""):
     """底图地名锚点由谁画什么符号 —— 返回 'peak' / 'saddle' / 'glacier' / 'dot' / None。
 
     2026-11-18 用户定案：**默认 False（矢量补画）**。原因是"符号必须跟着最终落位
@@ -800,12 +829,33 @@ def _base_label_sym(fill, sym_on_raster):
     """
     if sym_on_raster:
         return None
+    k = str(kind or "")
+    if k == "peak":
+        return "peak"
+    if k == "saddle":
+        return "saddle"
+    if k == "glacier":
+        return "glacier"
+    if k == "road":
+        return None              # 道路编号/路名：不挂锚点符号（2026-11-19）
     f = tuple(fill)[:3]
     if f == (150, 78, 24):
         return "saddle"          # 垭口：橙
     if f == (36, 84, 128):
         return "glacier"         # 冰川名：深冰蓝
     return "peak" if (f[0] - f[2] > 12 and f[0] < 110) else "dot"
+
+
+def _first_pass_item(it):
+    """进「第一遍（优先层）」的条目：山峰名 + 道路编号/路名。
+
+    峰名先排是为了守住山顶锚点（用户 2026-10-27 口径）；道路编号跟着进这一层，
+    是因为它落在路中段、被挤走等于这条国道在地图上消失（旧实现它按「棕字色」
+    混进峰名层，两件事碰巧都成立）。两者都不再靠猜：类别由 draw_osm 写入 k。
+    """
+    if it.get("k"):
+        return it["k"] in ("peak", "road")
+    return _is_peak_item(it)
 
 
 def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
@@ -828,9 +878,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     """
     items = _load_base_labels()
     if only == "peak":
-        items = [it for it in items if _is_peak_item(it)]
+        items = [it for it in items if _first_pass_item(it)]
     elif only == "rest":
-        items = [it for it in items if not _is_peak_item(it)]
+        items = [it for it in items if not _first_pass_item(it)]
     if not items:
         return ""
     if pois:
@@ -965,7 +1015,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             _cy = min(max(_ay, box[1]), box[3])
             # 符号：2026-11-18 默认由矢量层在**落位成功处**补画（_sym_on_raster=False），
             # 符号与字同生同灭 —— 栅格层那套多落位的符号不再单独出现（无字孤三角）。
-            _sym = _base_label_sym(f, _sym_on_raster)
+            _sym = _base_label_sym(f, _sym_on_raster, it.get("k"))
             if _sym:
                 # 2026-11-18 用户实测：POI 标注压在峰三角上，看起来"营地被标成了山峰"。
                 # 原因是 _OCC 里只有文字框，符号画在锚点却从不占位。补一个小方框，

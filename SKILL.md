@@ -561,6 +561,17 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
   所以 `vector_symbol_cap = label_font_cap = K` 一提，整层矢量同比放大、相互比例一点不变。
   五台山从 K=3（字 24 px、线 9 px）提到 K=4（字 32 px、线 12 px）= ×1.333，
   正好把「每字 530 m」抬到 707 m。想微调就用这个比例反算 K，别动 `route_w`/`pin_d`。
+  ⚠ **2026-11-22 起：全线地图强制走 `CFG["label_ground_m"]`（用户定案）**，
+  公式已内建为 `GC.label_fs_from_ground(logical_w, bbox, N)`：
+  `逻辑 px/字 = N × 逻辑画幅宽 / 窗口东西宽(m)`，`map_svg` 与 `draw_osm` 各自从
+  `base_meta["bbox"]` 现算（两边必须同值，否则避让框与字对不上）。
+  基准 **N = 150 m**（用户当天 700 → 250 → 150 三次收敛；700 在 20 km 级窗口
+  字高 31 逻辑 px、只剩 27 字宽，明显偏大）。同时：
+  ① `map_aspect_mode="snap"`（纯底图吸 16:9 / 9:16，长边逻辑 1504）；
+  ② `map_ss=10` → 长边 15040 px；
+  ③ `label_font_cap = vector_symbol_cap = map_ss`（让 `_vk()=1`，字面吃满口径）。
+  竖幅（9:16）逻辑宽 = 846，**分母用 846 不是 1504** —— 19 km 级窗口 = 6.6 逻辑 px/字、
+  出图 66 px。显式手填 `label_fs_base` 的线路仍然优先（老线不动）。
 - **标注优先级**：默认底图地名最后排、给轨迹 POI 让路。`CFG["label_priority"]="peak"` 改成
   **OSM 山峰名先占位**（峰名锚点就是山顶，被挤走就失去意义），轨迹标注绕开它。
 - 剖面图必须带：纵横轴标题（海拔 m / 累计里程 km）、分日竖虚线、命名垭口与营地/端点标注、最高点高亮。

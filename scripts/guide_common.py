@@ -1211,6 +1211,31 @@ GRID_LINE_W    = 2.0    # 栅格线宽固定倍率：W(v)=round(v×2)，**不含
 MAP_LONG_LOGICAL = 1504
 MAP_ASPECT_LAND  = 16.0 / 9.0
 MAP_ASPECT_PORT  = 9.0 / 16.0
+
+# ---- 「每个字压住 N 米」倒算字号（2026-11-22 用户定案，全线地图强制口径）----
+# 判据不是像素，而是**一个字盖住多少地面**：所有线路取同一个 N，换窗口时字号的
+# 绝对 px 自己变，图面文字密度（每公里几个字）保持一致。倒算关系：
+#     逻辑 px / 字 = N × 逻辑宽 / 窗口东西宽(m)
+# 逻辑宽 = 设计画幅宽（16:9 → 1504，9:16 → 846），出图物理 px = 逻辑 px × SS。
+# 0 = 关闭（老行为：route_def 里手填 label_fs_base）。
+LABEL_GROUND_M   = 0.0
+
+
+def ground_width_m(bbox):
+    """窗口东西向地面宽度（米）。≤2° 窗口用等距圆柱近似，误差 < 0.05%。"""
+    lon0, lat0, lon1, lat1 = bbox[:4]
+    return (lon1 - lon0) * 111320.0 * math.cos(math.radians((lat0 + lat1) / 2.0))
+
+
+def label_fs_from_ground(logical_w, bbox, ground_m=None):
+    """按「每字压住 ground_m 米」倒算**逻辑 px 字号**；未启用 / 参数不全 → None。"""
+    gm = LABEL_GROUND_M if ground_m is None else float(ground_m or 0)
+    if not gm or not bbox or len(bbox) < 4 or not logical_w:
+        return None
+    w = ground_width_m(bbox)
+    if w <= 0:
+        return None
+    return float(gm) * float(logical_w) / w
 # 底图地名引线：位移超过该逻辑 px 才画（2026-11-17 用户定案）。
 # 落位贴近锚点 5 px（软偏好，不压避让规则）；引线阈值同步回到 5 px —— 文字一旦
 # 被避让推离锚点 >5 px 就补引线，保证「字指哪」一眼可辨。
