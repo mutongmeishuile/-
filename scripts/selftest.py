@@ -1707,7 +1707,7 @@ def t_km_circle_unified():
           abs(GC.km_circle_metrics(2, mpp, ss=1)[2] - GC.KM_CIRCLE_STROKE_LOG) < 1e-12)
     check("里程圈手机描边 2×1.9 仍 ≤ 4 px",
           abs(GC.km_circle_metrics(2, mpp, ss=1, m=1.9)[2] - 3.8) < 1e-9)
-    check("里程圈数字动态填充：位数越少字越大", f1 > f2 > f3,
+    check("里程圈数字动态填充：基准位数越大字越小", f1 > f2 > f3,
           f"{f1:.3f}/{f2:.3f}/{f3:.3f}")
     for nd, f in ((1, f1), (2, f2), (3, f3)):
         inner = 2 * r1 - 2 * s1 - min(GC.KM_CIRCLE_PAD_PX / 10, 0.08 * 2 * r1)
@@ -1721,9 +1721,12 @@ def t_km_circle_unified():
     check("里程圈地面口径：m/px 减半 → 圈径翻倍",
           abs(r2s - 2 * r2) < 1e-12, f"{r2:.4f}→{r2s:.4f}")
     svg = (HERE / "map_svg.py").read_text(encoding="utf-8")
+    check("里程圈全圈统一字号基准（按本线路最大位数，不逐圈按位数）",
+          "_km_nd = max(1, len(str(int(TOTAL_KM))))" in svg
+          and "GC.km_circle_metrics(_km_nd, M_PER_PX, z, float(_VIS[\"ss\"]), M)" in svg
+          and "GC.km_circle_metrics(nd," not in svg)
     check("里程圈调用单一共享口径 + 描边吃 sw",
-          "GC.km_circle_metrics(nd, M_PER_PX, z, float(_VIS[\"ss\"]), M)" in svg
-          and 'stroke-width="{sw:.3f}"' in svg and "_shift_km = 0.4" in svg)
+          'stroke-width="{sw:.3f}"' in svg and "_shift_km = 0.4" in svg)
 
 
 def t_font_scale_ground():

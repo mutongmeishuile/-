@@ -1401,12 +1401,15 @@ def build_map_overlay(mobile=False):
     # 里程点间隔：默认 5 km。**长线（>200 km）必须放大**，否则 469 km 会画 94 个圆圈、
     # 整条线变成一串珠子（2026-11-04 郭喀拉29天实测）。CFG["km_step"] 覆盖。
     _km_step = max(1, int(GC.cfg("km_step", 5) or 5))
+    # 字号基准：本线路最大里程圈位数（2026-11-24 用户定案）。所有圈传同一个 nd，
+    # 字号取「最大位数动态填充后」的最小值 —— 5/10/15 km 数字完全一致，
+    # 不再出现一位数撑满、两位数偏小；短线路（<100 km）也不会白白缩到三位数档。
+    _km_nd = max(1, len(str(int(TOTAL_KM))))
     for target in range(_km_step, int(TOTAL_KM) + 1, _km_step):
         i = min(range(len(KM)), key=lambda j: abs(KM[j] - target))
         z = MFS_S if mobile else 1.0
-        nd = len(str(target))
         k = _vk()
-        rr, fs, sw = GC.km_circle_metrics(nd, M_PER_PX, z, float(_VIS["ss"]), M)
+        rr, fs, sw = GC.km_circle_metrics(_km_nd, M_PER_PX, z, float(_VIS["ss"]), M)
         # 撞图钉时**沿轨迹前后微调**（2026-11-24 用户定案）：原来直接 continue，
         # 20/30/85 km 整号消失、5 km 节奏断档。现在在 ±0.4 km 窗口里找离目标
         # 最近且不压图钉的位置；只有整段都被占才放弃该号。
