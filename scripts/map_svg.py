@@ -1406,7 +1406,7 @@ def build_map_overlay(mobile=False):
         z = MFS_S if mobile else 1.0
         nd = len(str(target))
         k = _vk()
-        rr, fs = GC.km_circle_metrics(nd, z, k)
+        rr, fs, sw = GC.km_circle_metrics(nd, M_PER_PX, z, float(_VIS["ss"]), M)
         # 撞图钉时**沿轨迹前后微调**（2026-11-24 用户定案）：原来直接 continue，
         # 20/30/85 km 整号消失、5 km 节奏断档。现在在 ±0.4 km 窗口里找离目标
         # 最近且不压图钉的位置；只有整段都被占才放弃该号。
@@ -1432,7 +1432,7 @@ def build_map_overlay(mobile=False):
         # 否则会出现「195」圆圈压住垭口三角、或者地名贴着数字写（2026-10-27 实测）。
         _OCC.append((x - rr - k, y - rr - k, x + rr + k, y + rr + k))
         o.append(f'<circle cx="{x:.3f}" cy="{y:.3f}" r="{rr:.3f}" fill="#FFFFFF" '
-                 f'stroke="#3A4250" stroke-width="{2*M*k:.3f}"/>'
+                 f'stroke="#3A4250" stroke-width="{sw:.3f}"/>'
                  f'<text x="{x:.3f}" y="{y+fs*0.38:.3f}" text-anchor="middle" '
                  f'font-size="{fs:.3f}" font-weight="800" '
                  f'fill="#3A4250">{target}</text>')

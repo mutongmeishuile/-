@@ -1276,22 +1276,35 @@ def contour_fs_from_cfg(logical_w, bbox, _cfg=None):
 # 里程圈统一圆径（2026-11-24 用户定案）：圈径与位数**解耦**，桌面/手机/HTML/
 # 高清图共用一条公式。旧实现让半径随位数长（5.8/7.6 两档或 text-width 反推），
 # 结果 5 km 圈小、10/15 km 圈大，换个比例尺又变成另一套口径。
-KM_CIRCLE_R_DEF = 5.4      # 设计半径（逻辑 px，u = z*k = 1）
-KM_CIRCLE_FS_DEF = 8.0     # 设计字号（逻辑 px）
-KM_CIRCLE_PAD_DEF = 1.2    # 数字两侧内衬（逻辑 px）
+KM_CIRCLE_GROUND_M = 300.0  # 圆圈**外侧直径**对应的地面距离（m），与每字 150 m 同源
+KM_CIRCLE_STROKE_LOG = 2.0  # 描边设计逻辑宽（再乘 m）；物理宽封顶 KM_CIRCLE_STROKE_PX
+KM_CIRCLE_STROKE_PX = 4.0   # 描边物理 px 上限（2026-11-24 用户定案）
+KM_CIRCLE_PAD_PX = 4.0      # 数字与描边之间的物理内衬（每侧）
+KM_CIRCLE_DIGIT_W = 0.60    # 数字字宽系数（em 倍数）
+KM_CIRCLE_DIGIT_H = 0.72    # 数字字形高系数（em 倍数，约束字不顶出圆）
 
 
-def km_circle_metrics(nd, z=1.0, k=1.0):
-    """里程圈 (半径, 字号) 逻辑 px；**所有位数同径同字号**，仅三位数缩字。
+def km_circle_metrics(nd, m_per_px, z=1.0, ss=1.0, m=1.0):
+    """里程圈 (半径, 字号, 描边宽) 逻辑 px —— 地面口径，跨比例尺同一语义。
 
-    u = z*k 是唯一放大入口：手机 z=2.8、高清图 k=font_scale/SS。
-    1/2 位数字号恒为 8*u；3 位数按圈内径反缩写号，圈径始终不变。
+    2026-11-24 用户定案：
+      ① 圆圈**外侧直径** = KM_CIRCLE_GROUND_M 米地面（/ m_per_px 换成逻辑 px），
+         与 OSM「每字 150 m」同一套口径 —— 不再是写死的逻辑半径；
+      ② 描边设计宽 = KM_CIRCLE_STROKE_LOG × m，物理宽封顶 KM_CIRCLE_STROKE_PX
+         （逻辑宽 = 物理上限 / ss），高清图不会再出现 20 px 的粗黑边；
+      ③ 数字大小**动态填充**：按圈内净宽 / 位数反推字号，同时用字形高约束
+         防止一位数顶出圆 —— 每位数都尽量填满圆。
+    z = 手机版放大（MFS_S），m = 手机版描边放大（MFS_M），ss = 出图超采样。
     """
-    u = z * k
-    rr = KM_CIRCLE_R_DEF * u
-    fs = min(KM_CIRCLE_FS_DEF * u,
-             (2 * rr - KM_CIRCLE_PAD_DEF * u) / (0.60 * nd))
-    return rr, fs
+    mpp = max(float(m_per_px), 1e-6)
+    rr = KM_CIRCLE_GROUND_M / mpp / 2.0 * z
+    sw = min(KM_CIRCLE_STROKE_LOG * m, KM_CIRCLE_STROKE_PX / max(float(ss), 1e-6))
+    # 内衬同时受物理上限与圆径比例约束：小比例尺（ss=1）时 4 物理 px
+    # 会吃掉大半个 9 px 的圆，故再夹到直径的 8%。
+    pad = min(KM_CIRCLE_PAD_PX / max(float(ss), 1e-6), 0.08 * 2 * rr)
+    inner = max(0.5, 2 * rr - 2 * sw - pad)
+    fs = min(inner / (KM_CIRCLE_DIGIT_W * nd), inner / KM_CIRCLE_DIGIT_H)
+    return rr, max(1.0, fs), sw
 
 
 def ground_font_active(_cfg=None, logical_w=None, bbox=None):

@@ -1689,24 +1689,41 @@ def t_preflight_ground_font():
 
 
 def t_km_circle_unified():
-    """2026-11-24 用户定案：里程圈所有位数同径同字号（仅三位数缩字），跨比例尺同一公式。"""
+    """2026-11-24 用户定案：外径=地面300m / 描边物理≤4px / 数字动态填满。"""
     import guide_common as GC
-    r1, f1 = GC.km_circle_metrics(1)
-    r2, f2 = GC.km_circle_metrics(2)
-    r3, f3 = GC.km_circle_metrics(3)
-    check("里程圈 1/2 位数同径", abs(r1 - r2) < 1e-12, f"{r1}/{r2}")
-    check("里程圈 1/2 位数同字号", abs(f1 - f2) < 1e-12, f"{f1}/{f2}")
-    check("里程圈 3 位数仍同径", abs(r3 - r1) < 1e-12, f"{r3}/{r1}")
-    check("里程圈 3 位数缩字不溢出", f3 < f1 and f3 * 0.60 * 3 <= 2 * r3 - GC.KM_CIRCLE_PAD_DEF,
-          f"fs={f3:.3f} r={r3:.3f}")
-    r1h, f1h = GC.km_circle_metrics(1, z=2.8, k=1.0)
-    r2h, f2h = GC.km_circle_metrics(2, z=1.0, k=3.0)
-    check("里程圈跨比例尺同比放大（手机 z / 高清 k）",
-          abs(r1h - 2.8 * r1) < 1e-12 and abs(f1h - 2.8 * f1) < 1e-12
-          and abs(r2h - 3.0 * r2) < 1e-12 and abs(f2h - 3.0 * f2) < 1e-12)
+    mpp = 33.3
+    r1, f1, s1 = GC.km_circle_metrics(1, mpp, ss=10)
+    r2, f2, s2 = GC.km_circle_metrics(2, mpp, ss=10)
+    r3, f3, s3 = GC.km_circle_metrics(3, mpp, ss=10)
+    check("里程圈外径 = 地面 300 m",
+          abs(2 * r1 * mpp - GC.KM_CIRCLE_GROUND_M) < 1e-9
+          and abs(2 * r3 * mpp - GC.KM_CIRCLE_GROUND_M) < 1e-9,
+          f"{2*r1*mpp:.4f}/{2*r3*mpp:.4f}")
+    check("里程圈 1/2/3 位数同径", abs(r1 - r2) < 1e-12 and abs(r3 - r1) < 1e-12)
+    check("里程圈描边物理宽 ≤ 4 px（高清 ss=10）",
+          s1 * 10 <= GC.KM_CIRCLE_STROKE_PX + 1e-9 and abs(s1 * 10 - 4) < 1e-9,
+          f"sw={s1:.4f} → {s1*10:.2f}px")
+    check("里程圈描边普通图走设计宽 2",
+          abs(GC.km_circle_metrics(2, mpp, ss=1)[2] - GC.KM_CIRCLE_STROKE_LOG) < 1e-12)
+    check("里程圈手机描边 2×1.9 仍 ≤ 4 px",
+          abs(GC.km_circle_metrics(2, mpp, ss=1, m=1.9)[2] - 3.8) < 1e-9)
+    check("里程圈数字动态填充：位数越少字越大", f1 > f2 > f3,
+          f"{f1:.3f}/{f2:.3f}/{f3:.3f}")
+    for nd, f in ((1, f1), (2, f2), (3, f3)):
+        inner = 2 * r1 - 2 * s1 - min(GC.KM_CIRCLE_PAD_PX / 10, 0.08 * 2 * r1)
+        check(f"里程圈 {nd} 位数不顶出圆",
+              GC.KM_CIRCLE_DIGIT_W * nd * f <= inner + 1e-9
+              and GC.KM_CIRCLE_DIGIT_H * f <= inner + 1e-9,
+              f"fs={f:.3f} inner={inner:.3f}")
+    r2h, _, _ = GC.km_circle_metrics(2, mpp, z=2.8, ss=10)
+    check("里程圈手机 z 同比放大", abs(r2h - 2.8 * r2) < 1e-12)
+    r2s, _, _ = GC.km_circle_metrics(2, mpp / 2, ss=10)
+    check("里程圈地面口径：m/px 减半 → 圈径翻倍",
+          abs(r2s - 2 * r2) < 1e-12, f"{r2:.4f}→{r2s:.4f}")
     svg = (HERE / "map_svg.py").read_text(encoding="utf-8")
-    check("里程圈调用单一共享口径", "GC.km_circle_metrics(nd, z, k)" in svg
-          and "_shift_km = 0.4" in svg)
+    check("里程圈调用单一共享口径 + 描边吃 sw",
+          "GC.km_circle_metrics(nd, M_PER_PX, z, float(_VIS[\"ss\"]), M)" in svg
+          and 'stroke-width="{sw:.3f}"' in svg and "_shift_km = 0.4" in svg)
 
 
 def t_font_scale_ground():
