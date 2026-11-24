@@ -124,6 +124,8 @@ def _pin_d(k=None):
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
 MFS_S = 2.8           # 手机版里程点/线宽的额外放大
 
+# 里程圈统一圆径的口径在 guide_common.km_circle_metrics（跨模块唯一实现）。
+
 class _LazyCfg:
     """`route_def.CFG` 的惰性代理 —— **取值那一刻才去读**，不在 import 时快照。
 
@@ -1394,35 +1396,37 @@ def build_map_overlay(mobile=False):
     #   （要等图钉 / 里程点 / POI 标注都摆完，_OCC 才完整，避让才算数）
     _LBL_AT = len(o)
 
-    # 每 5 km 里程点
-    # ⚠ 三位数（105 km 等）在固定 r=7.4 的圆里必然溢出 → 用户看到「105 挤在圈里」。
-    #   按位数自适应：三位数加大半径 + 略缩字号，保证文字完整落在圆内。
-    pin_xy = [P(d["lon"], d["lat"]) for d in POIS]     # 提前算：里程点要避开图钉
+    # 每 5 km 里程点：统一圆径（km_circle_metrics），撞图钉沿轨迹微调而不是丢号。
+    pin_xy = [P(d["lon"], d["lat"]) for d in POIS]
     # 里程点间隔：默认 5 km。**长线（>200 km）必须放大**，否则 469 km 会画 94 个圆圈、
     # 整条线变成一串珠子（2026-11-04 郭喀拉29天实测）。CFG["km_step"] 覆盖。
     _km_step = max(1, int(GC.cfg("km_step", 5) or 5))
     for target in range(_km_step, int(TOTAL_KM) + 1, _km_step):
         i = min(range(len(KM)), key=lambda j: abs(KM[j] - target))
-        x, y = XY[i]
         z = MFS_S if mobile else 1.0
         nd = len(str(target))
-        # 2026-11-10 用户「动态缩小公里数填充」：白底圆圈不再固定 5.8/7.6 两档，
-        # 直接由「数字实际占宽 + 内衬」反推 —— 位数越多圈越大，整体随视觉倍率 k 收紧；
-        # 字号仍受 3 位数不顶出 7.6×k 圈径的约束。未开 visual 的线路 k=1，逐字回到旧口径。
         k = _vk()
-        if k == 1.0 and not _VIS.get("halo_out_px"):
-            rr = (5.8 if nd <= 2 else 7.6) * z
-            fs = (8.6 if nd <= 2 else 7.6) * z
-            fs = min(fs, (2 * rr - 2.4) / (0.60 * nd))
+        rr, fs = GC.km_circle_metrics(nd, z, k)
+        # 撞图钉时**沿轨迹前后微调**（2026-11-24 用户定案）：原来直接 continue，
+        # 20/30/85 km 整号消失、5 km 节奏断档。现在在 ±0.4 km 窗口里找离目标
+        # 最近且不压图钉的位置；只有整段都被占才放弃该号。
+        _shift_km = 0.4
+        _cands = [i]
+        for _j in range(i - 1, -1, -1):
+            if KM[i] - KM[_j] > _shift_km:
+                break
+            _cands.append(_j)
+        for _j in range(i + 1, len(KM)):
+            if KM[_j] - KM[i] > _shift_km:
+                break
+            _cands.append(_j)
+        _cands.sort(key=lambda _j: abs(KM[_j] - target))
+        for _j in _cands:
+            x, y = XY[_j]
+            if not any((x - px) ** 2 + (y - py) ** 2
+                       < (rr + (_PIN_R + 2) * k) ** 2 for px, py in pin_xy):
+                break
         else:
-            fs = 8.0 * z * k
-            fs = min(fs, (2 * 7.6 * z * k - 1.2 * z * k) / (0.60 * nd))
-            pad_k = 1.2 * z * k
-            rr = (fs * 0.60 * nd + pad_k) / 2.0
-        # 里程点**撞上营地/垭口图钉就跳过**：圆圈压住倒三角，读者会以为垭口在那儿
-        # （2026-10-27 实测「195」压在 主措什贡垭口 图标上）。少一个 5 km 点无伤大雅。
-        if any((x - px) ** 2 + (y - py) ** 2
-               < (rr + (_PIN_R + 2) * k) ** 2 for px, py in pin_xy):
             continue
         # 里程点是**固定锚点**（画在轨迹上），登记进 _OCC 让地名/POI 标注绕开它 ——
         # 否则会出现「195」圆圈压住垭口三角、或者地名贴着数字写（2026-10-27 实测）。

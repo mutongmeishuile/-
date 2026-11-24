@@ -1273,6 +1273,27 @@ def contour_fs_from_cfg(logical_w, bbox, _cfg=None):
     return float(g) if g else 4.0
 
 
+# 里程圈统一圆径（2026-11-24 用户定案）：圈径与位数**解耦**，桌面/手机/HTML/
+# 高清图共用一条公式。旧实现让半径随位数长（5.8/7.6 两档或 text-width 反推），
+# 结果 5 km 圈小、10/15 km 圈大，换个比例尺又变成另一套口径。
+KM_CIRCLE_R_DEF = 5.4      # 设计半径（逻辑 px，u = z*k = 1）
+KM_CIRCLE_FS_DEF = 8.0     # 设计字号（逻辑 px）
+KM_CIRCLE_PAD_DEF = 1.2    # 数字两侧内衬（逻辑 px）
+
+
+def km_circle_metrics(nd, z=1.0, k=1.0):
+    """里程圈 (半径, 字号) 逻辑 px；**所有位数同径同字号**，仅三位数缩字。
+
+    u = z*k 是唯一放大入口：手机 z=2.8、高清图 k=font_scale/SS。
+    1/2 位数字号恒为 8*u；3 位数按圈内径反缩写号，圈径始终不变。
+    """
+    u = z * k
+    rr = KM_CIRCLE_R_DEF * u
+    fs = min(KM_CIRCLE_FS_DEF * u,
+             (2 * rr - KM_CIRCLE_PAD_DEF * u) / (0.60 * nd))
+    return rr, fs
+
+
 def ground_font_active(_cfg=None, logical_w=None, bbox=None):
     """地面口径是否**真正生效**（字号由 label_ground_m 倒算而非手填 base/poi）。
 

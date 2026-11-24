@@ -1688,6 +1688,27 @@ def t_preflight_ground_font():
     check("preflight 走共享字号函数", "GC.contour_fs_from_cfg(" in src)
 
 
+def t_km_circle_unified():
+    """2026-11-24 用户定案：里程圈所有位数同径同字号（仅三位数缩字），跨比例尺同一公式。"""
+    import guide_common as GC
+    r1, f1 = GC.km_circle_metrics(1)
+    r2, f2 = GC.km_circle_metrics(2)
+    r3, f3 = GC.km_circle_metrics(3)
+    check("里程圈 1/2 位数同径", abs(r1 - r2) < 1e-12, f"{r1}/{r2}")
+    check("里程圈 1/2 位数同字号", abs(f1 - f2) < 1e-12, f"{f1}/{f2}")
+    check("里程圈 3 位数仍同径", abs(r3 - r1) < 1e-12, f"{r3}/{r1}")
+    check("里程圈 3 位数缩字不溢出", f3 < f1 and f3 * 0.60 * 3 <= 2 * r3 - GC.KM_CIRCLE_PAD_DEF,
+          f"fs={f3:.3f} r={r3:.3f}")
+    r1h, f1h = GC.km_circle_metrics(1, z=2.8, k=1.0)
+    r2h, f2h = GC.km_circle_metrics(2, z=1.0, k=3.0)
+    check("里程圈跨比例尺同比放大（手机 z / 高清 k）",
+          abs(r1h - 2.8 * r1) < 1e-12 and abs(f1h - 2.8 * f1) < 1e-12
+          and abs(r2h - 3.0 * r2) < 1e-12 and abs(f2h - 3.0 * f2) < 1e-12)
+    svg = (HERE / "map_svg.py").read_text(encoding="utf-8")
+    check("里程圈调用单一共享口径", "GC.km_circle_metrics(nd, z, k)" in svg
+          and "_shift_km = 0.4" in svg)
+
+
 def t_font_scale_ground():
     """2026-11-22 临安三尖踩坑：默认 150 m/字被 VIS_CAP=3 截断成 45 m。
 
@@ -1744,7 +1765,8 @@ def main():
                t_official_camp_pass, t_near_route_corridor, t_pbf_nepal,
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
                t_contour_width_absolute, t_logging,                t_ele_valid_lowalt,
-               t_default_render_params_v1, t_preflight_ground_font):
+               t_default_render_params_v1, t_preflight_ground_font,
+               t_km_circle_unified):
         try:
             if VERBOSE:
                 fn()
