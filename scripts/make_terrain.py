@@ -1975,7 +1975,8 @@ def _w_level(lv):
     return out
 
 
-def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every=None):
+def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every=None,
+                        bbox=None):
     """在计曲线上断线标注高程数字。
 
     * 只在**计曲线**（每 `every` m，缺省 LABEL_EVERY）上标；
@@ -1992,11 +1993,14 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     every = float(every if every else LABEL_EVERY)
     sx, sy = scale
     S = SS
-    # 计曲线数字字号：默认 LABEL_FONT（8.2 逻辑 px）。CFG["contour_label_font"]
-    # 可按线路覆写（逻辑 px）—— 大等高距合幅（500 m 档）里 8.2 会与峰名同大、
-    # 比 OSM 地名还抢眼，全线实测收到 6.4 后层次恢复（2026-11-08）。
-    _lf = _route_cfg("contour_label_font", None)
-    f = _label_font(max(7, int(round((float(_lf) if _lf else LABEL_FONT) * _label_cap_scale()))))
+    # 计曲线数字字号（2026-11-24 用户定案）：默认**与 OSM 底图注记同源**走地面口径
+    # （GC.contour_fs_from_cfg：每字 150 m 倒算，南太行 4.5 逻辑 px），不再用固定
+    # LABEL_FONT=8——后者在地面口径下比 OSM 字大近一倍，压过地名主次颠倒。
+    # 显式 CFG["contour_label_font"] 始终优先（老线路逐字不变）。
+    _cw = LOGICAL_W or GC.MAP_LONG_LOGICAL
+    _bb = bbox or GC.map_window()
+    _lf_px = GC.contour_fs_from_cfg(_cw, _bb)
+    f = _label_font(max(7, int(round(_lf_px * _label_cap_scale()))))
     # 白描边：**外围固定 1 输出 px**（2026-11-12 用户定，见 CONTOUR_LABEL_HALO_OUT）。
     # 旧口径 1.7*S 是"字号的 17%"，SS=10/13 时白边 17–22 px，数字被包成白方块。
     stroke = max(2, int(round(2 * CONTOUR_LABEL_HALO_OUT)))
@@ -2801,7 +2805,8 @@ def build_terrain():
         print(f"[5/7] 等高线高程标注（计曲线每 {c_major:g} m）…")
         pil, seed_cells = draw_contour_labels(
             pil, dem, (scale_raster, scale_raster_y), lo, hi,
-            avoid=avoid_points(meta, scale_raster, SS), every=c_major)
+            avoid=avoid_points(meta, scale_raster, SS), every=c_major,
+            bbox=meta.get("bbox"))
         seed_cells = seed_cells | snow_cells
     else:
         # 不画线就不标配数字：只留雪线名与峰顶高程（1:50 万图的注记就这两类）。

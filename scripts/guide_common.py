@@ -1255,6 +1255,24 @@ def label_fs_from_cfg(logical_w, bbox, cfg):
     return base, poi
 
 
+def contour_fs_from_cfg(logical_w, bbox, _cfg=None):
+    """计曲线高程数字逻辑 px 字号的**唯一口径**（2026-11-24 用户定案）。
+
+    显式 `CFG["contour_label_font"]` 始终优先（老线路逐字不变）；
+    未配时**与 OSM 底图注记同源**走 `label_fs_from_ground`（地面口径每字 N 米），
+    不再用 make_terrain.LABEL_FONT=8 的固定值 —— 后者在地面口径下会比 OSM 字大
+    近一倍（南太行实测 8.0 vs 4.5 逻辑 px），压过地名主次颠倒。
+    地面口径关闭 / 参数不全时回退 4.0（≈老 8.0 的一半，作为安全底）；
+    调用点仍可用 max(7,...) 之类的下限，但技能默认不再把数字撑到 8。
+    """
+    c = _cfg if _cfg is not None else {}
+    explicit = float(c.get("contour_label_font", 0) or cfg("contour_label_font", 0) or 0)
+    if explicit > 0:
+        return explicit
+    g = label_fs_from_ground(logical_w, bbox)
+    return float(g) if g else 4.0
+
+
 def ground_font_active(_cfg=None, logical_w=None, bbox=None):
     """地面口径是否**真正生效**（字号由 label_ground_m 倒算而非手填 base/poi）。
 

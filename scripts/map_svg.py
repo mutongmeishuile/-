@@ -44,8 +44,8 @@ FONT_STACK = "Microsoft YaHei,PingFang SC,Noto Sans CJK SC,Source Han Sans SC,sa
 PS_BASE = 0.66        # 点位符号／标注基准缩放（0.85 → 0.74 → 0.66：图钉再收两档）
 # ---- 线条与符号默认口径（2026-11-03 用户定；均为**逻辑 px**，与页面内嵌图同一坐标系，
 #      所以换 map_ss 只会改变字面像素数、不改变视觉权重）----
-ROUTE_W_DEF = 3.0       # 当日色主线（2026-11-17 用户定案：2.0→3.0 逻辑 px；
-                        # 出图 = 3.0 × min(SS,cap)，cap=3 时 9 px，白晕仍每侧 1 px）
+ROUTE_W_DEF = 1.5       # 当日色主线（2026-11-24 用户定案：3.0×0.5 → 1.5 逻辑 px；
+                        # 出图 = 1.5 × min(SS,cap)，地面口径 SS=10 时 15 px，白晕仍每侧 1 px）
 ROUTE_HALO_SIDE_DEF = 1.0   # 主线**每侧**白色描边宽度（总衬底 = 主线 + 2×此值）
 DAY_DASH_W_DEF = 1.0    # 分日界虚线
 PIN_D_DEF = 5.0         # 图钉可见外径（起点/终点/营地/水源/海子/垭口同尺寸）
@@ -77,10 +77,11 @@ def _label_lead_max():
     except Exception:                                              # noqa
         _k = GC.LABEL_LEADER_MAX_K
     _lead = _k * GC.VIS_CAP
-    # 地面口径大字号（2026-11-22）：30 px 的字根本落不进 6 px 的硬上限，
-    # 引线上限至少给到 1.05 个字高，否则 POI 名全被 FS_LADDER 缩一半。
+    # 地面口径（2026-11-22 大字号 / 2026-11-24 引线连通）：上限至少 1.05 个字高，
+    # 并覆盖正位贴点落位距离（_PIN_R + 6）——否则「文字贴正右/正左、gap≈半径+6」的
+    # 候选全被 6 px 上限拦下、引线一根都不画（用户 2026-11-24："应有标注点位指向名称"）。
     if _GROUND_FS:
-        _lead = max(_lead, 1.05 * _FS_BASE)
+        _lead = max(_lead, 1.05 * _FS_BASE, _PIN_R + 7.0)
     return _lead
 
 
@@ -859,6 +860,28 @@ def _first_pass_item(it):
     return _is_peak_item(it)
 
 
+def _is_camp_item(it):
+    """OSM 营地注记：draw_osm 的 extras(camp) 用 fill=(60,92,60)。"""
+    return tuple(it.get("fill") or ()) == (60, 92, 60)
+
+
+def _camp_pass_cfg():
+    """官方营地专用落位通道的参数：(轨迹附近半径 km, 官方名集合)；0 = 关闭。
+
+    CFG["camp_near_route_km"] > 0 才启用；CFG["camp_official_names"] 非空时
+    只放名单内的营地（简繁归一后比对），其余 OSM 营地仍走原来的 rest 通道。
+    """
+    try:
+        km = float(GC.cfg("camp_near_route_km", 0) or 0)
+    except Exception:                                               # noqa
+        km = 0.0
+    if km <= 0:
+        return 0.0, set()
+    names = GC.cfg("camp_official_names", None)
+    want = {_norm_name(str(x)) for x in names} if names else set()
+    return km, want
+
+
 def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     """OSM 地名：矢量层 + 动态避让。
 
@@ -877,11 +900,28 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
       · "rest" —— 排其余地名，仍在 POI 之后（村/湖/河继续给轨迹让路）。
       · None   —— 老行为，一次排完（其它线路不受影响）。
     """
+    _camp_km, _camp_names = _camp_pass_cfg()
+    if only == "camp" and _camp_km <= 0:
+        return ""                      # 线路没开官方营地通道：什么都不画
     items = _load_base_labels()
-    if only == "peak":
+    _camp_pass = (only == "camp" and _camp_km > 0)
+    if _camp_pass:
+        # 官方营地通道：只取「名单内 + 轨迹附近」的 OSM 营地。
+        # 营地本来就在轨迹旁边，旧的「字框不许压轨迹带」会把它全部丢掉。
+        items = [it for it in items if _is_camp_item(it)]
+        if _camp_names:
+            items = [it for it in items if _norm_name(it["t"]) in _camp_names]
+        if track:
+            _r = _camp_km * 1000.0 / max(M_PER_PX, 1e-6)
+            items = [it for it in items
+                     if min(math.hypot(it["x"] - px, it["y"] - py) for px, py in track) <= _r]
+    elif only == "peak":
         items = [it for it in items if _first_pass_item(it)]
     elif only == "rest":
         items = [it for it in items if not _first_pass_item(it)]
+        # 专用通道已接管的营地不再排第二遍，否则同名会印两行。
+        if _camp_km > 0:
+            items = [it for it in items if not _is_camp_item(it)]
     if not items:
         return ""
     if pois:
@@ -992,7 +1032,9 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                 if _first_hit is None:
                     _first_hit = _hit
                 continue
-            if _near_track(box, track, half_w):
+            # 官方营地贴着轨迹，字框落在轨迹带上是**预期**：只避已占框，
+            # 不再因压线丢掉（其余地名逐字保持旧行为）。
+            if not _camp_pass and _near_track(box, track, half_w):
                 if _rs is not None:
                     _rs["trk"] += 1
                 continue
@@ -1615,7 +1657,12 @@ def build_map_overlay(mobile=False):
         # ⚠ 白描边要"细而净"：5.4*PS（≈4.6 逻辑 px / 9 栅格 px）在浅色地形上会糊成
         #   一圈白阴影（用户原话"字体看上去有白色的阴影"）。收到 2.4*PS ≈ 字号的 13%，
         #   读起来是"描边"而不是"发光"，同时仍能压住底图等高线。
-        o.append(f'<text x="{tx}" y="{ty+7.4*PS:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
+        # 文字垂直居中于点位（2026-11-24 用户定案）：baseline 必须跟字号走。
+        # 旧版写死 ty+7.4*PS（PS=0.66 → 下沉 4.88 逻辑 px），是按字号 9 px 设计的；
+        # 地面口径把 POI 字号缩到 5 px 后，4.88 ≈ 字高本身，文字整体偏下、引线够不着。
+        # 0.35×fs 是基线相对字框中心的常规下沉，任意字号都居中（点位↔引线↔字心共线）。
+        _baseline = ty + 0.35 * fs
+        o.append(f'<text x="{tx}" y="{_baseline:.1f}" text-anchor="{ta}" font-size="{fs:.1f}" '
                  f'font-weight="700" fill="{col}" stroke="#FFFFFF" stroke-width="{_sw(max(1.1, fs * 0.17)):.4f}" '
                  f'stroke-opacity="0.92" paint-order="stroke" stroke-linejoin="round">{t}</text>')
 
@@ -1704,11 +1751,15 @@ def build_map_overlay(mobile=False):
                  f'font-size="{fs:.1f}" font-weight="700" fill="#3A4250">{sb_km:g} km</text></g>')
     if _bd_svg:
         o.append(_bd_svg)
+    # 官方营地（2026-11-23）：在 POI 标注之后、其余底图地名之前占位 ——
+    # 既绕开图钉，又不会先被远处地名挤掉；符号/文字仍是 draw_osm 那套绿色营地样式。
+    _camp_svg = _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
+                                   POIS, pin_xy, only="camp")
     _rest_lbl_svg = _place_base_labels(XY, (ROUTE_W + HALO_W) / 2 + 2,
                                        POIS, pin_xy,
                                        only=("rest" if _peak_first else None))
     # 图层顺序：底图地名（含先排的峰名）压在最下面，POI 标注盖在上面。
-    o.insert(_LBL_AT, _peak_lbl_svg + _rest_lbl_svg)
+    o.insert(_LBL_AT, _peak_lbl_svg + _camp_svg + _rest_lbl_svg)
     return "".join(o), placed
 
 

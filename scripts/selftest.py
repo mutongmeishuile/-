@@ -1230,6 +1230,20 @@ def t_label_knobs():
     check("right_only 分支不含左侧候选", "(-r" not in seg)
 
 
+def t_official_camp_pass():
+    """官方营地专用落位通道（2026-11-23 麦理浩径回写）。
+
+    线路级开关 camp_near_route_km 默认 0 = 老线路逐字不变；开通道后
+    贴轨迹的 OSM 营地不再被「不许压轨迹带」整批丢弃。
+    """
+    ms = (HERE / "map_svg.py").read_text(encoding="utf-8")
+    check("map_svg 有 _camp_pass_cfg", "def _camp_pass_cfg" in ms)
+    check("官方营地通道有独立调用点", 'only="camp"' in ms and "_camp_svg" in ms)
+    check("营地道不排进 rest 第二遍", 'if _camp_km > 0:\n            items = [it for it in items if not _is_camp_item(it)]' in ms)
+    check("营地落位跳过轨迹带禁令", "if not _camp_pass and _near_track(box" in ms)
+    check("未开通道时 camp 遍直接返回空", 'if only == "camp" and _camp_km <= 0:' in ms)
+
+
 def t_near_route_corridor():
     """近轨迹标注加密 + 栅格线宽减半（2026-11-10 GHT 全线三次定案）。
 
@@ -1609,8 +1623,8 @@ def t_default_render_params_v1():
           and 'GC.cfg_flag("labels_symbol_on_raster", False)' in svg)
     check("V1 map_svg 字号基准 8 / POI 9 未变",
           'GC.cfg("label_fs_base", 4)' in svg and '_FS_BASE * 1.125' in svg)
-    check("V1 map_svg 轨迹基准 3.0 / 白晕 1.0（2026-11-17 主线加粗）",
-          "ROUTE_W_DEF = 3.0" in svg and "ROUTE_HALO_SIDE_DEF = 1.0" in svg)
+    check("V1 map_svg 轨迹基准 1.5 / 白晕 1.0（2026-11-24 主线×0.5）",
+          "ROUTE_W_DEF = 1.5" in svg and "ROUTE_HALO_SIDE_DEF = 1.0" in svg)
     check("小径线宽默认 ×0.5",
           'GC.cfg("trail_line_scale", 0.5)' in osm)
 
@@ -1660,6 +1674,18 @@ def t_preflight_ground_font():
           'GC.cfg("label_ground_m", GC.LABEL_GROUND_M)' in svg
           and 'GC.cfg("label_ground_m", GC.LABEL_GROUND_M)' in osm
           and 'cfgv("label_ground_m", GC.LABEL_GROUND_M)' in pf)
+
+    # 2026-11-24 用户定案：等高线高程数字与 OSM 底图注记同源字号。
+    check("等高线字号共享函数存在", hasattr(GC, "contour_fs_from_cfg"))
+    cf = lambda c: GC.contour_fs_from_cfg(1504, bbox, c)
+    _osm_same = GC.label_fs_from_ground(1504, bbox)
+    check("等高线缺省字号 == OSM 底图字号（同源，同宽同窗）",
+          abs(cf({}) - _osm_same) < 1e-9, f"{cf({}):.4f} vs {_osm_same:.4f}")
+    check("等高线显式 contour_label_font 优先",
+          abs(cf({"contour_label_font": 6.4}) - 6.4) < 1e-9)
+    check("make_terrain 走共享字号函数", "GC.contour_fs_from_cfg(" in
+          (HERE / "make_terrain.py").read_text(encoding="utf-8"))
+    check("preflight 走共享字号函数", "GC.contour_fs_from_cfg(" in src)
 
 
 def t_font_scale_ground():
@@ -1715,7 +1741,7 @@ def main():
                t_font_scale_ground,
                t_day_palette_and_trail_legend, t_keep_raw_batch, t_contour_actual,
                t_osm_reuse, t_labels_vector, t_label_knobs,
-               t_near_route_corridor, t_pbf_nepal,
+               t_official_camp_pass, t_near_route_corridor, t_pbf_nepal,
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
                t_contour_width_absolute, t_logging,                t_ele_valid_lowalt,
                t_default_render_params_v1, t_preflight_ground_font):

@@ -80,8 +80,10 @@ def main(quiet=False):
     fs_base, fs_poi = GC.label_fs_from_cfg(
         IW, (lon0, lat0, lon1, lat1), RD.CFG if hasattr(RD, "CFG") else {})
     ground_m = float(cfgv("label_ground_m", GC.LABEL_GROUND_M) or 0)
-    # 计曲线高程数字的字号可被线路单独覆盖（华东K2 用 6 压到低于地名一档）
-    contour_fs = float(cfgv("contour_label_font", 0) or MT.LABEL_FONT)
+    # 计曲线高程数字：显式 contour_label_font 优先，否则与 OSM 同源走地面口径
+    # （2026-11-24 用户定案；GC.contour_fs_from_cfg 与 make_terrain 同值）。
+    contour_fs = GC.contour_fs_from_cfg(IW, (lon0, lat0, lon1, lat1),
+                                        RD.CFG if hasattr(RD, "CFG") else {})
 
     def eq(px):
         """出图 px → 缩到 1504 宽时的等效 CSS px。"""
