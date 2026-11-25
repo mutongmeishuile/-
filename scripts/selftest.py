@@ -1645,7 +1645,7 @@ def t_preflight_ground_font():
     2026-11-22 千八线踩坑：出图按地面口径算出 base=6.82，预检却只读 label_fs_base
     报成 4「字太小」，白返工两轮。这里守四件事：
       ① 共享解析函数存在且数值正确（显式优先 → 否则地面倒算）
-      ② 技能默认 LABEL_GROUND_M=150（未配线路也按地面口径；显式 0 才回老行为 4/4.5）
+      ② 技能默认 LABEL_GROUND_M=200（未配线路也按地面口径；显式 0 才回老行为 4/4.5）
       ③ preflight 调用共享函数、且用 contour_label_font 算高程数字行
       ④ 地面口径下不再用 1504 舒适区误报字号大小
     """
@@ -1654,8 +1654,8 @@ def t_preflight_ground_font():
     fn = lambda c: GC.label_fs_from_cfg(846, bbox, c)
     check("地面口径解析函数存在",
           hasattr(GC, "label_fs_from_cfg") and hasattr(GC, "ground_width_m"))
-    check("技能默认 150 m/字（用户 2026-11-22 定案）",
-          GC.LABEL_GROUND_M == 150.0, str(GC.LABEL_GROUND_M))
+    check("技能默认 200 m/字（用户 2026-11-26 定案）",
+          GC.LABEL_GROUND_M == 200.0, str(GC.LABEL_GROUND_M))
     base, poi = fn({"label_ground_m": 150})
     check("地面口径 150 m → base≈6.82（与千八线出图同值）",
           abs(base - 6.821) < 0.02, f"{base:.4f}")
@@ -1664,8 +1664,10 @@ def t_preflight_ground_font():
     check("显式 base 覆盖地面口径，POI 仍走 ground（与 map_svg 同源）",
           abs(b2 - 6.5) < 1e-9 and abs(p2 - 7.6739317) < 1e-5, f"{b2:.4f}/{p2:.4f}")
     b3, p3 = fn({})
-    check("空 CFG 走技能默认 150 m（≈6.82/7.67）",
-          abs(b3 - 6.821) < 0.02 and abs(p3 - 7.674) < 0.02, f"{b3:.4f}/{p3:.4f}")
+    _exp_base = 150.0 * 846 / GC.ground_width_m(bbox) * (GC.LABEL_GROUND_M / 150.0)
+    check("空 CFG 走技能默认 200 m（按常量倒算）",
+          abs(b3 - _exp_base) < 1e-6 and abs(p3 - _exp_base * 1.125) < 1e-6,
+          f"{b3:.4f}/{p3:.4f}")
     b4, p4 = fn({"label_ground_m": 0})
     check("显式 0 关闭地面口径 → 回到 4 / 4.5",
           abs(b4 - 4) < 1e-9 and abs(p4 - 4.5) < 1e-9, f"{b4:.4f}/{p4:.4f}")
@@ -1699,13 +1701,13 @@ def t_preflight_ground_font():
 
 
 def t_km_circle_unified():
-    """2026-11-24 用户定案：外径=地面300m / 描边物理≤4px / 数字动态填满。"""
+    """2026-11-26 用户定案：外径=地面400m（每字200m 的 2 倍）/ 描边物理≤4px / 数字动态填满。"""
     import guide_common as GC
     mpp = 33.3
     r1, f1, s1 = GC.km_circle_metrics(1, mpp, ss=10)
     r2, f2, s2 = GC.km_circle_metrics(2, mpp, ss=10)
     r3, f3, s3 = GC.km_circle_metrics(3, mpp, ss=10)
-    check("里程圈外径 = 地面 300 m",
+    check("里程圈外径 = 地面 400 m（每字 200 m 的 2 倍，按常量）",
           abs(2 * r1 * mpp - GC.KM_CIRCLE_GROUND_M) < 1e-9
           and abs(2 * r3 * mpp - GC.KM_CIRCLE_GROUND_M) < 1e-9,
           f"{2*r1*mpp:.4f}/{2*r3*mpp:.4f}")
@@ -1750,7 +1752,7 @@ def t_font_scale_ground():
     import guide_common as GC
     check("共享 font_scale 存在", hasattr(GC, "font_scale") and hasattr(GC, "ground_font_active"))
     # 默认（地面口径，无显式 cap）：ss=10 → S=10（不再被 3 截断）
-    check("地面口径 S=ss 不封顶（150m 真生效）", GC.font_scale(10) == 10.0,
+    check("地面口径 S=ss 不封顶（200m 真生效）", GC.font_scale(10) == 10.0,
           str(GC.font_scale(10)))
     check("地面口径 ss=13 → S=13", GC.font_scale(13) == 13.0)
 

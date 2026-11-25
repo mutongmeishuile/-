@@ -964,7 +964,7 @@ def _use_band(with_title):
 **定案口径**（唯一实现 `GC.km_circle_metrics`，跨模块只此一份）：
 ```
 nd  = 本线路所有里程圈共用的基准位数 = max(1, len(str(int(TOTAL_KM))))   # 不是逐圈位数！
-r   = KM_CIRCLE_GROUND_M / m_per_px / 2 * z          # 外径 = 地面 300 m（与每字 150 m 同源）
+r   = KM_CIRCLE_GROUND_M / m_per_px / 2 * z          # 外径 = 地面 400 m（每字 200 m ×2）
 sw  = min(KM_CIRCLE_STROKE_LOG * m, KM_CIRCLE_STROKE_PX / ss)  # 物理描边封顶 4 px
 pad = min(KM_CIRCLE_PAD_PX / ss, 0.08 * 2r)          # 物理内衬封顶 4 px，小圈再夹到直径 8%
 fs  = min((2r - 2sw - pad) / (DIGIT_W * nd), (2r - 2sw - pad) / DIGIT_H)  # 取最小 = 统一字号

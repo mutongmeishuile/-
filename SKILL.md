@@ -66,7 +66,7 @@ agent_created: true
 地面口径（`label_ground_m=150`，技能默认）下，点符号 / 线宽不再写死「逻辑常数 × 出图倍率」——
 旧口径 SS=10 时图钉 50 px、峰三角 53 px，而文字只有 13 px，换个画幅又重新失衡。
 现在统一由 `guide_common.VISUAL_PX` 给出**成品物理 px 目标**，
-`visual_px(target, SS) = target / SS` 换成 SVG 逻辑 px；字号仍按「每字压住 150 m 地面」倒算。
+`visual_px(target, SS) = target / SS` 换成 SVG 逻辑 px；字号仍按「每字压住 200 m 地面」倒算。
 于是 SS 从 3 变到 13 时符号在成品图上视觉尺寸不变，而字在物理上同步放大、地面口径不破。
 
 | 项目 | 目标物理 px | CFG 覆盖键 | 底层常量（显式配置时仍生效） |
@@ -562,13 +562,13 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
   `label_fs_base=8` / `label_fs_poi=9` 即 24/27 px 出图），换窗口时按宽度反比换算：
   `label_fs_base ≈ 8 × (参考窗口 km ÷ 本线窗口 km)`，宽窗口（>80 km 的总览）可再压到 4–6。
   两个键都在 `route_def.CFG`（`label_fs_base` / `label_fs_poi`），**显式填了就优先**；
-  不填则走技能默认的地面口径（150 m/字，见下一条）。旧档「默认 4 / 4.5 是 70 km 窗口口径」
+  不填则走技能默认的地面口径（200 m/字，见下一条）。旧档「默认 4 / 4.5 是 70 km 窗口口径」
   已作废（2026-11-22）。符号与轨迹宽度同理：`vector_symbol_cap`
   与 `label_font_cap` 必须相等，否则 SVG 字与栅格避让框对不上。
-- **「每字压住 N 米」倒算（2026-11-22 用户定案，技能默认口径）**：
-  ⚠ 旧基准 N = 700 m（11-18 定）已被 **N = 150 m** 取代；旧档里
+- **「每字压住 N 米」倒算（2026-11-26 用户定案，技能默认口径）**：
+  ⚠ 旧基准 N = 700 m（11-18 定）→ N = 150 m（11-22 定）→ **N = 200 m（11-26 定）**；旧档里
   「五台山 31.7 px ≈ base 10.6」「麦径 14.7 px」等数字只作历史参考，别照抄。
-  默认 `CFG["label_ground_m"]=150`（共享常量 `GC.LABEL_GROUND_M`），新线路不配也按此走；
+  默认 `CFG["label_ground_m"]=200`（共享常量 `GC.LABEL_GROUND_M`），新线路不配也按此走；
   显式 `label_fs_base` / `label_fs_poi` 仍优先（老线路逐字不变），显式 `label_ground_m=0`
   可关掉地面口径回到老行为。符号与字层的比例靠 `vector_symbol_cap = label_font_cap`
   同步调整，不要单改 `route_w`/`pin_d`。
@@ -576,8 +576,9 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
   公式已内建为 `GC.label_fs_from_ground(logical_w, bbox, N)`：
   `逻辑 px/字 = N × 逻辑画幅宽 / 窗口东西宽(m)`，`map_svg` 与 `draw_osm` 各自从
   `base_meta["bbox"]` 现算（两边必须同值，否则避让框与字对不上）。
-  基准 **N = 150 m**（用户当天 700 → 250 → 150 三次收敛；700 在 20 km 级窗口
-  字高 31 逻辑 px、只剩 27 字宽，明显偏大）。同时：
+  基准 **N = 200 m**（用户口径 700 → 250 → 150 → 200 逐次收敛；700 在 20 km 级窗口
+  字高 31 逻辑 px、只剩 27 字宽，明显偏大）。A 组地面注记统一锚定 200 m：
+  `label_ground_m=200` 且 `GC.KM_CIRCLE_GROUND_M=400`（里程圈外径 = 每字口径 ×2 = 地面 400 m）。同时：
   ① `map_aspect_mode="snap"`（纯底图吸 16:9 / 9:16，长边逻辑 1504）；
   ② `map_ss=10` → 长边 15040 px；
   ③ `label_font_cap = vector_symbol_cap = map_ss`（让 `_vk()=1`，字面吃满口径）。

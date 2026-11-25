@@ -1240,8 +1240,9 @@ MAP_ASPECT_PORT  = 9.0 / 16.0
 #     逻辑 px / 字 = N × 逻辑宽 / 窗口东西宽(m)
 # 逻辑宽 = 设计画幅宽（16:9 → 1504，9:16 → 846），出图物理 px = 逻辑 px × SS。
 # 2026-11-22 起默认 150 m/字（用户把技能默认值从 0 改成 150）；
+# 2026-11-26 用户定案：A 组地面注记锚定统一为 200 m/字（150 → 200）。
 # 显式 0 = 关闭（回到老行为：route_def 里手填 label_fs_base / label_fs_poi）。
-LABEL_GROUND_M   = 150.0
+LABEL_GROUND_M   = 200.0
 
 
 def visual_px(target, ss):
@@ -1276,7 +1277,7 @@ def label_fs_from_cfg(logical_w, bbox, cfg):
     map_svg 顶部与 preflight_labels 必须同值（矢量字与栅格避让框同源），
     所以把这段抽到共享库，避免两边各写一遍、日后改一边漏一边。
     返回 (base, poi)，单位 = 逻辑 px。
-    ⚠ 不传 label_ground_m 时走技能默认（LABEL_GROUND_M=150）；显式 0 才回老默认。
+    ⚠ 不传 label_ground_m 时走技能默认（LABEL_GROUND_M=200）；显式 0 才回老默认。
     显式 label_fs_base / label_fs_poi 始终优先（老项目逐字不变）。
     """
     cfg = cfg or {}
@@ -1307,7 +1308,7 @@ def contour_fs_from_cfg(logical_w, bbox, _cfg=None):
 # 里程圈统一圆径（2026-11-24 用户定案）：圈径与位数**解耦**，桌面/手机/HTML/
 # 高清图共用一条公式。旧实现让半径随位数长（5.8/7.6 两档或 text-width 反推），
 # 结果 5 km 圈小、10/15 km 圈大，换个比例尺又变成另一套口径。
-KM_CIRCLE_GROUND_M = 300.0  # 圆圈**外侧直径**对应的地面距离（m），与每字 150 m 同源
+KM_CIRCLE_GROUND_M = 400.0  # 圆圈**外侧直径**对应的地面距离（m）= 每字 200 m 口径的 2 倍
 KM_CIRCLE_STROKE_LOG = 2.0  # 描边设计逻辑宽（再乘 m）；物理宽封顶 KM_CIRCLE_STROKE_PX
 KM_CIRCLE_STROKE_PX = 4.0   # 描边物理 px 上限（2026-11-24 用户定案）
 KM_CIRCLE_PAD_PX = 4.0      # 数字与描边之间的物理内衬（每侧）
@@ -1320,7 +1321,7 @@ def km_circle_metrics(nd, m_per_px, z=1.0, ss=1.0, m=1.0):
 
     2026-11-24 用户定案：
       ① 圆圈**外侧直径** = KM_CIRCLE_GROUND_M 米地面（/ m_per_px 换成逻辑 px），
-         与 OSM「每字 150 m」同一套口径 —— 不再是写死的逻辑半径；
+         与 OSM「每字 200 m」同一套口径（外径 = 每字口径 ×2 = 400 m）—— 不再是写死的逻辑半径；
       ② 描边设计宽 = KM_CIRCLE_STROKE_LOG × m，物理宽封顶 KM_CIRCLE_STROKE_PX
          （逻辑宽 = 物理上限 / ss），高清图不会再出现 20 px 的粗黑边；
       ③ 数字大小**动态填充**：按圈内净宽 / 基准位数反推字号，同时用字形高约束
