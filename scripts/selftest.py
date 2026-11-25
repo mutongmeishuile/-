@@ -1769,6 +1769,49 @@ def t_font_scale_ground():
         check(f"{name} 字号倍率走共享 font_scale", "GC.font_scale(" in src)
 
 
+def t_scale_adaptive_visual():
+    """2026-11-25：所有视觉元素的**目标物理 px**口径 + 跨画幅一致性。
+
+    旧口径把符号写成设计常数 × SS（SS=10 时图钉 50 px / 峰三角 53 px），
+    文字按地面口径只有 13 px；    换画幅还会重新失衡。这里锁住新口径的唯一入口、
+    调用点与三项具体缺陷修复（双圆点 / 公路平头缝 / 粗引线）。
+    """
+    import guide_common as GC
+
+    keys = ("poi_pin", "osm_peak_half", "osm_saddle_half", "osm_glacier_half",
+            "osm_dot_r", "leader_core", "route_w", "route_halo_side", "day_dash")
+    check("视觉口径常量齐全", hasattr(GC, "VISUAL_PX")
+          and all(k in GC.VISUAL_PX for k in keys))
+    check("visual_px 物理→逻辑（SS=10 时 20px→2 逻辑）",
+          approx(GC.visual_px(20, 10), 2.0) and approx(GC.visual_px(6, 2), 3.0))
+    check("符号物理上限 / HTML 字号下限已定", GC.SYMBOL_MAX_PX == 32.0
+          and GC.HTML_MIN_FS_LOG == 8.0)
+
+    svg = (HERE / "map_svg.py").read_text(encoding="utf-8")
+    osm = (HERE / "draw_osm.py").read_text(encoding="utf-8")
+    hi = (HERE / "render_map_hi.py").read_text(encoding="utf-8")
+    check("visual_px 是唯一物理→逻辑入口", "GC.visual_px(" in svg
+          and "def _vp(" in svg and "def visual_px(" in
+          (HERE / "guide_common.py").read_text(encoding="utf-8"))
+    check("POI 图钉/引线/主线走目标物理 px",
+          '_vp(GC.VISUAL_PX["poi_pin"]' in svg
+          and '_vp(GC.VISUAL_PX["leader_core"]' in svg
+          and '_vp(GC.VISUAL_PX["route_w"]' in svg)
+    check("OSM 峰/垭口/菱形/圆点走目标物理 px",
+          all(f'_vp(GC.VISUAL_PX["osm_{k}"]' in svg
+              for k in ("peak_half", "saddle_half", "glacier_half", "dot_r")))
+    check("同处两个 OSM 点只画一个符号（双圆圈修复）",
+          "_sym_xy = []" in svg and "_sr_sym + s0" in svg
+          and "_draw_sym and _sym ==" in svg)
+    check("HTML 内嵌图地面字号有显示下限（两处）",
+          svg.count("GC.HTML_MIN_FS_LOG") >= 2)
+    check("公路 way 端点补圆帽（断层修复）",
+          "d.ellipse([" in osm and "pts[0], pts[-1]" in osm
+          and "GC.ground_font_active()" in osm)
+    check("高清图入口仍传 visual", '"ss": float(_SS)' in hi
+          and "visual=_visual" in hi)
+
+
 def main():
     print("离线自检（不联网 / 不下 DEM / 不启浏览器）")
     if not VERBOSE:
@@ -1786,7 +1829,7 @@ def main():
                t_pbf_registry, t_map_ss_env, t_contour_ss_invariant,
                t_contour_width_absolute, t_logging,                t_ele_valid_lowalt,
                t_default_render_params_v1, t_preflight_ground_font,
-               t_km_circle_unified):
+               t_km_circle_unified, t_scale_adaptive_visual):
         try:
             if VERBOSE:
                 fn()

@@ -1196,6 +1196,28 @@ def fix_invalid_ele(ele, local_w=21, local_d=400.0):
 # 出图倍率 SS 低于上限时自动按 SS 缩小（"根据出图情况动态调整、上限为 3"）。
 VIS_CAP        = 3.0    # 统一系数 K 上限：字号/符号/轨迹 = 设计基准 × min(SS, K)
 HALO_OUT_PX    = 1.0    # 白晕外围固定输出 px（不随 SS 放大）
+
+# ---- 尺度自适应视觉口径（2026-11-25 用户定案）----
+# 旧口径把点符号写成「设计常数 × 出图倍率」：SS=10 时峰三角 2.9×10×2 = 58 px，
+# 而文字按地面口径只有 13 px —— 符号比字大 4 倍，且换个画幅又变形。
+# 新口径统一用**目标物理 px**表达，由 visual_px() 换成 SVG 逻辑 px：
+#   逻辑 px = 目标物理 px / SS
+# 于是 SS 多大符号在成品图上都是同一视觉尺寸；地面字号随画幅变化时，
+# 调用点再用 ratio×字高兜底，保证符号不会比字还小。
+VISUAL_PX = {
+    "poi_pin":         20.0,   # POI / 攻略点位图钉外径
+    "osm_peak_half":    9.0,   # 峰名正三角半宽（总宽 18 px）
+    "osm_saddle_half":  9.0,   # 垭口倒三角半宽
+    "osm_glacier_half": 8.0,   # 冰川/水系菱形半宽
+    "osm_dot_r":        6.0,   # 地名圆点半径（直径 12 px）
+    "leader_core":      2.5,   # 点位→名称引线芯宽
+    "route_w":          6.0,   # 当日色主线
+    "route_halo_side":  1.0,   # 主线每侧白晕
+    "day_dash":         2.0,   # 分日界短线
+}
+SYMBOL_MAX_PX   = 32.0   # 任何点符号的物理尺寸上限（兜底防失控）
+HTML_MIN_FS_LOG = 8.0    # HTML 内嵌小画幅的地面字号下限（逻辑 px；SS=1 时约 10 显示 px）
+
 JPG_QUALITY    = 82
 DEM_Z_DEFAULT  = 15     # DEM 默认档（区间 13–15；大窗口由 pick_dem_z 降档到 13）
 DEM_Z_MIN      = 13
@@ -1220,6 +1242,15 @@ MAP_ASPECT_PORT  = 9.0 / 16.0
 # 2026-11-22 起默认 150 m/字（用户把技能默认值从 0 改成 150）；
 # 显式 0 = 关闭（回到老行为：route_def 里手填 label_fs_base / label_fs_poi）。
 LABEL_GROUND_M   = 150.0
+
+
+def visual_px(target, ss):
+    """目标物理 px → SVG 逻辑 px：跨画幅/SS 保持同一视觉尺寸的唯一入口。
+
+    `ss` 是出图画幅倍率（render_map_hi 的 _SS / make_terrain 的 SS）。
+    HTML 内嵌图没有 visual 时 ss=1，目标值即逻辑值；调用点再按字高兜底。
+    """
+    return max(float(target), 0.1) / max(float(ss or 1), 1e-6)
 
 
 def ground_width_m(bbox):

@@ -65,6 +65,21 @@ def _vk():
     return float(_VIS["k"])
 
 
+def _vp(target, ratio=0.0, fs=None):
+    """目标物理 px → 逻辑 px（尺度自适应唯一入口，2026-11-25）。
+
+    · 物理目标优先：`target / SS`，所以画幅放大多少倍，符号在成品图上都是同一尺寸；
+    · 地面口径下再用 `ratio × 字高` 兜底，避免小画幅时符号比字还小；
+    · 物理上限 GC.SYMBOL_MAX_PX 兜底防失控。
+    显式配了 label_fs_base 的老线路 `_GROUND_FS=False` → 这里仍只按物理目标算，
+    但调用点会把老口径作为 upper/lower bound，逐字不漂移。
+    """
+    v = GC.visual_px(target, _VIS["ss"])
+    if ratio and fs:
+        v = max(v, float(ratio) * float(fs))
+    return min(v, GC.visual_px(GC.SYMBOL_MAX_PX, _VIS["ss"]))
+
+
 def _label_lead_max():
     """标注引线 / 标注到锚点距离的硬上限（逻辑 px）= K × 倍数。
 
@@ -118,7 +133,11 @@ def _halo_sw_sym():
 
 def _pin_d(k=None):
     kk = _vk() if k is None else float(k)
-    return float(_CFG.get("pin_d") or PIN_D_DEF) * kk
+    old = float(_CFG.get("pin_d") or PIN_D_DEF) * kk
+    # 显式配了 pin_d 的老线路逐字不变；地面口径线路换用目标物理直径口径。
+    if not _CFG.get("pin_d", None) and _GROUND_FS:
+        return _vp(GC.VISUAL_PX["poi_pin"], 1.2, _FS_BASE)
+    return old
 
 
 MFS_M = 1.9           # 手机版地图统一放大系数（图被缩到 ~0.25 倍，必须放大）
@@ -703,6 +722,11 @@ def _load_base_labels():
         # **三档已废弃** —— 同屏 0.6–1.4 px 的差异既不构成层级、又让同类地物看着不一样大。
         # 调字号就从 8 起算；POI 标注 = 基准 +1（label_fs_poi）。
         fs = _FS_BASE * _vk()
+        # 地面口径在 HTML 小画幅（SS=1、无 visual）下会算出 1.x 逻辑 px —— 缩略后
+        # 几乎看不见。给小画幅一个显示字号下限；高清图 SS=10 时不生效（目标 1.1 px
+        # 低于地面倒算的 1.3 px）。手机图同样受益。
+        if _GROUND_FS and _VIS.get("halo_out_px") is None:
+            fs = max(fs, GC.HTML_MIN_FS_LOG)
         out.append({
             # 用 draw_osm 记录的**要素真实锚点** ax/ay 当基准（不再用文字框位置当锚点，
             # 否则峰名/湖名的避让起点、引线落点都会偏到文字位置 → "明显偏移"）。
@@ -933,6 +957,10 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # （用户口径：其他地区保持不变）。
     out, dropped, n_placed = [], 0, 0
     _drop_names = []
+    # 2026-11-25：同名去重挡不住「谢家沟片区 / 谢家沟社区」这种一字之差、锚点只差
+    # 11 px 的点对 —— 各画一个 26 px 圆点 + 白晕就成了双重圆圈。文字都保留，
+    # 但符号在同一处只画一个（谁先落位谁占坑）。
+    _sym_xy = []
     # 落位诊断（MAP_LBL_DUMP=1）：把每个地名的「锚点 / 最终字位 / 命中第几个候选」
     # dump 成 JSON，用于回答"为什么这个字离锚点这么远"——不靠肉眼猜。
     _dbg = [] if os.environ.get("MAP_LBL_DUMP") else None
@@ -1061,38 +1089,52 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             # 符号：2026-11-18 默认由矢量层在**落位成功处**补画（_sym_on_raster=False），
             # 符号与字同生同灭 —— 栅格层那套多落位的符号不再单独出现（无字孤三角）。
             _sym = _base_label_sym(f, _sym_on_raster, it.get("k"))
-            if _sym:
+            # 2026-11-25 尺度自适应：符号半宽按**目标物理 px**，再以字高兜底。
+            _sym_key = {"peak": "osm_peak_half", "saddle": "osm_saddle_half",
+                        "glacier": "osm_glacier_half", "dot": "osm_dot_r"}.get(_sym, "")
+            _sr_sym = _vp(GC.VISUAL_PX[_sym_key], 0.5, fs) if _sym_key else 0.0
+            # 同一处只画一个符号：两条不同名的 OSM 点锚点挨得很近时，
+            # 两个圆点 + 白晕会叠成"双重圆圈"。文字都保留，符号先到先得。
+            _draw_sym = bool(_sym)
+            if _draw_sym:
+                if any(math.hypot(_ax - sx, _ay - sy) < _sr_sym + s0
+                       for sx, sy, s0 in _sym_xy):
+                    _draw_sym = False
+                else:
+                    _sym_xy.append((_ax, _ay, _sr_sym))
+            if _draw_sym:
                 # 2026-11-18 用户实测：POI 标注压在峰三角上，看起来"营地被标成了山峰"。
                 # 原因是 _OCC 里只有文字框，符号画在锚点却从不占位。补一个小方框，
                 # 让后续的 POI 标注 / 其他地名绕开已画出的符号。
                 _sr = 3.4 * _vk()
                 _OCC.append((_ax - _sr, _ay - _sr, _ax + _sr, _ay + _sr))
-            if _sym == "peak":
-                # 峰：正三角（与栅格 tri 同口径：半宽 5.4 逻辑 px、高 9.6）
-                _tr_ = 2.9 * _vk()      # 峰三角与字号同走「× min(SS, cap)」口径
+            if _draw_sym and _sym == "peak":
+                # 峰：正三角（目标物理半宽 9 px，SS=10 → 0.9 逻辑 px）
+                _tr_ = _vp(GC.VISUAL_PX["osm_peak_half"], 0.55, fs)
                 out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} '
                            f'L {_ax + _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} '
                            f'L {_ax - _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} Z" '
                            f'fill="{c1}" stroke="#FFFFFF" stroke-width="{_halo_sw_sym():.4f}" '
                            f'stroke-linejoin="round"/>')
-            elif _sym == "saddle":
+            elif _draw_sym and _sym == "saddle":
                 # 垭口：倒三角（尖端向下）+ 米色填充，与峰名三角明确区分
-                _tr_ = 2.9 * _vk()
+                _tr_ = _vp(GC.VISUAL_PX["osm_saddle_half"], 0.55, fs)
                 out.append(f'<path d="M {_ax - _tr_ * 0.95:.3f},{_ay - _tr_ * 0.72:.3f} '
                            f'L {_ax + _tr_ * 0.95:.3f},{_ay - _tr_ * 0.72:.3f} '
                            f'L {_ax:.3f},{_ay + _tr_:.3f} Z" '
                            f'fill="#FFF4E8" stroke="{c1}" stroke-width="{_halo_sw_sym():.4f}" '
                            f'stroke-linejoin="round"/>')
-            elif _sym == "glacier":
-                # 冰川：菱形
-                _tr_ = 2.3 * _vk()
+            elif _draw_sym and _sym == "glacier":
+                # 冰川 / 水系：菱形（语义错配另记，不在本轮改形状）
+                _tr_ = _vp(GC.VISUAL_PX["osm_glacier_half"], 0.5, fs)
                 out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} L {_ax + _tr_:.3f},{_ay:.3f} '
                            f'L {_ax:.3f},{_ay + _tr_:.3f} L {_ax - _tr_:.3f},{_ay:.3f} Z" '
                            f'fill="#E9F4FC" stroke="{c1}" stroke-width="{_halo_sw_sym():.4f}" '
                            f'stroke-linejoin="round"/>')
-            elif _sym == "dot":
+            elif _draw_sym and _sym == "dot":
                 # 地名 / 湖 / 河：小圆点 —— "这个字标的是哪"的答案。
-                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" r="{1.3 * _vk():.3f}" '
+                out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" '
+                           f'r="{_vp(GC.VISUAL_PX["osm_dot_r"], 0.5, fs):.3f}" '
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
                            f'stroke-width="{_halo_sw_sym():.4f}"/>')
             # 引线独立于符号归属：符号在栅格时同样需要它指认"字标的是哪"。
@@ -1344,11 +1386,19 @@ def build_map_overlay(mobile=False):
     #   2026-10-09 亚丁线「线太粗」→ 5.4/8.6 降到 4.0/6.2；
     #   2026-10-21 珠峰东坡扩窗后线相对更粗、压地名 → 再收到 3.0/4.9。
     # 2026-11-10：主线也走「设计基准 px × min(SS,cap)」→ cap=3 时 2.0×3 = 6 输出 px。
-    ROUTE_W = float(_CFG.get("route_w") or ROUTE_W_DEF) * M * _vk()
+    if _CFG.get("route_w", None) is None and _GROUND_FS:
+        # 2026-11-25 尺度自适应：主线走目标物理 px（SS=10 → 0.6 逻辑 px），
+        # 不再写死 1.5×SS 变成 15 px 的粗线；显式 route_w 的老线路逐字不变。
+        ROUTE_W = max(_vp(GC.VISUAL_PX["route_w"]), 0.5 * _FS_BASE * _vk()) * M
+    else:
+        ROUTE_W = float(_CFG.get("route_w") or ROUTE_W_DEF) * M * _vk()
     # 「白色描边」按**每侧**宽度定义：总衬底 = 主线 + 2×描边。
     # 若按总宽写（1.0 < 2.0），白边会被主线完全盖住、且不报错 —— 所以这里显式换算。
     # 启用 visual 时：白底每侧恒 halo_out_px 输出 px（不随超采，全线 = 1 px）。
-    _halo_side = float(_CFG.get("route_halo_side") or ROUTE_HALO_SIDE_DEF)
+    if _CFG.get("route_halo_side", None) is None and _GROUND_FS:
+        _halo_side = _vp(GC.VISUAL_PX["route_halo_side"])
+    else:
+        _halo_side = float(_CFG.get("route_halo_side") or ROUTE_HALO_SIDE_DEF)
     _ho = _halo_out()
     if _ho is not None:
         _halo_side = _ho
@@ -1444,8 +1494,12 @@ def build_map_overlay(mobile=False):
     # 2026-11-18 用户定案：不再水平横贯图幅 —— 总长限 3×K px（K=VIS_CAP=3 → 9px），
     # 方向取分界点前后约 1 km 轨迹趋势的法线（大致垂直于轨迹走向）。
     _dash_w = float(_CFG.get("day_dash_w") or DAY_DASH_W_DEF)
-    _dash_core = _dash_w * M * _vk()
-    _dash_halo = (_dash_w + 1.25) * M if _ho is None else _dash_core + 2 * _ho
+    if _CFG.get("day_dash_w", None) is None and _GROUND_FS:
+        _dash_core = _vp(GC.VISUAL_PX["day_dash"]) * M
+    else:
+        _dash_core = _dash_w * M * _vk()
+    _dash_halo = (_dash_core + GC.visual_px(2.0, _VIS["ss"])) \
+        if _ho is None else _dash_core + 2 * _ho
     try:
         _dash_max_k = float(GC.cfg("day_dash_max_k", GC.DAY_DASH_MAX_K)
                             or GC.DAY_DASH_MAX_K)
@@ -1615,7 +1669,9 @@ def build_map_overlay(mobile=False):
         # 标注字号**不跟符号缩放走**：图钉要小（0.66），字要读得清。
         # 2026-10-21 实测：字跟着 PS 缩到 9.6 之后，比底图地名（10–11.4）还小，
         # 白晕又占掉 1/4 笔画 —— POI 名看着发虚发灰，主次颠倒。
-        base = _FS_POI * _vk()  # 9 px 设计基准 × min(SS,cap)（高清图）；HTML 内嵌图 k=1
+        base = _FS_POI * _vk()  # 地面口径倒算 / 显式 9 px 基准 × min(SS,cap)
+        if _GROUND_FS and _VIS.get("halo_out_px") is None:
+            base = max(base, GC.HTML_MIN_FS_LOG * 1.125)
         col = D2_T if k in ("start", "end") else INK
         if mobile:
             txt = getattr(RD, "SHORT", {}).get(name, name)
@@ -1654,8 +1710,15 @@ def build_map_overlay(mobile=False):
         if 2.0 * M < gap <= _label_lead_max():
             px = min(max(x, box[0]), box[2])
             py = min(max(y, box[1]), box[3])
-            _lead_core = 1.4 * M * _vk()
-            _lead_halo = 2.6 * M if _ho is None else _lead_core + 2 * _ho
+            # 2026-11-25：引线走目标物理 px（2.5 px 芯 + 细白边），旧口径
+            # 1.4×_vk() 在 SS=10 下变成 14 px 实线 / 16 px 白晕，像一根胶囊。
+            if _GROUND_FS:
+                _lead_core = _vp(GC.VISUAL_PX["leader_core"]) * M
+                _lead_halo = _lead_core + 2 * (_ho if _ho is not None
+                                              else GC.visual_px(1.0, _VIS["ss"]))
+            else:
+                _lead_core = 1.4 * M * _vk()
+                _lead_halo = 2.6 * M if _ho is None else _lead_core + 2 * _ho
             o.append(f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
                      f'stroke="#FFFFFF" stroke-width="{_lead_halo:.4f}" stroke-linecap="round"/>'
                      f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
