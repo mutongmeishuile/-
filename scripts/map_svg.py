@@ -866,11 +866,18 @@ def _base_label_sym(fill, sym_on_raster, kind=""):
         return "glacier"
     if k == "road":
         return None              # 道路编号/路名：不挂锚点符号（2026-11-19）
+    # 2026-11-25 水系语义修复：旧实现把水系字色 (36,84,128) 当冰川画成菱形，
+    # 而冰川真色是 C_GLACIER_LB=(24,92,146)。改为按类别分流（draw_osm 给水系写
+    # k="water"、冰川写 k="glacier"），颜色兜底也一并纠正 —— 水系圆点、冰川菱形。
+    if k == "water":
+        return "dot"
     f = tuple(fill)[:3]
     if f == (150, 78, 24):
         return "saddle"          # 垭口：橙
+    if f == (24, 92, 146):
+        return "glacier"         # 冰川名：深冰蓝 C_GLACIER_LB
     if f == (36, 84, 128):
-        return "glacier"         # 冰川名：深冰蓝
+        return "dot"             # 水系名：深青蓝（旧记录无 k 时靠颜色兜底也正确）
     return "peak" if (f[0] - f[2] > 12 and f[0] < 110) else "dot"
 
 

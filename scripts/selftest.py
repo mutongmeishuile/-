@@ -479,7 +479,9 @@ def t_symbol_single_layer():
         # 矢量补画模式（2026-11-18 起默认）：峰三角 / 垭口倒三角 / 冰川菱形 / 其余圆点
         check("矢量模式下峰名画三角", sym(peak, False) == "peak")
         check("矢量模式下垭口画倒三角", sym(saddle, False) == "saddle")
-        check("矢量模式下冰川画菱形", sym((36, 84, 128), False) == "glacier")
+        # 2026-11-25 水系语义修复：水系色 (36,84,128) 是圆点不是冰川；冰川真色 (24,92,146) 才是菱形
+        check("矢量模式下水系画圆点（非冰川菱形）", sym((36, 84, 128), False) == "dot")
+        check("矢量模式下冰川画菱形（真色）", sym((24, 92, 146), False) == "glacier")
         check("矢量模式下地名画圆点", sym(place, False) == "dot")
         # 2026-11-19 用户报「G219 前面多了山峰三角」：道路编号/路名同是深棕色，
         #   纯按字色判会被补 ▲。类别 k 必须压过字色。
@@ -490,6 +492,8 @@ def t_symbol_single_layer():
     # k 必须由 draw_osm 写进 label_boxes.json，且 map_svg 读得到
     check("draw_osm 把要素类别写进记录 k", 'rec["k"] = kind' in do)
     check("draw_osm 道路编号传 kind=road", 'kind="road"' in do)
+    check("draw_osm 水系传 kind=water", 'kind="water"' in do)
+    check("map_svg 的 _base_label_sym 按 k=water 分流圆点", 'if k == "water":' in svg and 'return "dot"' in svg)
     check("map_svg 把 k 带进底图条目", '"k": str(it.get("k") or "")' in svg)
 
 

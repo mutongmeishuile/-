@@ -1844,6 +1844,7 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         if _skip(name):
             continue
         if lab.place(d, name, (x, y), f_water, (36, 84, 128), anchor_right=True,
+                     kind="water",    # 2026-11-25：让矢量层按类别画圆点，不再靠字色猜成冰川菱形
                      stroke_w=SW(2.1), pad=LBL_PAD * S,
                      fallback=(not NO_CROWD) or _water_fb):
             n_water += 1
