@@ -495,6 +495,12 @@ def t_symbol_single_layer():
     check("draw_osm 水系传 kind=water", 'kind="water"' in do)
     check("map_svg 的 _base_label_sym 按 k=water 分流圆点", 'if k == "water":' in svg and 'return "dot"' in svg)
     check("map_svg 把 k 带进底图条目", '"k": str(it.get("k") or "")' in svg)
+    # 2026-11-25 冰川层符号双画守卫：栅格层必须受 draw_symbols 控制，否则
+    # 「栅格 3.4×S 大菱形 + 矢量 8px 小菱形」同处双画
+    _gl_block = do[do.index("kind=\"glacier\"")-80: do.index("kind=\"glacier\"")+400] \
+        if 'kind="glacier"' in do else ""
+    check("冰川名符号受 lab.draw_symbols 守卫（不双画）",
+          "if lab.draw_symbols:" in _gl_block and "d.polygon" in _gl_block)
 
 
 # ---------------------------------------------------------------- ⑨d 画幅/引线/纯数字（2026-11-17）

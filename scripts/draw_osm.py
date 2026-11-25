@@ -1667,8 +1667,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
                 continue
             if lab.place(d, name, (x, y + 6 * S), f_water, C_GLACIER_LB, anchor_center=False,
                          kind="glacier", stroke_w=SW(2.1), pad=LBL_PAD * S):
-                d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
-                          fill=(233, 244, 252), outline=C_GLACIER_LB)
+                # 2026-11-25：与峰/垭口/地名同口径 —— 矢量模式下符号由 map_svg 按
+                # 目标物理 px 补画；这里再画就是「栅格 3.4×S 大菱形 + 矢量 8px 小菱形」
+                # 双画（开冰川层才暴露）。总览通道 draw_symbols=True 仍走这里。
+                if lab.draw_symbols:
+                    d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
+                              fill=(233, 244, 252), outline=C_GLACIER_LB)
                 n_glacier_lb += 1
 
     # 哑口 / 垭口：倒三角 ▽ + 名 + ele，用 warn 橙（与峰名的 ▲ 明确区分）。
