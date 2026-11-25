@@ -1242,14 +1242,14 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             d.line(pts, fill=ed, width=W(w * _rs) + _edge, joint="curve")
             d.line(pts, fill=core, width=W(w * _rs), joint="curve")
             # 2026-11-25：OSM 把同一条公路切成很多 way，PIL 默认平头端点在共节点处
-            # 留下楔形缺口，高倍图上就是"一节一节"的断层。给每条 way 首尾补圆帽
-            # （纸色帽 + 芯色帽）把缺口填上；圆帽只作用于端点，不改变线宽口径。
+            # 留下楔形缺口，高倍图上就是"一节一节"的断层。给每条 way 首尾补**芯色**圆帽
+            # 把缺口填上；圆帽直径 = 芯线宽，与线身齐平，不会鼓出串珠。
+            # ⚠ 不能补纸色帽：描边色圆帽会在每个 junction 露出一圈浅环，整条路变成念珠。
             if GC.ground_font_active() and len(pts) >= 2:
-                _cw, _ew = W(w * _rs), W(w * _rs) + _edge
+                _cw = W(w * _rs)
                 for _ex, _ey in (pts[0], pts[-1]):
-                    for _rr, _fill in ((_ew / 2.0, ed), (_cw / 2.0, core)):
-                        d.ellipse([_ex - _rr, _ey - _rr, _ex + _rr, _ey + _rr],
-                                  fill=_fill)
+                    d.ellipse([_ex - _cw / 2.0, _ey - _cw / 2.0,
+                               _ex + _cw / 2.0, _ey + _cw / 2.0], fill=core)
             n_line += 1
             # 收集道路注记，稍后在地名注记之后尝试标注（优先级低于地名）。
             # 2026-10-24 博罗科努补：**无 ref 但有 name 的道路也要标**。
