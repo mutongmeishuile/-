@@ -1096,15 +1096,19 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             # 符号：2026-11-18 默认由矢量层在**落位成功处**补画（_sym_on_raster=False），
             # 符号与字同生同灭 —— 栅格层那套多落位的符号不再单独出现（无字孤三角）。
             _sym = _base_label_sym(f, _sym_on_raster, it.get("k"))
-            # 2026-11-25 尺度自适应：符号半宽按**目标物理 px**，再以字高兜底。
+            # 2026-11-26 用户实测：符号**只按目标物理 px**，不再拿字高兜底。
+            # 旧实现 `_vp(target, 0.5, fs)` 在 300 m/字（fs 翻倍）下把圆点从 12 px
+            # 顶到 25 px、水系点 50 px —— 密集城市区成片大圆点，白晕一叠像双圆圈。
+            # 符号是「指认锚点」不是「字的一部分」，与字号解耦才跨比例尺恒定。
             _sym_key = {"peak": "osm_peak_half", "saddle": "osm_saddle_half",
                         "glacier": "osm_glacier_half", "dot": "osm_dot_r"}.get(_sym, "")
-            _sr_sym = _vp(GC.VISUAL_PX[_sym_key], 0.5, fs) if _sym_key else 0.0
+            _sr_sym = _vp(GC.VISUAL_PX[_sym_key]) if _sym_key else 0.0
             # 同一处只画一个符号：两条不同名的 OSM 点锚点挨得很近时，
             # 两个圆点 + 白晕会叠成"双重圆圈"。文字都保留，符号先到先得。
+            # 判据含白晕余量：符号外径 ~2×r + 白晕 2px，留 1.5× 间隔防止贴边成双圈。
             _draw_sym = bool(_sym)
             if _draw_sym:
-                if any(math.hypot(_ax - sx, _ay - sy) < _sr_sym + s0
+                if any(math.hypot(_ax - sx, _ay - sy) < 1.5 * (_sr_sym + s0)
                        for sx, sy, s0 in _sym_xy):
                     _draw_sym = False
                 else:
@@ -1117,7 +1121,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                 _OCC.append((_ax - _sr, _ay - _sr, _ax + _sr, _ay + _sr))
             if _draw_sym and _sym == "peak":
                 # 峰：正三角（目标物理半宽 9 px，SS=10 → 0.9 逻辑 px）
-                _tr_ = _vp(GC.VISUAL_PX["osm_peak_half"], 0.55, fs)
+                _tr_ = _vp(GC.VISUAL_PX["osm_peak_half"])
                 out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} '
                            f'L {_ax + _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} '
                            f'L {_ax - _tr_ * 0.92:.3f},{_ay + _tr_ * 0.62:.3f} Z" '
@@ -1125,7 +1129,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                            f'stroke-linejoin="round"/>')
             elif _draw_sym and _sym == "saddle":
                 # 垭口：倒三角（尖端向下）+ 米色填充，与峰名三角明确区分
-                _tr_ = _vp(GC.VISUAL_PX["osm_saddle_half"], 0.55, fs)
+                _tr_ = _vp(GC.VISUAL_PX["osm_saddle_half"])
                 out.append(f'<path d="M {_ax - _tr_ * 0.95:.3f},{_ay - _tr_ * 0.72:.3f} '
                            f'L {_ax + _tr_ * 0.95:.3f},{_ay - _tr_ * 0.72:.3f} '
                            f'L {_ax:.3f},{_ay + _tr_:.3f} Z" '
@@ -1133,7 +1137,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                            f'stroke-linejoin="round"/>')
             elif _draw_sym and _sym == "glacier":
                 # 冰川 / 水系：菱形（语义错配另记，不在本轮改形状）
-                _tr_ = _vp(GC.VISUAL_PX["osm_glacier_half"], 0.5, fs)
+                _tr_ = _vp(GC.VISUAL_PX["osm_glacier_half"])
                 out.append(f'<path d="M {_ax:.3f},{_ay - _tr_:.3f} L {_ax + _tr_:.3f},{_ay:.3f} '
                            f'L {_ax:.3f},{_ay + _tr_:.3f} L {_ax - _tr_:.3f},{_ay:.3f} Z" '
                            f'fill="#E9F4FC" stroke="{c1}" stroke-width="{_halo_sw_sym():.4f}" '
@@ -1141,7 +1145,7 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             elif _draw_sym and _sym == "dot":
                 # 地名 / 湖 / 河：小圆点 —— "这个字标的是哪"的答案。
                 out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" '
-                           f'r="{_vp(GC.VISUAL_PX["osm_dot_r"], 0.5, fs):.3f}" '
+                           f'r="{_vp(GC.VISUAL_PX["osm_dot_r"]):.3f}" '
                            f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
                            f'stroke-width="{_halo_sw_sym():.4f}"/>')
             # 引线独立于符号归属：符号在栅格时同样需要它指认"字标的是哪"。

@@ -1814,7 +1814,7 @@ def t_scale_adaptive_visual():
     check("visual_px 物理→逻辑（SS=10 时 20px→2 逻辑）",
           approx(GC.visual_px(20, 10), 2.0) and approx(GC.visual_px(6, 2), 3.0))
     check("符号物理上限 / HTML 字号下限已定", GC.SYMBOL_MAX_PX == 32.0
-          and GC.HTML_MIN_FS_LOG == 8.0)
+          and GC.HTML_MIN_FS_LOG == 12.0)
 
     svg = (HERE / "map_svg.py").read_text(encoding="utf-8")
     osm = (HERE / "draw_osm.py").read_text(encoding="utf-8")
@@ -1829,9 +1829,15 @@ def t_scale_adaptive_visual():
     check("OSM 峰/垭口/菱形/圆点走目标物理 px",
           all(f'_vp(GC.VISUAL_PX["osm_{k}"]' in svg
               for k in ("peak_half", "saddle_half", "glacier_half", "dot_r")))
+    # 2026-11-26 用户实测：300m 字高把圆点从 12px 顶到 25px（水系 50px）
+    # → 符号不再拿字高兜底，_vp 调用只传物理目标一个参数。
+    check("OSM 符号不跟字号膨胀（_vp 只传物理目标）",
+          all(f'_vp(GC.VISUAL_PX["osm_{k}"])' in svg
+              for k in ("peak_half", "saddle_half", "glacier_half", "dot_r")))
     check("同处两个 OSM 点只画一个符号（双圆圈修复）",
           "_sym_xy = []" in svg and "_sr_sym + s0" in svg
           and "_draw_sym and _sym ==" in svg)
+    check("符号去重含白晕余量（1.5×半径和）", "1.5 * (_sr_sym + s0)" in svg)
     check("HTML 内嵌图地面字号有显示下限（两处）",
           svg.count("GC.HTML_MIN_FS_LOG") >= 2)
     check("公路 way 端点补圆帽（断层修复）",

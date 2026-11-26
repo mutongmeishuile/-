@@ -1230,7 +1230,8 @@ VISUAL_PX = {
     "day_dash":         2.0,   # 分日界短线
 }
 SYMBOL_MAX_PX   = 32.0   # 任何点符号的物理尺寸上限（兜底防失控）
-HTML_MIN_FS_LOG = 8.0    # HTML 内嵌小画幅的地面字号下限（逻辑 px；SS=1 时约 10 显示 px）
+HTML_MIN_FS_LOG = 12.0   # HTML 内嵌小画幅的地面字号下限（2026-11-26 用户定案：8→12，
+                         # 横版 300m 口径下 8px 在页面缩放后仍吃力；12 逻辑 px 约显示 10px）
 
 JPG_QUALITY    = 82
 DEM_Z_DEFAULT  = 15     # DEM 默认档（区间 13–15；大窗口由 pick_dem_z 降档到 13）
