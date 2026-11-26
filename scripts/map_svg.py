@@ -941,7 +941,16 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     # 默认都保持既有观感，按线路显式开：
     #   CFG["osm_dot_sym"]=False   → 不画**纯地名**的锚点圆点（峰/垭口/冰川符号不受影响）
     #   CFG["label_fill_dark"]=True → 文字与引线改用加深色（只影响绘制，rank/符号判定仍用原色）
-    _dot_sym_on = GC.cfg_flag("osm_dot_sym", True)
+    #   CFG["osm_dot_sym"] 三档：True（默认，点+白边）/ "plain"（只留实心点，去白边）/
+    #     False（整个不画）。用户 2026-11-26："标注点外又套了个圈" = 点的白色描边。
+    _dv = GC.cfg("osm_dot_sym", True)
+    if isinstance(_dv, str):
+        _ds = _dv.strip().lower()
+        _dot_sym_on = _ds not in ("0", "false", "off", "none", "no", "")
+        _dot_plain = (_ds == "plain")
+    else:
+        _dot_sym_on = bool(_dv)
+        _dot_plain = False
     _darken_lbl = GC.cfg_flag("label_fill_dark", False)
     items = _load_base_labels()
     _camp_pass = (only == "camp" and _camp_km > 0)
@@ -1156,10 +1165,13 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                            f'stroke-linejoin="round"/>')
             elif _draw_sym and _sym == "dot":
                 # 地名 / 湖 / 河：小圆点 —— "这个字标的是哪"的答案。
+                # 2026-11-26：osm_dot_sym="plain" 去掉白色描边（用户嫌「点外又套一圈」），
+                # 只留实心点；实心点仍带白晕在深色地形上略吃亏，但高饱和绿地上足够清楚。
+                _dot_stroke = ("  stroke=\"none\"" if _dot_plain else
+                               f'  stroke="#fff" stroke-width="{_halo_sw_sym():.4f}"')
                 out.append(f'<circle cx="{_ax:.1f}" cy="{_ay:.1f}" '
                            f'r="{_vp(GC.VISUAL_PX["osm_dot_r"]):.3f}" '
-                           f'fill="{c1}" fill-opacity="0.9" stroke="#fff" '
-                           f'stroke-width="{_halo_sw_sym():.4f}"/>')
+                           f'fill="{c1}" fill-opacity="0.9"{_dot_stroke}/>')
             # 引线独立于符号归属：符号在栅格时同样需要它指认"字标的是哪"。
             # 但只有**真被推远**的才画：麦径实测 844 条里中位位移仅 23 px，
             # 短引线看着像脏线，反而干扰阅读（2026-11-17 用户）。
