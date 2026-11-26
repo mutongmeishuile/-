@@ -872,6 +872,23 @@ def t_contour_actual():
                 RD.CFG[k] = v
 
 
+def t_glacier_legend_sync():
+    print("⑮ 冰川层开关与图例一致（关了就不许留「冰川」图例项）")
+    try:
+        import route_def as RD
+    except BaseException:
+        print("         （跳过：当前目录不是线路项目）")
+        return
+    cfg = getattr(RD, "CFG", {}) or {}
+    lg = cfg.get("legend_extra") or []
+    on = bool(cfg.get("glacier_layer", False))
+    has = any("冰川" in str((it or {}).get("tag", "")) for it in lg)
+    # 2026-11-26 狼塔实测：glacier_layer 改 False 后图例仍留「浅蓝面为 OSM 冰川范围」，
+    # 图上有才写、没有不写 —— 这类不一致只能靠断言抓，目视整幅图根本注意不到。
+    check(f"glacier_layer={on} 时图例{'应' if on else '不得'}含冰川项",
+          on == has, f"glacier_layer={on} legend_has_glacier={has}")
+
+
 def t_snowline_legend():
     print("⑫ 图例雪线 desc 必须含出图值（meta['snowline']）—— 贡嘎 fork 图文打架守卫")
     try:
@@ -1809,6 +1826,8 @@ def t_font_scale_ground():
     import route_def as RD
     saved = dict(getattr(RD, "CFG", {}))
     try:
+        # 项目若配了 label_vis_px（可见度锚定），会掩盖下面 ground=0 的判定 → 先摘掉
+        RD.CFG.pop("label_vis_px", None)
         RD.CFG["label_font_cap"] = 3
         check("显式 cap=3 → 仍 min(ss,3)", GC.font_scale(10) == 3.0, str(GC.font_scale(10)))
         del RD.CFG["label_font_cap"]
