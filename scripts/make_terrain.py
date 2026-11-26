@@ -1994,7 +1994,7 @@ def draw_contour_labels(pil, dem, scale, lo, hi, avoid=None, verbose=True, every
     sx, sy = scale
     S = SS
     # 计曲线数字字号（2026-11-24 用户定案）：默认**与 OSM 底图注记同源**走地面口径
-    # （GC.contour_fs_from_cfg：每字 150 m 倒算，南太行 4.5 逻辑 px），不再用固定
+    # （GC.contour_fs_from_cfg：默认每字 200 m 倒算，见 GC.LABEL_GROUND_M），不再用固定
     # LABEL_FONT=8——后者在地面口径下比 OSM 字大近一倍，压过地名主次颠倒。
     # 显式 CFG["contour_label_font"] 始终优先（老线路逐字不变）。
     _cw = LOGICAL_W or GC.MAP_LONG_LOGICAL

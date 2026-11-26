@@ -63,7 +63,7 @@ agent_created: true
 
 **线条与符号口径（2026-11-25 用户定案：目标物理 px，跨画幅自适应）**
 
-地面口径（`label_ground_m=150`，技能默认）下，点符号 / 线宽不再写死「逻辑常数 × 出图倍率」——
+地面口径（`label_ground_m=200`，技能默认，2026-11-26 由 150 上调）下，点符号 / 线宽不再写死「逻辑常数 × 出图倍率」——
 旧口径 SS=10 时图钉 50 px、峰三角 53 px，而文字只有 13 px，换个画幅又重新失衡。
 现在统一由 `guide_common.VISUAL_PX` 给出**成品物理 px 目标**，
 `visual_px(target, SS) = target / SS` 换成 SVG 逻辑 px；字号仍按「每字压住 200 m 地面」倒算。
@@ -540,7 +540,7 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
   | `CFG["osm_dot_sym"]` | True | 纯地名锚点圆点。三档：`True`（默认，实心点 + 白描边）/ `"plain"`（**只留实心点、去掉白边** —— 用户嫌「点外套一圈」就是这个描边）/ `False`（整个不画）。峰三角/垭口倒三角/冰川菱形不受影响 |
   | `CFG["label_fill_dark"]` | False | 底图地名文字 / 引线改用加深色（×0.60）。**只改绘制色**，rank 排序与符号判据仍用原色（否则冰蓝会被误判）。高饱和绿地、深色林地上文字对比不足时开 |
   | `CFG["osm_label_size"]` | 无 | 把所有 OSM 地名**拉平成同一字号**。**默认已统一不分档**（`label_fs_base=4` 逻辑 px，出图 ×k）；此键仅在个别出图需要临时覆盖时用 |
-  | `CFG["name_junk_re"]` | 无（只用内置规则） | 追加"占位地名"正则（列表）。内置规则已滤掉 `湖泊KW` / `湖泊12` 这类「通用类名 + 1–3 位 ASCII 后缀」（2026-11-03 梅里-他念窗口实测 16 个），但 `vq` / `KY` 这种**光秃秃 1–2 字母**的水体名要靠这里配 `[r"^[A-Za-z]{1,2}$"]` |
+  | `CFG["name_junk_re"]` | 无（只用内置规则） | 追加"占位 / 无关地名"正则（**列表**，`re.match` **从头匹配**）。内置规则已滤掉 `湖泊KW` / `湖泊12` 这类「通用类名 + 1–3 位 ASCII 后缀」（2026-11-03 梅里-他念窗口实测 16 个），但 `vq` / `KY` 这种**光秃秃 1–2 字母**的水体名要靠这里配 `[r"^[A-Za-z]{1,2}$"]`。⚠ **强制横版 / 放大窗口后城市近郊会抓进成片居住区名**（2026-11-26 狼塔横版：328 条里 197 条是社区/村/街道/连队，占 60%，右侧挤成字毯），配 `[r"(?:.*)(?:社区\|村\|街道\|片区\|乡\|镇\|农场\|牧场\|小区\|连队\|连)$"]` 一次清到 125 条且自然地理零误伤。⚠ 正则前缀要用 `(?:.*)` 不能用 `.+`：`re.match` 从头匹配，`.+连$` 吃不下两字的「七连」。详见 `pitfalls-terrain §40` |
   | `CFG["peak_label_all"]` | False | 所有**具名**峰都允许挤放（不再"低分位放不下就丢"）。要"峰名尽量全出"时开 |
   | `CFG["peak_label_tight"]` | False | 峰名左缘紧贴三角右缘 **0.5 逻辑 px**（默认 gap 5.0，看起来离得远） |
   | `CFG["label_leader_max_k"]` | 2.0 | **标注贴点硬上限（2026-11-18 用户定案）**：引线 / 锚点到字框最近距离 ≤ K×2 逻辑 px（K=`VIS_CAP`=3 → 6 px）。POI 落位按**正右 → 正左 → 作者微调 → 四周**候选，超 cap 的候选一律不参与；引线只在 `min < 长度 ≤ cap` 时画。⚠ 贴点必然压轨迹线，故 `_layout` 对压轨迹只做**软偏好**（0.01 罚），不能给 1e6 否掉候选——否则起点/终点被迫挤在一起、字号阶梯把其中一个缩小一倍 |
@@ -623,6 +623,8 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
 | 图例压住山体 / 占比过大 | `references/pitfalls-map-svg.md` §21（`CFG["legend_outside"]=True`） |
 | **写了 `legend_place="band"` 却一个图例都没有** / 通栏图例带串列 | `references/pitfalls-map-svg.md` §25（`_use_band` 修好前只有旧键 `legend_outside` 出带子；4 列每列仅 356 px，`legend_band_cols=3`） |
 | **标题带图例被压成一行小字**（日志「按 0.62 缩放…可用 989」） | `references/pitfalls-map-svg.md` §26（「可用」只由标题宽决定，改 `sub` 无效；压缩 `days[i]["legend"]` 到两站才降「需要」） |
+| **地名/兴趣点旁出现「白圈套黑点」（双重圈）** | `references/pitfalls-map-svg.md` **§43**（栅格 POI/extras 漏 `lab.draw_symbols` 守卫；**用像素半径采样定性**，别信缩放裁图；改完必须重跑 dem） |
+| **整片城市地名挤成字毯 / 右侧一串社区村名** | `references/pitfalls-terrain.md` **§40**（强制横版把窗口拉宽抓进居住区名；`name_junk_re` 过滤，正则前缀用 `(?:.*)`） |
 | 字体要统一 / 线太粗 / 地名太密 | `references/pitfalls-map-svg.md` §22 |
 | 底图地名看不见 / 全是 □□□ | `references/pitfalls-terrain.md` §11 |
 | 整片区域没起伏 / 山顶出现平板 | `references/pitfalls-terrain.md` §8 / §8a / §8b |
@@ -676,6 +678,14 @@ python scripts/shoot_guide.py            # 宽屏长图；浏览器自动探测 
    （2026-11-09 用户实测「osm 的标记符号怎么没有啦」）。两种写法二选一，别混：
    全烤位图 → `labels_vector=False`；文字矢量 + 符号位图 → `labels_vector` 默认 + `labels_symbol_on_raster=True`。
    别用固定四角坐标硬摆，轨迹一变就会压住。
+   ⚠⚠ **栅格直绘的每个符号都必须包 `if lab.draw_symbols:`** —— 矢量模式下 `draw_pixels=False`，
+   但任何漏守卫的 `d.ellipse/polygon` 照样烤进 `base_map.jpg`，再被 `map_svg` 的同类符号叠一层，
+   就是用户嘴里反复出现的「**双重圈**」。地名主循环有守卫不代表 POI / extras 也有：
+   2026-11-26 狼塔横版就是 POI + `spring/water/camp/supply` 四处漏了，全程只在缩略图上表现为
+   "大白圈套小黑点"。诊断**用像素半径采样**（`base_map.getpixel((cx+rad, cy))` 逐半径打颜色），
+   别信缩放裁图的目视判断。详见 `pitfalls-map-svg §43`。
+   ⚠ 动到栅格符号 / 栅格注记落位，**必须 `--only dem,html,long,map,qa` 重跑 dem**；
+   只跑 `html,long,map` 会"改了完全没效果"（白圈还烤在旧 `base_map.jpg` 里）。
 11. **图例三种放法，用 `CFG["legend_place"]` 选**（**不写 = `"title"`，2026-10-23 起的默认**）：
    - `"title"`（**默认**）：塞进独立高清图的标题带空白区，**图面完全不被遮挡**。左簇符号说明（3×n）、
      右侧上为分日格子、下为附加线（雪线/步道）横排一行。**右缘贴数据行、底缘距带子下沿 8 px**；

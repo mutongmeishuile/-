@@ -111,3 +111,6 @@
 | **B 路线：瓦片米底没地形感、自带等高线太密/太淡** | `scripts/tile_tint.py`（瓦片只留线画 + DEM 设色打底 + 自绘等高线）+ `references/tile-basemap.md` §7/§11 |
 | **换个项目做同一片山，DEM 又要重下几万块瓦片** | 缓存已改**用户级共享** `~/.workbuddy/cache/hiking-dem/`（`HIKING_DEM_CACHE` 可覆盖）；瓦片按 z/x/y 命名，天生全局唯一 |
 | **手机版缩略图标注轻微互压，被判成"失败"** | `map_svg.self_check` 是**两档制**：手机版的「标注重叠 / 压家具」只告警；硬指标是越界 / 压轨迹 / 家具互叠 |
+| **地名/兴趣点旁「白圈套黑点」、整图成片白点噪声** | `references/pitfalls-map-svg.md` **§43**（栅格 POI/extras 漏 `draw_symbols` 守卫 → 与矢量点叠成双圈；用 `base_map.getpixel` 逐半径采样定性；改完必须重跑 **dem**） |
+| **横版/大窗口里城市定居点名字挤成字毯** | `references/pitfalls-terrain.md` **§40**（`name_junk_re` 滤社区/村/街道/连队；正则前缀写 `(?:.*)`，`re.match` 吃不下两字「七连」） |
+| **改了符号/底图注记却"完全没效果"** | 栅格符号烤在 `out/base_map.jpg` 里：必须 `--only dem,html,long,map,qa`。只重跑 `html,long,map` 只更新矢量层 |
