@@ -1316,7 +1316,14 @@ def contour_fs_from_cfg(logical_w, bbox, _cfg=None):
     explicit = float(c.get("contour_label_font", 0) or cfg("contour_label_font", 0) or 0)
     if explicit > 0:
         return explicit
-    g = label_fs_from_ground(logical_w, bbox)
+    # 2026-11-26 修：必须跟随项目的 label_ground_m。
+    # 旧实现 `label_fs_from_ground(logical_w, bbox)` 不传第三参 → 永远按技能常量
+    # LABEL_GROUND_M 算，项目配 300 / 540 时等高线仍按 200 走，与地名**不同源**。
+    # 实测狼塔：地名 25.1 px / 等高线 16.8 px（只有 2/3），南太行两者同为 45 px 才没暴露。
+    # 语义：传了 dict（含空 dict）就严格用 dict 里的值（selftest / preflight 可复现）；
+    # 传 None（make_terrain）才现取全局 route_def.CFG。
+    gm = cfg("label_ground_m", None) if _cfg is None else c.get("label_ground_m")
+    g = label_fs_from_ground(logical_w, bbox, gm)
     return float(g) if g else 4.0
 
 

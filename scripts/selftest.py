@@ -1723,6 +1723,10 @@ def t_preflight_ground_font():
           abs(cf({}) - _osm_same) < 1e-9, f"{cf({}):.4f} vs {_osm_same:.4f}")
     check("等高线显式 contour_label_font 优先",
           abs(cf({"contour_label_font": 6.4}) - 6.4) < 1e-9)
+    # 2026-11-26：等高线必须跟随项目的 label_ground_m（旧实现漏传，永远 200）
+    check("等高线跟随 label_ground_m（不再写死 200）",
+          abs(cf({"label_ground_m": 300}) / cf({"label_ground_m": 200}) - 1.5) < 1e-9,
+          f"{cf({'label_ground_m': 300}):.4f} vs {cf({'label_ground_m': 200}):.4f}")
     check("make_terrain 走共享字号函数", "GC.contour_fs_from_cfg(" in
           (HERE / "make_terrain.py").read_text(encoding="utf-8"))
     check("preflight 走共享字号函数", "GC.contour_fs_from_cfg(" in src)
