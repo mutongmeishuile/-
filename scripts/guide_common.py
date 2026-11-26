@@ -1286,19 +1286,44 @@ def label_fs_from_ground(logical_w, bbox, ground_m=None):
     return float(gm) * float(logical_w) / w
 
 
+def label_fs_anchor(logical_w, bbox, _cfg=None):
+    """A 组地面注记**逻辑 px** 基准字号的唯一解算（三种口径，优先级从高到低）。
+
+    ① `label_vis_px` —— 目标**物理 px** 字高（如 45）。`fs_logical = label_vis_px / map_ss`
+       完全不含 bbox，所以**换比例尺、换画幅、换 map_ss 都是同一个像素大小**。
+       这是唯一不需要"跟着窗口改配置"的口径；2026-11-26 用户问「换下一个比例尺
+       还是这样的可见度吗」——答：配了这一条就是，配 `label_ground_m` 就不是。
+    ② `label_ground_m` —— 每字压住 N 米地面。⚠ N 是常量时 `fs_px = N×输出宽/窗口宽`，
+       窗口每大一倍字就小一半；要等效必须手算 `N ≈ 窗口km × 3`（W=15040 时）。
+    ③ 都没配 → 技能默认 LABEL_GROUND_M=200。
+
+    三个调用者（map_svg 矢量字 / make_terrain 栅格烤字 / preflight 避让框）必须同源，
+    所以口径判断只在这里做一次，别在调用点各写一遍。
+    """
+    if _cfg is None:
+        c = {k: cfg(k, None) for k in ("label_vis_px", "label_ground_m", "map_ss")}
+    else:
+        c = _cfg
+    vp = float(c.get("label_vis_px", 0) or 0)
+    if vp > 0:
+        s = float(c.get("map_ss", None) or MAP_SS)
+        return max(vp, 0.1) / max(s, 1e-6)
+    g = label_fs_from_ground(logical_w, bbox, c.get("label_ground_m"))
+    return float(g) if g else 4.0
+
+
 def label_fs_from_cfg(logical_w, bbox, cfg):
-    """字号解析的**唯一口径**：显式 base/poi 优先，否则按 label_ground_m 倒算。
+    """字号解析的**唯一口径**：显式 base/poi 优先，否则走 label_fs_anchor。
 
     map_svg 顶部与 preflight_labels 必须同值（矢量字与栅格避让框同源），
     所以把这段抽到共享库，避免两边各写一遍、日后改一边漏一边。
     返回 (base, poi)，单位 = 逻辑 px。
-    ⚠ 不传 label_ground_m 时走技能默认（LABEL_GROUND_M=200）；显式 0 才回老默认。
     显式 label_fs_base / label_fs_poi 始终优先（老项目逐字不变）。
     """
     cfg = cfg or {}
-    g = label_fs_from_ground(logical_w, bbox, cfg.get("label_ground_m", LABEL_GROUND_M))
-    base = float(cfg.get("label_fs_base", 0) or 0) or (g if g else 4.0)
-    poi = float(cfg.get("label_fs_poi", 0) or 0) or ((g * 1.125) if g else base * 1.125)
+    g = label_fs_anchor(logical_w, bbox, cfg)
+    base = float(cfg.get("label_fs_base", 0) or 0) or g
+    poi = float(cfg.get("label_fs_poi", 0) or 0) or (g * 1.125)
     return base, poi
 
 
@@ -1316,15 +1341,10 @@ def contour_fs_from_cfg(logical_w, bbox, _cfg=None):
     explicit = float(c.get("contour_label_font", 0) or cfg("contour_label_font", 0) or 0)
     if explicit > 0:
         return explicit
-    # 2026-11-26 修：必须跟随项目的 label_ground_m。
-    # 旧实现 `label_fs_from_ground(logical_w, bbox)` 不传第三参 → 永远按技能常量
-    # LABEL_GROUND_M 算，项目配 300 / 540 时等高线仍按 200 走，与地名**不同源**。
-    # 实测狼塔：地名 25.1 px / 等高线 16.8 px（只有 2/3），南太行两者同为 45 px 才没暴露。
-    # 语义：传了 dict（含空 dict）就严格用 dict 里的值（selftest / preflight 可复现）；
-    # 传 None（make_terrain）才现取全局 route_def.CFG。
-    gm = cfg("label_ground_m", None) if _cfg is None else c.get("label_ground_m")
-    g = label_fs_from_ground(logical_w, bbox, gm)
-    return float(g) if g else 4.0
+    # 2026-11-26：与地名**同源**走 label_fs_anchor（可见度锚定 / 地面米锚定二选一）。
+    # 旧实现直接调 label_fs_from_ground 且不透传 CFG → 项目配 300/540 时等高线
+    # 仍按 200 算，实测狼塔只有地名的 2/3；南太行两者同为 45 px 才没暴露。
+    return label_fs_anchor(logical_w, bbox, _cfg)
 
 
 # 里程圈统一圆径（2026-11-24 用户定案）：圈径与位数**解耦**，桌面/手机/HTML/
@@ -1371,13 +1391,18 @@ def ground_font_active(_cfg=None, logical_w=None, bbox=None):
     _cfg 可传 dict（selftest 用）；不传则走全局 cfg()（读 route_def.CFG）。
     """
     if _cfg is None:
-        d = {k: cfg(k, None) for k in ("label_ground_m", "label_fs_base")}
+        d = {k: cfg(k, None) for k in ("label_ground_m", "label_fs_base", "label_vis_px")}
     else:
         d = _cfg
+    if d.get("label_fs_base"):
+        return False
+    # 可见度锚定：字号已按 ss 除过，**同样**要求 S=ss，否则被 cap 截小、字不达目标 px
+    if float(d.get("label_vis_px", 0) or 0) > 0:
+        return True
     # None / 缺键 = 未配置 → 回退技能默认（LABEL_GROUND_M）；显式 0 才算关闭。
     gm_v = d.get("label_ground_m")
     gm = LABEL_GROUND_M if gm_v is None else float(gm_v or 0)
-    return bool(gm) and not d.get("label_fs_base")
+    return bool(gm)
 
 
 def font_scale(ss, cap_key="label_font_cap"):

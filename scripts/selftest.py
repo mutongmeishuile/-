@@ -1727,6 +1727,23 @@ def t_preflight_ground_font():
     check("等高线跟随 label_ground_m（不再写死 200）",
           abs(cf({"label_ground_m": 300}) / cf({"label_ground_m": 200}) - 1.5) < 1e-9,
           f"{cf({'label_ground_m': 300}):.4f} vs {cf({'label_ground_m': 200}):.4f}")
+
+    # 2026-11-26 可见度锚定（label_vis_px）：**换比例尺字不变**，这是它的全部意义。
+    _w = bbox[2] - bbox[0]
+    _h = bbox[3] - bbox[1]
+    wide = (bbox[0], bbox[1], bbox[2] + 3.6 * _w, bbox[3] + 3.6 * _h)
+    _c = {"label_vis_px": 45, "map_ss": 10}
+    b1 = GC.label_fs_from_cfg(1504, bbox, _c)[0] * 10
+    b2 = GC.label_fs_from_cfg(1504, wide, _c)[0] * 10
+    check("可见度锚定：窗口放大 4.6 倍字物理 px 恒定（45）",
+          abs(b1 - 45) < 1e-9 and abs(b2 - 45) < 1e-9, f"{b1:.3f} / {b2:.3f}")
+    check("可见度锚定优先于 label_ground_m",
+          abs(GC.label_fs_from_cfg(1504, bbox, {"label_vis_px": 45, "label_ground_m": 300,
+                                                "map_ss": 10})[0] * 10 - 45) < 1e-9)
+    check("未配 label_vis_px 仍走地面米口径",
+          abs(GC.label_fs_from_cfg(1504, bbox, {"label_ground_m": 300, "map_ss": 10})[0]
+              - GC.label_fs_from_ground(1504, bbox, 300)) < 1e-9)
+    check("等高线也吃 label_vis_px", abs(cf({"label_vis_px": 45, "map_ss": 10}) * 10 - 45) < 1e-9)
     check("make_terrain 走共享字号函数", "GC.contour_fs_from_cfg(" in
           (HERE / "make_terrain.py").read_text(encoding="utf-8"))
     check("preflight 走共享字号函数", "GC.contour_fs_from_cfg(" in src)
