@@ -936,6 +936,13 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
     _camp_km, _camp_names = _camp_pass_cfg()
     if only == "camp" and _camp_km <= 0:
         return ""                      # 线路没开官方营地通道：什么都不画
+    # 2026-11-26 用户实测（狼塔横版）：地名旁的「白底小圆点」在缩略视图里比字更抢眼，
+    # 成片白圈像噪声；深灰字 + 白晕压在高饱和绿地上对比也偏弱。两个线路级开关，
+    # 默认都保持既有观感，按线路显式开：
+    #   CFG["osm_dot_sym"]=False   → 不画**纯地名**的锚点圆点（峰/垭口/冰川符号不受影响）
+    #   CFG["label_fill_dark"]=True → 文字与引线改用加深色（只影响绘制，rank/符号判定仍用原色）
+    _dot_sym_on = GC.cfg_flag("osm_dot_sym", True)
+    _darken_lbl = GC.cfg_flag("label_fill_dark", False)
     items = _load_base_labels()
     _camp_pass = (only == "camp" and _camp_km > 0)
     if _camp_pass:
@@ -1086,7 +1093,10 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
                              "first_hit": None if _first_hit is None
                              else [round(v, 1) for v in _first_hit]})
             f, st = it["fill"], it["stroke"]
-            c1 = "#%02x%02x%02x" % (f[0], f[1], f[2])
+            # label_fill_dark：只加深**绘制色**，rank / _base_label_sym 的颜色判据仍用原 f，
+            # 否则水系、冰川会被误判（例如冰蓝 (24,92,146) 加深后判不出 glacier）。
+            _fd = (tuple(max(0, int(v * 0.60)) for v in f[:3]) if _darken_lbl else f)
+            c1 = "#%02x%02x%02x" % (_fd[0], _fd[1], _fd[2])
             c2 = "#%02x%02x%02x" % (st[0], st[1], st[2])
             # 2026-10-24 用户反馈「看不出这个地名标的是哪个地方」：避让把字推离锚点后，
             # 图上一根线都没有，读者无从对应。→ 位移 > 5 px 就补一条 0.5 px 细引线。
@@ -1096,6 +1106,8 @@ def _place_base_labels(track, half_w, pois=(), pin_xy=(), only=None):
             # 符号：2026-11-18 默认由矢量层在**落位成功处**补画（_sym_on_raster=False），
             # 符号与字同生同灭 —— 栅格层那套多落位的符号不再单独出现（无字孤三角）。
             _sym = _base_label_sym(f, _sym_on_raster, it.get("k"))
+            if _sym == "dot" and not _dot_sym_on:
+                _sym = None        # 2026-11-26：纯地名锚点圆点按线路关闭（峰/垭口/冰川不受影响）
             # 2026-11-26 用户实测：符号**只按目标物理 px**，不再拿字高兜底。
             # 旧实现 `_vp(target, 0.5, fs)` 在 300 m/字（fs 翻倍）下把圆点从 12 px
             # 顶到 25 px、水系点 50 px —— 密集城市区成片大圆点，白晕一叠像双圆圈。
