@@ -582,6 +582,11 @@ def t_aspect_leader_numeric():
     check("map_svg 支持 label_fill_dark 开关", 'cfg_flag("label_fill_dark"' in svg)
     check("dot 关闭时分流为 None", '_sym == "dot" and not _dot_sym_on' in svg)
     check("dot 支持 plain（仅去白边）", '_dot_plain = (_ds == "plain")' in svg)
+    # 2026-11-26 双重圈真凶：draw_osm 里 POI/extras 的栅格符号原先漏了 draw_symbols 守卫，
+    # 矢量层又在同锚点补点 → 「白圈套点」。现在所有符号出口都必须带守卫。
+    check("draw_osm: 栅格符号全部受 draw_symbols 守卫（防双圈）",
+          do.count("if lab.draw_symbols:") >= 8 and do.count("elif lab.draw_symbols:") >= 3,
+          f"{do.count('if lab.draw_symbols:')}/{do.count('elif lab.draw_symbols:')}")
     check("加深只改绘制色（rank/符号判据用原色）", "rank / _base_label_sym" in svg)
     # 注记避让网格粒度 14 → 4 逻辑 px（2026-11-18 用户：字被假冲突推远）
     check("GC 有避让网格粒度 2", "LABEL_GRID_CELL     = 2.0" in gc)

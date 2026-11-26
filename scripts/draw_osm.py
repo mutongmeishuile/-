@@ -1728,13 +1728,18 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
         # ⚠ 符号同样只在注记落位成功后才画（否则留下无名的绿点）。
         if lab.place(d, name, (x, y), f_poi, (58, 66, 56), anchor_right=True,
                      stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
-            if kind == "temple":
-                d.rectangle([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S], fill=(178, 96, 72),
-                            outline=(255, 255, 255))
-            else:
-                r = 2.4 * S
-                d.ellipse([x - r, y - r, x + r, y + r], fill=(96, 132, 96),
-                          outline=(255, 255, 255))
+            # 2026-11-26 用户投诉「双重圈：标注点外又套个圈」的**真凶**：
+            # 这里原先**没有** lab.draw_symbols 守卫 —— 矢量模式下字交给 map_svg，
+            # 但 r=2.4*S≈24px 的绿圆+白描边仍烤进栅格，而 map_svg 又在同一锚点补小深点，
+            # 于是叠成「大白圈套小黑点」。地名那条（上面 places 循环）早就有守卫，唯独这里漏了。
+            if lab.draw_symbols:
+                if kind == "temple":
+                    d.rectangle([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S],
+                                fill=(178, 96, 72), outline=(255, 255, 255))
+                else:
+                    r = 2.4 * S
+                    d.ellipse([x - r, y - r, x + r, y + r], fill=(96, 132, 96),
+                              outline=(255, 255, 255))
             n_poi += 1
 
     # ---- 山谷 / 山脊名：荒野区唯一可用的地形参照（2026-10-29 补） ----
@@ -1801,10 +1806,11 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (26, 84, 138), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
-                    d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168),
-                              outline=(255, 255, 255))
+                    if lab.draw_symbols:      # 矢量模式交给 map_svg 补点，避免与栅格点叠成双圈
+                        d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168),
+                                  outline=(255, 255, 255))
                     n_extra[kind] += 1
-            else:
+            elif lab.draw_symbols:
                 d.ellipse([x - r, y - r, x + r, y + r], fill=(30, 106, 168),
                           outline=(255, 255, 255))
                 n_extra[kind] += 1
@@ -1813,11 +1819,12 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (60, 92, 60), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
-                    d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8),
-                               (x + r * 1.15, y + r * 0.8)],
-                              fill=(226, 238, 224), outline=(74, 118, 74))
+                    if lab.draw_symbols:
+                        d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8),
+                                   (x + r * 1.15, y + r * 0.8)],
+                                  fill=(226, 238, 224), outline=(74, 118, 74))
                     n_extra[kind] += 1
-            else:
+            elif lab.draw_symbols:
                 d.polygon([(x, y - r), (x - r * 1.15, y + r * 0.8),
                            (x + r * 1.15, y + r * 0.8)],
                           fill=(226, 238, 224), outline=(74, 118, 74))
@@ -1836,9 +1843,10 @@ def draw_overlay(pil, meta, osm_path=None, skip_names=None,
             if name and not _skip(name):
                 if lab.place(d, name, (x, y), f_poi, (122, 92, 40), anchor_right=True,
                              stroke_w=SW(2), pad=LBL_PAD * S, fallback=False):
-                    _draw_supply()
+                    if lab.draw_symbols:
+                        _draw_supply()
                     n_extra[kind] += 1
-            else:
+            elif lab.draw_symbols:
                 _draw_supply()
                 n_extra[kind] += 1
 
