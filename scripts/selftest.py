@@ -538,6 +538,23 @@ def t_aspect_leader_numeric():
           all(abs(a - b) < 2e-3 * max(1.0, abs(b)) for a, b in zip(wide, snap2)),
           (wide, snap2))
 
+    # 2026-11-26 用户要「横版试试」：map_aspect_force 强制画幅，忽略轨迹自身宽高比
+    check("map_window 支持 map_aspect_force 强制画幅", 'cfg("map_aspect_force"' in gc)
+    _oc, _or = GC.cfg, GC.resolve_bbox
+    try:
+        GC.resolve_bbox = lambda: (0.0, 0.0, 1.0, 5.0, "test-竖轨迹")
+        GC.cfg = lambda k, d=None: ("land" if k == "map_aspect_force" else d)
+        wl = GC.map_window()
+        check("竖轨迹强制 land → 16:9", abs(GC.aspect_ratio(*wl[:4]) - 16.0 / 9.0) < 0.01,
+              GC.aspect_ratio(*wl[:4]))
+        GC.resolve_bbox = lambda: (0.0, 0.0, 3.0, 1.0, "test-横轨迹")
+        GC.cfg = lambda k, d=None: ("port" if k == "map_aspect_force" else d)
+        wp = GC.map_window()
+        check("横轨迹强制 port → 9:16", abs(GC.aspect_ratio(*wp[:4]) - 9.0 / 16.0) < 0.01,
+              GC.aspect_ratio(*wp[:4]))
+    finally:
+        GC.cfg, GC.resolve_bbox = _oc, _or
+
     # 引线：默认阈值 5 逻辑 px（2026-11-17 用户定案：落位贴近锚点 + 引线阈值回到 5），
     # 可由线路 CFG 覆盖；代码里不再写死 5
     check("引线默认阈值常量回到 5", "LABEL_LEADER_MIN_PX = 5.0" in gc)

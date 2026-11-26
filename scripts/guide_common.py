@@ -510,6 +510,9 @@ def map_window():
     吸附前的窗口，扩出来的上下/左右边缘会一片空白（2026-11-10 尼泊尔踩过）。
     线路级开关 `CFG["map_aspect_mode"]`：`"snap"`（默认）/`"cap"`（旧 map_aspect_max）/
     `"off"`（完全不调整）。
+    `CFG["map_aspect_force"]`（2026-11-26 新增）：`"land"`/`"port"` 强制画幅为 16∶9 /
+    9∶16，忽略轨迹自身宽高比（如南北走向线路想试横版）。仍走 `snap_aspect` 只扩不缩，
+    轨迹完整落在窗口内；只在默认 `"snap"` 模式下生效，`"cap"`/`"off"` 保持原语义。
     """
     lon0, lat0, lon1, lat1, src = resolve_bbox()
     try:
@@ -529,7 +532,18 @@ def map_window():
         span = (lat1 - lat0) * r0 / r1
         return lon0, mid - span / 2.0, lon1, mid + span / 2.0, f"{src} · 宽高比钳到 {r1:g}∶1"
     ratio = aspect_ratio(lon0, lat0, lon1, lat1)
-    target = MAP_ASPECT_LAND if ratio >= 1.0 else MAP_ASPECT_PORT
+    # 2026-11-26 用户要「横版试试」：线路可强制画幅，忽略轨迹自身宽高比。
+    # 兼容 land/landscape/16:9 与 port/portrait/9:16 两种写法。
+    try:
+        force = str(cfg("map_aspect_force", "") or "").lower()
+    except Exception:                                              # noqa
+        force = ""
+    if force in ("land", "landscape", "16:9", "16/9"):
+        target = MAP_ASPECT_LAND
+    elif force in ("port", "portrait", "9:16", "9/16"):
+        target = MAP_ASPECT_PORT
+    else:
+        target = MAP_ASPECT_LAND if ratio >= 1.0 else MAP_ASPECT_PORT
     lon0, lat0, lon1, lat1 = snap_aspect(lon0, lat0, lon1, lat1, target)
     return lon0, lat0, lon1, lat1, f"{src} · 画幅吸附 {'16∶9' if target >= 1 else '9∶16'}"
 
